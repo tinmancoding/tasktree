@@ -5,16 +5,23 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os/exec"
+	"strconv"
 	"strings"
 )
 
 type Client struct {
-	binary string
+	config *config
 }
 
 func NewClient() Client {
-	return Client{binary: "git"}
+	return Client{config: &config{binary: "git"}}
+}
+
+type config struct {
+	binary        string
+	verboseWriter io.Writer
 }
 
 type CommandError struct {
@@ -40,8 +47,32 @@ func (e CommandError) Unwrap() error {
 	return e.Err
 }
 
+func (c Client) withConfig() *config {
+	if c.config == nil {
+		c.config = &config{binary: "git"}
+	}
+	if c.config.binary == "" {
+		c.config.binary = "git"
+	}
+	return c.config
+}
+
+func (c Client) SetVerboseWriter(w io.Writer) {
+	cfg := c.withConfig()
+	cfg.verboseWriter = w
+}
+
+func (c Client) WithDefaults() Client {
+	c.withConfig()
+	return c
+}
+
 func (c Client) run(ctx context.Context, args ...string) (string, string, error) {
-	cmd := exec.CommandContext(ctx, c.binary, args...)
+	cfg := c.withConfig()
+	if cfg.verboseWriter != nil {
+		_, _ = fmt.Fprintf(cfg.verboseWriter, "git %s\n", formatArgs(args))
+	}
+	cmd := exec.CommandContext(ctx, cfg.binary, args...)
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -66,4 +97,22 @@ func (c Client) run(ctx context.Context, args ...string) (string, string, error)
 
 func trimOutput(stdout string) string {
 	return strings.TrimSpace(stdout)
+}
+
+func formatArgs(args []string) string {
+	parts := make([]string, len(args))
+	for i, arg := range args {
+		parts[i] = quoteArg(arg)
+	}
+	return strings.Join(parts, " ")
+}
+
+func quoteArg(arg string) string {
+	if arg == "" {
+		return `""`
+	}
+	if strings.ContainsAny(arg, " \t\n\"'\\") {
+		return strconv.Quote(arg)
+	}
+	return arg
 }

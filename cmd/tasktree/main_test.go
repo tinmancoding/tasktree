@@ -67,3 +67,28 @@ func TestCLIShowsHelpfulErrorOutsideTasktree(t *testing.T) {
 		t.Fatalf("unexpected error output: %q", output)
 	}
 }
+
+func TestCLIVerbosePrintsGitOperationsToStderr(t *testing.T) {
+	remoteURL, _ := testutil.CreateRemoteRepo(t)
+	workspace := t.TempDir()
+	tasktreeRoot := filepath.Join(workspace, "feature-payments")
+
+	testutil.RunTasktree(t, workspace, "init", tasktreeRoot)
+
+	stdout, stderr := testutil.RunTasktreeSplit(t, tasktreeRoot, "--verbose", "add", remoteURL, "--branch", "feature/payments", "--name", "app")
+	if !strings.Contains(stdout, "Added app at app") {
+		t.Fatalf("unexpected add stdout: %q", stdout)
+	}
+	for _, expected := range []string{"git clone --bare", "git clone ", "remote set-url origin", "checkout main", "checkout -b feature/payments"} {
+		if !strings.Contains(stderr, expected) {
+			t.Fatalf("add stderr %q missing %q", stderr, expected)
+		}
+	}
+
+	_, statusStderr := testutil.RunTasktreeSplit(t, filepath.Join(tasktreeRoot, "app"), "-v", "status")
+	for _, expected := range []string{"git -C ", "symbolic-ref --quiet --short HEAD", "status --porcelain"} {
+		if !strings.Contains(statusStderr, expected) {
+			t.Fatalf("status stderr %q missing %q", statusStderr, expected)
+		}
+	}
+}

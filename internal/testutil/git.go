@@ -64,14 +64,24 @@ func CreateRemoteRepo(t *testing.T) (string, func(*testing.T) string) {
 
 func RunTasktree(t *testing.T, cwd string, args ...string) string {
 	t.Helper()
+	stdout, stderr := RunTasktreeSplit(t, cwd, args...)
+	return stdout + stderr
+}
+
+func RunTasktreeSplit(t *testing.T, cwd string, args ...string) (string, string) {
+	t.Helper()
 	cmd := exec.Command(tasktreeBinary(t), args...)
 	cmd.Dir = cwd
 	cmd.Env = os.Environ()
-	output, err := cmd.CombinedOutput()
+	var stdout strings.Builder
+	var stderr strings.Builder
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
 	if err != nil {
-		t.Fatalf("tasktree %s failed: %v\n%s", strings.Join(args, " "), err, output)
+		t.Fatalf("tasktree %s failed: %v\nstdout:\n%s\nstderr:\n%s", strings.Join(args, " "), err, stdout.String(), stderr.String())
 	}
-	return string(output)
+	return stdout.String(), stderr.String()
 }
 
 func RunTasktreeExpectError(t *testing.T, cwd string, args ...string) string {

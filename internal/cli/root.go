@@ -15,6 +15,7 @@ import (
 )
 
 type dependencies struct {
+	git           gitx.Client
 	initService   app.InitService
 	rootService   app.RootService
 	listService   app.ListService
@@ -31,6 +32,7 @@ func defaultDependencies() dependencies {
 		panic(err)
 	}
 	return dependencies{
+		git:           git,
 		initService:   app.NewInitService(store),
 		rootService:   app.NewRootService(),
 		listService:   app.NewListService(store),
@@ -52,13 +54,24 @@ func Execute() int {
 }
 
 func NewRootCmd(deps dependencies) *cobra.Command {
+	var verbose bool
+	deps.git = deps.git.WithDefaults()
+
 	cmd := &cobra.Command{
 		Use:           "tasktree",
 		Short:         "Manage task-focused multi-repo workspaces",
 		SilenceUsage:  true,
 		SilenceErrors: true,
+		PersistentPreRun: func(cmd *cobra.Command, args []string) {
+			if verbose {
+				deps.git.SetVerboseWriter(cmd.ErrOrStderr())
+				return
+			}
+			deps.git.SetVerboseWriter(nil)
+		},
 	}
 	cmd.SetErrPrefix("Error: ")
+	cmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "Print git commands to stderr")
 	cmd.AddCommand(newInitCmd(deps), newAddCmd(deps), newRemoveCmd(deps), newRootSubcommand(deps), newListCmd(deps), newStatusCmd(deps))
 	cmd.SetFlagErrorFunc(func(c *cobra.Command, err error) error {
 		return formatError(err)
