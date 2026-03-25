@@ -34,6 +34,16 @@ go test ./...
 go run ./cmd/tasktree --help
 ```
 
+## Releases
+
+GitHub Actions uses Release Please and GoReleaser to manage version tags, GitHub releases, and downloadable binaries.
+
+- The configuration starts tracking releases from the commit where this workflow was added.
+- Merge changes using Conventional Commits such as `feat:`, `fix:`, or `chore:`.
+- The release workflow opens or updates a release PR with the next version and changelog.
+- When that release PR is merged, Release Please creates the tag and GitHub release.
+- A separate GoReleaser workflow runs on `v*` tags and uploads cross-platform archives plus `checksums.txt` to that release.
+
 ## Notes
 
 - Git operations use the system `git` binary.

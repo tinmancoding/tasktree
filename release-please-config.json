@@ -1,0 +1,13 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "bootstrap-sha": "ab9e053ef848e52a2b306ab7234b2ee76ed54248",
+  "packages": {
+    ".": {
+      "release-type": "go",
+      "package-name": "tasktree",
+      "changelog-path": "CHANGELOG.md",
+      "include-component-in-tag": false,
+      "include-v-in-tag": true
+    }
+  }
+}
