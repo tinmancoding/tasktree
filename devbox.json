@@ -1,0 +1,7 @@
+{
+  "packages": [
+    "go@latest",
+    "git@latest",
+    "golangci-lint@latest"
+  ]
+}
