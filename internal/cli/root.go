@@ -12,6 +12,7 @@ import (
 	"github.com/tinmancoding/tasktree/internal/domain"
 	"github.com/tinmancoding/tasktree/internal/gitx"
 	"github.com/tinmancoding/tasktree/internal/metadata"
+	"github.com/tinmancoding/tasktree/internal/repoalias"
 )
 
 type dependencies struct {
@@ -22,12 +23,21 @@ type dependencies struct {
 	addService    app.AddService
 	removeService app.RemoveService
 	statusService app.StatusService
+	aliasSet      app.RepoAliasSetService
+	aliasRemove   app.RepoAliasRemoveService
+	aliasList     app.RepoAliasListService
+	aliasResolve  app.RepoAliasResolveService
+	aliasRegister app.RepoAliasRegisterDerivedService
 }
 
 func defaultDependencies() dependencies {
 	store := metadata.NewStore()
 	git := gitx.NewClient()
 	cacheRoot, err := cache.DefaultRoot()
+	if err != nil {
+		panic(err)
+	}
+	repoAliasStore, err := repoalias.NewDefaultStore()
 	if err != nil {
 		panic(err)
 	}
@@ -39,6 +49,11 @@ func defaultDependencies() dependencies {
 		addService:    app.NewAddService(store, cache.NewManager(cacheRoot, git), git),
 		removeService: app.NewRemoveService(store),
 		statusService: app.NewStatusService(store, git),
+		aliasSet:      app.NewRepoAliasSetService(repoAliasStore),
+		aliasRemove:   app.NewRepoAliasRemoveService(repoAliasStore),
+		aliasList:     app.NewRepoAliasListService(repoAliasStore),
+		aliasResolve:  app.NewRepoAliasResolveService(repoAliasStore),
+		aliasRegister: app.NewRepoAliasRegisterDerivedService(repoAliasStore),
 	}
 }
 
@@ -72,7 +87,7 @@ func NewRootCmd(deps dependencies) *cobra.Command {
 	}
 	cmd.SetErrPrefix("Error: ")
 	cmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "Print git commands to stderr")
-	cmd.AddCommand(newInitCmd(deps), newAddCmd(deps), newRemoveCmd(deps), newRootSubcommand(deps), newListCmd(deps), newStatusCmd(deps))
+	cmd.AddCommand(newInitCmd(deps), newAddCmd(deps), newRemoveCmd(deps), newRootSubcommand(deps), newListCmd(deps), newStatusCmd(deps), newRepoCmd(deps))
 	cmd.SetFlagErrorFunc(func(c *cobra.Command, err error) error {
 		return formatError(err)
 	})
@@ -127,6 +142,16 @@ func formatError(err error) error {
 
 	var invalidBranchName domain.InvalidBranchNameError
 	if errors.As(err, &invalidBranchName) {
+		return err
+	}
+
+	var repoAliasNotFound domain.RepoAliasNotFoundError
+	if errors.As(err, &repoAliasNotFound) {
+		return err
+	}
+
+	var repoAliasInUse domain.RepoAliasInUseError
+	if errors.As(err, &repoAliasInUse) {
 		return err
 	}
 

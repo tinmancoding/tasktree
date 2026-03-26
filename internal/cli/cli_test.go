@@ -9,8 +9,12 @@ import (
 	"time"
 
 	"github.com/tinmancoding/tasktree/internal/app"
+	"github.com/tinmancoding/tasktree/internal/cache"
 	"github.com/tinmancoding/tasktree/internal/domain"
+	"github.com/tinmancoding/tasktree/internal/gitx"
 	"github.com/tinmancoding/tasktree/internal/metadata"
+	"github.com/tinmancoding/tasktree/internal/repoalias"
+	"github.com/tinmancoding/tasktree/internal/testutil"
 )
 
 func TestInitCreatesMetadataInCurrentDirectory(t *testing.T) {
@@ -197,5 +201,217 @@ func TestListPrintsConfiguredRepositories(t *testing.T) {
 		if !strings.Contains(stdout, expected) {
 			t.Fatalf("stdout %q does not contain %q", stdout, expected)
 		}
+	}
+}
+
+func TestRepoAliasCommandsManageConfigFile(t *testing.T) {
+	aliasStore := repoalias.NewStore(filepath.Join(t.TempDir(), "repos.yml"))
+	deps := dependencies{
+		aliasSet:      app.NewRepoAliasSetService(aliasStore),
+		aliasRemove:   app.NewRepoAliasRemoveService(aliasStore),
+		aliasList:     app.NewRepoAliasListService(aliasStore),
+		aliasResolve:  app.NewRepoAliasResolveService(aliasStore),
+		aliasRegister: app.NewRepoAliasRegisterDerivedService(aliasStore),
+	}
+
+	cmd := NewRootCmd(deps)
+	out := new(bytes.Buffer)
+	cmd.SetOut(out)
+	cmd.SetErr(new(bytes.Buffer))
+	cmd.SetArgs([]string{"repo", "add-alias", "api", "git@github.com:acme/api.git"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("execute repo add-alias: %v", err)
+	}
+	if !strings.Contains(out.String(), "Added alias api") {
+		t.Fatalf("stdout = %q", out.String())
+	}
+
+	out.Reset()
+	cmd.SetArgs([]string{"repo", "aliases"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("execute repo aliases: %v", err)
+	}
+	if got := out.String(); !strings.Contains(got, "ALIAS") || !strings.Contains(got, "api") || !strings.Contains(got, "git@github.com:acme/api.git") {
+		t.Fatalf("stdout = %q", got)
+	}
+
+	out.Reset()
+	cmd.SetArgs([]string{"repo", "remove-alias", "api"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("execute repo remove-alias: %v", err)
+	}
+	if !strings.Contains(out.String(), "Removed alias api") {
+		t.Fatalf("stdout = %q", out.String())
+	}
+
+	file, err := aliasStore.Load()
+	if err != nil {
+		t.Fatalf("load alias store: %v", err)
+	}
+	if len(file.Repos) != 1 {
+		t.Fatalf("repo count = %d, want 1", len(file.Repos))
+	}
+	if file.Repos[0].URL != "git@github.com:acme/api.git" {
+		t.Fatalf("repo url = %q", file.Repos[0].URL)
+	}
+}
+
+func TestRepoAddAliasFailsWhenAliasUsedByAnotherRepo(t *testing.T) {
+	aliasStore := repoalias.NewStore(filepath.Join(t.TempDir(), "repos.yml"))
+	deps := dependencies{
+		aliasSet: app.NewRepoAliasSetService(aliasStore),
+	}
+
+	if err := deps.aliasSet.Run("api", "git@github.com:acme/api.git"); err != nil {
+		t.Fatalf("seed alias: %v", err)
+	}
+
+	cmd := NewRootCmd(deps)
+	cmd.SetOut(new(bytes.Buffer))
+	cmd.SetErr(new(bytes.Buffer))
+	cmd.SetArgs([]string{"repo", "add-alias", "api", "git@github.com:acme/platform.git"})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "repository alias \"api\" is already used by git@github.com:acme/api.git") {
+		t.Fatalf("error = %q", err)
+	}
+}
+
+func TestAddResolvesRepoAlias(t *testing.T) {
+	remoteURL, _ := testutil.CreateRemoteRepo(t)
+	root := t.TempDir()
+	store := metadata.NewStore()
+	if err := store.Save(root, domain.TasktreeFile{
+		Version:   domain.MetadataVersion,
+		Name:      filepath.Base(root),
+		CreatedAt: time.Date(2026, 3, 25, 12, 0, 0, 0, time.UTC),
+	}); err != nil {
+		t.Fatalf("save metadata: %v", err)
+	}
+	cacheRoot := filepath.Join(t.TempDir(), "cache")
+	aliasStore := repoalias.NewStore(filepath.Join(t.TempDir(), "repos.yml"))
+	if err := app.NewRepoAliasSetService(aliasStore).Run("app", remoteURL); err != nil {
+		t.Fatalf("set alias: %v", err)
+	}
+
+	deps := dependencies{
+		addService:    app.NewAddService(store, cache.NewManager(cacheRoot, gitx.NewClient()), gitx.NewClient()),
+		aliasResolve:  app.NewRepoAliasResolveService(aliasStore),
+		aliasRegister: app.NewRepoAliasRegisterDerivedService(aliasStore),
+	}
+	cmd := NewRootCmd(deps)
+	out := new(bytes.Buffer)
+	cmd.SetOut(out)
+	cmd.SetErr(new(bytes.Buffer))
+	cmd.SetArgs([]string{"add", "app"})
+
+	originalWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	if err := os.Chdir(root); err != nil {
+		t.Fatalf("chdir root: %v", err)
+	}
+	defer func() { _ = os.Chdir(originalWD) }()
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("execute add: %v", err)
+	}
+	stdout := out.String()
+	if !strings.Contains(stdout, "Added app at app") {
+		t.Fatalf("stdout = %q", out.String())
+	}
+	if !strings.Contains(stdout, "Alias app already points to "+remoteURL) {
+		t.Fatalf("stdout = %q", stdout)
+	}
+	derivedAliases, err := domain.DeriveRepoAliases(remoteURL)
+	if err != nil {
+		t.Fatalf("derive aliases: %v", err)
+	}
+	if !strings.Contains(stdout, "Registered alias "+derivedAliases[1]+" -> "+remoteURL) {
+		t.Fatalf("stdout = %q", stdout)
+	}
+
+	file, err := store.Load(root)
+	if err != nil {
+		t.Fatalf("load metadata: %v", err)
+	}
+	if len(file.Repos) != 1 {
+		t.Fatalf("repo count = %d, want 1", len(file.Repos))
+	}
+	if file.Repos[0].URL != remoteURL {
+		t.Fatalf("repo url = %q, want %q", file.Repos[0].URL, remoteURL)
+	}
+
+	if _, err := os.Stat(filepath.Join(root, "app")); err != nil {
+		t.Fatalf("stat checkout: %v", err)
+	}
+
+	aliasFile, err := aliasStore.Load()
+	if err != nil {
+		t.Fatalf("load alias file: %v", err)
+	}
+	if len(aliasFile.Repos) != 1 {
+		t.Fatalf("alias repo count = %d, want 1", len(aliasFile.Repos))
+	}
+	if len(aliasFile.Repos[0].Aliases) != 2 {
+		t.Fatalf("alias count = %d, want 2", len(aliasFile.Repos[0].Aliases))
+	}
+
+}
+
+func TestAddLogsSkippedAliasConflicts(t *testing.T) {
+	remoteURL, _ := testutil.CreateRemoteRepo(t)
+	root := t.TempDir()
+	store := metadata.NewStore()
+	if err := store.Save(root, domain.TasktreeFile{
+		Version:   domain.MetadataVersion,
+		Name:      filepath.Base(root),
+		CreatedAt: time.Date(2026, 3, 25, 12, 0, 0, 0, time.UTC),
+	}); err != nil {
+		t.Fatalf("save metadata: %v", err)
+	}
+	cacheRoot := filepath.Join(t.TempDir(), "cache")
+	aliasStore := repoalias.NewStore(filepath.Join(t.TempDir(), "repos.yml"))
+	if err := app.NewRepoAliasSetService(aliasStore).Run("app", "git@github.com:someone-else/app.git"); err != nil {
+		t.Fatalf("seed conflicting alias: %v", err)
+	}
+
+	deps := dependencies{
+		addService:    app.NewAddService(store, cache.NewManager(cacheRoot, gitx.NewClient()), gitx.NewClient()),
+		aliasResolve:  app.NewRepoAliasResolveService(aliasStore),
+		aliasRegister: app.NewRepoAliasRegisterDerivedService(aliasStore),
+	}
+	cmd := NewRootCmd(deps)
+	out := new(bytes.Buffer)
+	cmd.SetOut(out)
+	cmd.SetErr(new(bytes.Buffer))
+	cmd.SetArgs([]string{"add", remoteURL})
+
+	originalWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	if err := os.Chdir(root); err != nil {
+		t.Fatalf("chdir root: %v", err)
+	}
+	defer func() { _ = os.Chdir(originalWD) }()
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("execute add: %v", err)
+	}
+	stdout := out.String()
+	if !strings.Contains(stdout, "Skipped alias app; already used by git@github.com:someone-else/app.git") {
+		t.Fatalf("stdout = %q", stdout)
+	}
+	derivedAliases, err := domain.DeriveRepoAliases(remoteURL)
+	if err != nil {
+		t.Fatalf("derive aliases: %v", err)
+	}
+	if !strings.Contains(stdout, "Registered alias "+derivedAliases[1]+" -> "+remoteURL) {
+		t.Fatalf("stdout = %q", stdout)
 	}
 }

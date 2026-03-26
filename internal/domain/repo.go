@@ -8,25 +8,48 @@ import (
 	"strings"
 )
 
-func DeriveRepoName(repoURL string) (string, error) {
+func repoURLPath(repoURL string) string {
 	trimmed := strings.TrimSpace(repoURL)
 	trimmed = strings.TrimSuffix(trimmed, "/")
 
-	var base string
 	if parsed, err := url.Parse(trimmed); err == nil && parsed.Scheme != "" {
-		base = path.Base(parsed.Path)
-	} else {
-		base = path.Base(trimmed)
-		if strings.Contains(base, ":") {
-			base = strings.Split(base, ":")[len(strings.Split(base, ":"))-1]
+		return parsed.Path
+	}
+	if strings.Contains(trimmed, ":") {
+		parts := strings.SplitN(trimmed, ":", 2)
+		if len(parts) == 2 && !strings.Contains(parts[1], `\`) {
+			return parts[1]
 		}
 	}
+	return trimmed
+}
 
+func DeriveRepoName(repoURL string) (string, error) {
+	base := path.Base(repoURLPath(repoURL))
 	base = strings.TrimSuffix(base, ".git")
 	if err := ValidateRepoName(base); err != nil {
 		return "", err
 	}
 	return base, nil
+}
+
+func DeriveRepoAliases(repoURL string) ([]string, error) {
+	repoName, err := DeriveRepoName(repoURL)
+	if err != nil {
+		return nil, err
+	}
+	aliases := []string{repoName}
+	repoPath := strings.TrimSuffix(repoURLPath(repoURL), "/")
+	owner := path.Base(path.Dir(repoPath))
+	if owner != "" && owner != "." && owner != "/" {
+		ownerRepo := fmt.Sprintf("%s-%s", owner, repoName)
+		if ownerRepo != repoName {
+			if err := ValidateRepoName(ownerRepo); err == nil {
+				aliases = append(aliases, ownerRepo)
+			}
+		}
+	}
+	return aliases, nil
 }
 
 func ValidateRepoName(name string) error {

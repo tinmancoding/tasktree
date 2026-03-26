@@ -24,6 +24,29 @@ func TestDeriveRepoName(t *testing.T) {
 	}
 }
 
+func TestDeriveRepoAliases(t *testing.T) {
+	tests := map[string][]string{
+		"git@github.com:myorg/api.git":        {"api", "myorg-api"},
+		"https://github.com/myorg/web.git":    {"web", "myorg-web"},
+		"ssh://git@github.com/myorg/core.git": {"core", "myorg-core"},
+	}
+
+	for input, want := range tests {
+		got, err := domain.DeriveRepoAliases(input)
+		if err != nil {
+			t.Fatalf("derive repo aliases for %q: %v", input, err)
+		}
+		if len(got) != len(want) {
+			t.Fatalf("derive repo aliases for %q count = %d, want %d", input, len(got), len(want))
+		}
+		for i := range want {
+			if got[i] != want[i] {
+				t.Fatalf("derive repo aliases for %q = %v, want %v", input, got, want)
+			}
+		}
+	}
+}
+
 func TestValidateRepoNameRejectsUnsafeValues(t *testing.T) {
 	for _, input := range []string{"", ".", "..", "a/b", `a\\b`} {
 		if err := domain.ValidateRepoName(input); err == nil {
