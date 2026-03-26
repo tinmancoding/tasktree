@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 
 	"gopkg.in/yaml.v3"
@@ -26,6 +27,16 @@ type Store struct {
 }
 
 func DefaultPath() (string, error) {
+	if xdgConfigHome := os.Getenv("XDG_CONFIG_HOME"); xdgConfigHome != "" {
+		return filepath.Join(xdgConfigHome, "tasktree", "repos.yml"), nil
+	}
+	if runtime.GOOS == "darwin" {
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("resolve user home dir: %w", err)
+		}
+		return filepath.Join(homeDir, ".config", "tasktree", "repos.yml"), nil
+	}
 	userConfigDir, err := os.UserConfigDir()
 	if err != nil {
 		return "", fmt.Errorf("resolve user config dir: %w", err)
