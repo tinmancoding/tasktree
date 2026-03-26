@@ -48,6 +48,11 @@ func (c Client) CreateBranch(ctx context.Context, repoPath, branch string) error
 	return err
 }
 
+func (c Client) CreateTrackingBranch(ctx context.Context, repoPath, branch, upstream string) error {
+	_, _, err := c.run(ctx, "-C", repoPath, "checkout", "-b", branch, "--track", upstream)
+	return err
+}
+
 func (c Client) ValidateBranchName(ctx context.Context, branch string) error {
 	_, _, err := c.run(ctx, "check-ref-format", "--branch", branch)
 	if err == nil {

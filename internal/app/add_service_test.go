@@ -161,6 +161,52 @@ func TestAddServiceRejectsInvalidBranchName(t *testing.T) {
 	}
 }
 
+func TestAddServiceChecksOutRemoteBranchAsLocalTracking(t *testing.T) {
+	ctx := context.Background()
+	remoteURL, _ := testutil.CreateRemoteRepo(t)
+	root := createTasktree(t)
+	cacheRoot := filepath.Join(t.TempDir(), "cache")
+	service := app.NewAddService(metadata.NewStore(), cache.NewManager(cacheRoot, gitx.NewClient()), gitx.NewClient())
+
+	// Create a remote branch
+	work := t.TempDir()
+	testutil.RunGit(t, work, "clone", remoteURL, filepath.Join(work, "repo"))
+	repoPath := filepath.Join(work, "repo")
+	testutil.RunGit(t, repoPath, "checkout", "-b", "feature-branch")
+	testutil.RunGit(t, repoPath, "commit", "--allow-empty", "-m", "feature commit")
+	testutil.RunGit(t, repoPath, "push", "origin", "feature-branch")
+
+	// Add repo with --ref pointing to the remote branch name (without origin/ prefix)
+	result, err := service.Run(ctx, root, app.AddOptions{RepoURL: remoteURL, Ref: "feature-branch", Name: "feature-app"})
+	if err != nil {
+		t.Fatalf("add repo with remote branch ref: %v", err)
+	}
+
+	destPath := filepath.Join(root, "feature-app")
+
+	// Verify we're on a local branch (not detached HEAD)
+	currentBranch := strings.TrimSpace(testutil.RunGit(t, destPath, "branch", "--show-current"))
+	if currentBranch != "feature-branch" {
+		t.Fatalf("current branch = %q, want feature-branch", currentBranch)
+	}
+
+	// Verify the branch tracks the remote branch
+	upstream := strings.TrimSpace(testutil.RunGit(t, destPath, "rev-parse", "--symbolic-full-name", "@{u}"))
+	if upstream != "refs/remotes/origin/feature-branch" {
+		t.Fatalf("upstream = %q, want refs/remotes/origin/feature-branch", upstream)
+	}
+
+	// Verify resolved ref is the local branch
+	if result.Repo.ResolvedRef != "refs/heads/feature-branch" {
+		t.Fatalf("resolved ref = %q, want refs/heads/feature-branch", result.Repo.ResolvedRef)
+	}
+
+	// Verify checkout field shows the branch name
+	if result.Repo.Checkout != "feature-branch" {
+		t.Fatalf("checkout = %q, want feature-branch", result.Repo.Checkout)
+	}
+}
+
 func createTasktree(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()

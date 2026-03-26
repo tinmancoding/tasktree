@@ -95,18 +95,38 @@ func (s AddService) Run(ctx context.Context, start string, opts AddOptions) (Add
 	}
 	requestedCheckout := domain.RequestedCheckout(defaultBranch, opts.Ref)
 
+	// Handle remote branch references
+	needsLocalBranch := false
 	if opts.Ref != "" {
+		// Try to resolve the ref as-is
 		if _, err := s.git.ResolveCommit(ctx, destPath, opts.Ref); err != nil {
 			var cmdErr gitx.CommandError
 			if errors.As(err, &cmdErr) && cmdErr.ExitCode != 0 {
-				return AddResult{}, domain.UnresolvedRefError{RepoURL: opts.RepoURL, Ref: opts.Ref}
+				// If direct resolution failed, try as a remote branch
+				remoteRef := fmt.Sprintf("origin/%s", opts.Ref)
+				if _, err := s.git.ResolveCommit(ctx, destPath, remoteRef); err == nil {
+					// Remote branch exists, we'll need to create a local tracking branch
+					requestedCheckout = opts.Ref
+					needsLocalBranch = true
+				} else {
+					// Neither the direct ref nor the remote ref exists
+					return AddResult{}, domain.UnresolvedRefError{RepoURL: opts.RepoURL, Ref: opts.Ref}
+				}
+			} else {
+				return AddResult{}, err
 			}
-			return AddResult{}, err
 		}
 	}
 
-	if err := s.git.Checkout(ctx, destPath, requestedCheckout); err != nil {
-		return AddResult{}, err
+	// Create local tracking branch if needed
+	if needsLocalBranch {
+		if err := s.git.CreateTrackingBranch(ctx, destPath, opts.Ref, fmt.Sprintf("origin/%s", opts.Ref)); err != nil {
+			return AddResult{}, err
+		}
+	} else {
+		if err := s.git.Checkout(ctx, destPath, requestedCheckout); err != nil {
+			return AddResult{}, err
+		}
 	}
 	if opts.Branch != "" {
 		if err := s.git.ValidateBranchName(ctx, opts.Branch); err != nil {
