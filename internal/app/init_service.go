@@ -9,17 +9,20 @@ import (
 	"github.com/tinmancoding/tasktree/internal/domain"
 	"github.com/tinmancoding/tasktree/internal/fsx"
 	"github.com/tinmancoding/tasktree/internal/metadata"
+	"github.com/tinmancoding/tasktree/internal/registry"
 )
 
 type InitService struct {
-	store metadata.Store
-	now   func() time.Time
+	store    metadata.Store
+	registry *registry.Store
+	now      func() time.Time
 }
 
-func NewInitService(store metadata.Store) InitService {
+func NewInitService(store metadata.Store, reg *registry.Store) InitService {
 	return InitService{
-		store: store,
-		now:   func() time.Time { return time.Now().UTC() },
+		store:    store,
+		registry: reg,
+		now:      func() time.Time { return time.Now().UTC() },
 	}
 }
 
@@ -49,6 +52,11 @@ func (s InitService) Run(targetPath string) (string, error) {
 	}
 	if err := s.store.Save(root, file); err != nil {
 		return "", fmt.Errorf("save metadata: %w", err)
+	}
+
+	if regErr := s.registry.Register(root, file.Name); regErr != nil {
+		// Non-fatal: the tasktree is valid on disk. Warn but do not fail.
+		_, _ = fmt.Fprintf(os.Stderr, "warning: could not update registry: %v\n", regErr)
 	}
 
 	return root, nil

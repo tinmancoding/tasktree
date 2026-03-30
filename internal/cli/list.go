@@ -1,28 +1,34 @@
 package cli
 
 import (
-	"os"
-
 	"github.com/spf13/cobra"
 
+	"github.com/tinmancoding/tasktree/internal/app"
 	"github.com/tinmancoding/tasktree/internal/output"
 )
 
 func newListCmd(deps dependencies) *cobra.Command {
 	return &cobra.Command{
 		Use:   "list",
-		Short: "List repositories in the current tasktree",
+		Short: "List all known tasktrees on this machine",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cwd, err := os.Getwd()
-			if err != nil {
-				return err
-			}
-			_, file, err := deps.listService.Run(cwd)
+			entries, err := deps.listTasktreesService.Run()
 			if err != nil {
 				return formatError(err)
 			}
-			return output.WriteRepoTable(cmd.OutOrStdout(), file.Repos)
+			rows := make([]output.TasktreeRow, len(entries))
+			for i, e := range entries {
+				row := output.TasktreeRow{
+					Name: e.Name,
+					Path: e.Path,
+				}
+				if e.Status != app.TasktreeStatusOK {
+					row.Status = string(e.Status)
+				}
+				rows[i] = row
+			}
+			return output.WriteTasktreeTable(cmd.OutOrStdout(), rows)
 		},
 	}
 }

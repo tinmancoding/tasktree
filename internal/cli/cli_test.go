@@ -11,15 +11,26 @@ import (
 	"github.com/tinmancoding/tasktree/internal/app"
 	"github.com/tinmancoding/tasktree/internal/domain"
 	"github.com/tinmancoding/tasktree/internal/metadata"
+	"github.com/tinmancoding/tasktree/internal/registry"
 )
 
-func TestInitCreatesMetadataInCurrentDirectory(t *testing.T) {
+// newTestDeps returns a minimal dependencies struct suitable for unit tests.
+// Each test gets its own isolated registry via a temp dir path.
+func newTestDeps(t *testing.T) (dependencies, *registry.Store) {
+	t.Helper()
 	store := metadata.NewStore()
+	reg := registry.NewStoreAt(filepath.Join(t.TempDir(), "registry.toml"))
 	deps := dependencies{
-		initService: app.NewInitService(store),
-		rootService: app.NewRootService(),
-		listService: app.NewListService(store),
+		initService:          app.NewInitService(store, reg),
+		rootService:          app.NewRootService(),
+		listService:          app.NewListService(store),
+		listTasktreesService: app.NewListTasktreesService(reg),
 	}
+	return deps, reg
+}
+
+func TestInitCreatesMetadataInCurrentDirectory(t *testing.T) {
+	deps, _ := newTestDeps(t)
 	cmd := NewRootCmd(deps)
 	out := new(bytes.Buffer)
 	errBuf := new(bytes.Buffer)
@@ -50,12 +61,7 @@ func TestInitCreatesMetadataInCurrentDirectory(t *testing.T) {
 }
 
 func TestInitCreatesExplicitPath(t *testing.T) {
-	store := metadata.NewStore()
-	deps := dependencies{
-		initService: app.NewInitService(store),
-		rootService: app.NewRootService(),
-		listService: app.NewListService(store),
-	}
+	deps, _ := newTestDeps(t)
 	cmd := NewRootCmd(deps)
 	out := new(bytes.Buffer)
 	errBuf := new(bytes.Buffer)
@@ -74,12 +80,7 @@ func TestInitCreatesExplicitPath(t *testing.T) {
 }
 
 func TestInitFailsWhenMetadataExists(t *testing.T) {
-	store := metadata.NewStore()
-	deps := dependencies{
-		initService: app.NewInitService(store),
-		rootService: app.NewRootService(),
-		listService: app.NewListService(store),
-	}
+	deps, _ := newTestDeps(t)
 	cmd := NewRootCmd(deps)
 	out := new(bytes.Buffer)
 	errBuf := new(bytes.Buffer)
@@ -102,12 +103,8 @@ func TestInitFailsWhenMetadataExists(t *testing.T) {
 }
 
 func TestRootFindsTasktreeFromNestedDirectory(t *testing.T) {
+	deps, _ := newTestDeps(t)
 	store := metadata.NewStore()
-	deps := dependencies{
-		initService: app.NewInitService(store),
-		rootService: app.NewRootService(),
-		listService: app.NewListService(store),
-	}
 	root := t.TempDir()
 	nested := filepath.Join(root, "api", "src")
 	if err := os.MkdirAll(nested, 0o755); err != nil {
@@ -148,13 +145,9 @@ func TestRootFindsTasktreeFromNestedDirectory(t *testing.T) {
 	}
 }
 
-func TestListPrintsConfiguredRepositories(t *testing.T) {
+func TestReposPrintsConfiguredRepositories(t *testing.T) {
+	deps, _ := newTestDeps(t)
 	store := metadata.NewStore()
-	deps := dependencies{
-		initService: app.NewInitService(store),
-		rootService: app.NewRootService(),
-		listService: app.NewListService(store),
-	}
 	root := t.TempDir()
 	if err := store.Save(root, domain.TasktreeFile{
 		Version:   domain.MetadataVersion,
@@ -187,15 +180,160 @@ func TestListPrintsConfiguredRepositories(t *testing.T) {
 	out := new(bytes.Buffer)
 	cmd.SetOut(out)
 	cmd.SetErr(new(bytes.Buffer))
-	cmd.SetArgs([]string{"list"})
+	cmd.SetArgs([]string{"repos"})
 
 	if err := cmd.Execute(); err != nil {
-		t.Fatalf("execute list: %v", err)
+		t.Fatalf("execute repos: %v", err)
 	}
 	stdout := out.String()
 	for _, expected := range []string{"NAME", "api", "feature/payments", "web", "v1.4.0"} {
 		if !strings.Contains(stdout, expected) {
 			t.Fatalf("stdout %q does not contain %q", stdout, expected)
 		}
+	}
+}
+
+func TestReposFailsOutsideTasktree(t *testing.T) {
+	deps, _ := newTestDeps(t)
+	cmd := NewRootCmd(deps)
+	out := new(bytes.Buffer)
+	cmd.SetOut(out)
+	cmd.SetErr(new(bytes.Buffer))
+	cmd.SetArgs([]string{"repos"})
+
+	originalWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	empty := t.TempDir()
+	if err := os.Chdir(empty); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	defer func() { _ = os.Chdir(originalWD) }()
+
+	execErr := cmd.Execute()
+	if execErr == nil {
+		t.Fatal("expected error outside tasktree")
+	}
+	if !strings.Contains(execErr.Error(), "Not inside a tasktree") {
+		t.Fatalf("error = %q", execErr)
+	}
+}
+
+func TestListEmptyRegistry(t *testing.T) {
+	deps, _ := newTestDeps(t)
+	cmd := NewRootCmd(deps)
+	out := new(bytes.Buffer)
+	cmd.SetOut(out)
+	cmd.SetErr(new(bytes.Buffer))
+	cmd.SetArgs([]string{"list"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("execute list: %v", err)
+	}
+	if !strings.Contains(out.String(), "No tasktrees registered.") {
+		t.Fatalf("stdout = %q", out.String())
+	}
+}
+
+func TestListShowsRegisteredTasktrees(t *testing.T) {
+	deps, reg := newTestDeps(t)
+
+	root1 := t.TempDir()
+	root2 := t.TempDir()
+	store := metadata.NewStore()
+	if err := store.Save(root1, domain.TasktreeFile{
+		Version: domain.MetadataVersion, Name: "alpha",
+		CreatedAt: time.Date(2026, 3, 25, 12, 0, 0, 0, time.UTC),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(root2, domain.TasktreeFile{
+		Version: domain.MetadataVersion, Name: "beta",
+		CreatedAt: time.Date(2026, 3, 25, 12, 0, 0, 0, time.UTC),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.Register(root1, "alpha"); err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.Register(root2, "beta"); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := NewRootCmd(deps)
+	out := new(bytes.Buffer)
+	cmd.SetOut(out)
+	cmd.SetErr(new(bytes.Buffer))
+	cmd.SetArgs([]string{"list"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("execute list: %v", err)
+	}
+	stdout := out.String()
+	for _, expected := range []string{"NAME", "alpha", "beta", root1, root2} {
+		if !strings.Contains(stdout, expected) {
+			t.Fatalf("stdout %q does not contain %q", stdout, expected)
+		}
+	}
+}
+
+func TestListAnnotatesMissingTasktree(t *testing.T) {
+	deps, reg := newTestDeps(t)
+
+	// Register a path that will not exist on disk.
+	ghostPath := filepath.Join(t.TempDir(), "ghost-ws")
+	if err := reg.Register(ghostPath, "ghost"); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := NewRootCmd(deps)
+	out := new(bytes.Buffer)
+	cmd.SetOut(out)
+	cmd.SetErr(new(bytes.Buffer))
+	cmd.SetArgs([]string{"list"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("execute list: %v", err)
+	}
+	stdout := out.String()
+	if !strings.Contains(stdout, "missing") {
+		t.Fatalf("expected (missing) annotation, got: %q", stdout)
+	}
+}
+
+func TestInitRegistersInGlobalList(t *testing.T) {
+	deps, reg := newTestDeps(t)
+	target := filepath.Join(t.TempDir(), "my-ws")
+
+	cmd := NewRootCmd(deps)
+	out := new(bytes.Buffer)
+	cmd.SetOut(out)
+	cmd.SetErr(new(bytes.Buffer))
+	cmd.SetArgs([]string{"init", target})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("execute init: %v", err)
+	}
+
+	f, err := reg.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(f.Tasktrees) != 1 {
+		t.Fatalf("expected 1 registry entry, got %d", len(f.Tasktrees))
+	}
+	// Resolve symlinks on both sides: macOS /var/folders is a symlink to
+	// /private/var/folders, so filepath.Abs and filepath.EvalSymlinks diverge.
+	absTarget, err := filepath.Abs(target)
+	if err != nil {
+		t.Fatalf("abs target: %v", err)
+	}
+	registryPath := f.Tasktrees[0].Path
+	if registryPath != absTarget {
+		t.Errorf("registry path = %q, want %q", registryPath, absTarget)
+	}
+	if f.Tasktrees[0].Name != "my-ws" {
+		t.Errorf("registry name = %q, want %q", f.Tasktrees[0].Name, "my-ws")
 	}
 }

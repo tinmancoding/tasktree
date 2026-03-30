@@ -8,6 +8,37 @@ import (
 	"github.com/tinmancoding/tasktree/internal/domain"
 )
 
+// TasktreeRow is a single row in the tasktree list table.
+// The CLI layer is responsible for mapping app.TasktreeListEntry into this type.
+type TasktreeRow struct {
+	Name   string
+	Path   string
+	Status string // empty string means OK
+}
+
+// WriteTasktreeTable renders the list of known tasktrees as a table.
+// Rows with a non-empty Status are annotated in a STATUS column.
+func WriteTasktreeTable(w io.Writer, rows []TasktreeRow) error {
+	if len(rows) == 0 {
+		_, err := fmt.Fprintln(w, "No tasktrees registered.")
+		return err
+	}
+	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+	if _, err := fmt.Fprintln(tw, "NAME\tPATH\tSTATUS"); err != nil {
+		return err
+	}
+	for _, r := range rows {
+		status := r.Status
+		if status != "" {
+			status = "(" + status + ")"
+		}
+		if _, err := fmt.Fprintf(tw, "%s\t%s\t%s\n", r.Name, r.Path, status); err != nil {
+			return err
+		}
+	}
+	return tw.Flush()
+}
+
 func WriteRepoTable(w io.Writer, repos []domain.RepoSpec) error {
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 	if _, err := fmt.Fprintln(tw, "NAME\tPATH\tREF\tBRANCH"); err != nil {

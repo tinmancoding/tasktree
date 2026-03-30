@@ -14,6 +14,9 @@ func TestCLIEndToEndFlow(t *testing.T) {
 	workspace := t.TempDir()
 	tasktreeRoot := filepath.Join(workspace, "feature-payments")
 
+	// Isolate the registry to a temp HOME.
+	t.Setenv("HOME", t.TempDir())
+
 	initOutput := testutil.RunTasktree(t, workspace, "init", tasktreeRoot)
 	if !strings.Contains(initOutput, "Initialized tasktree") {
 		t.Fatalf("unexpected init output: %q", initOutput)
@@ -24,10 +27,11 @@ func TestCLIEndToEndFlow(t *testing.T) {
 		t.Fatalf("unexpected add output: %q", addOutput)
 	}
 
-	listOutput := testutil.RunTasktree(t, tasktreeRoot, "list")
+	// `repos` lists repositories in the current tasktree.
+	reposOutput := testutil.RunTasktree(t, tasktreeRoot, "repos")
 	for _, expected := range []string{"NAME", "app", "main", "feature/payments"} {
-		if !strings.Contains(listOutput, expected) {
-			t.Fatalf("list output %q missing %q", listOutput, expected)
+		if !strings.Contains(reposOutput, expected) {
+			t.Fatalf("repos output %q missing %q", reposOutput, expected)
 		}
 	}
 
@@ -55,9 +59,53 @@ func TestCLIEndToEndFlow(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(tasktreeRoot, "app")); !os.IsNotExist(err) {
 		t.Fatalf("expected checkout to be removed, got %v", err)
 	}
-	listAfterRemove := testutil.RunTasktree(t, tasktreeRoot, "list")
-	if strings.Contains(listAfterRemove, "app") {
-		t.Fatalf("expected app to be absent after remove, got %q", listAfterRemove)
+	reposAfterRemove := testutil.RunTasktree(t, tasktreeRoot, "repos")
+	if strings.Contains(reposAfterRemove, "app") {
+		t.Fatalf("expected app to be absent after remove, got %q", reposAfterRemove)
+	}
+}
+
+func TestCLIListShowsKnownTasktrees(t *testing.T) {
+	// Isolate the registry to a temp HOME.
+	t.Setenv("HOME", t.TempDir())
+
+	workspace := t.TempDir()
+	ws1 := filepath.Join(workspace, "alpha")
+	ws2 := filepath.Join(workspace, "beta")
+
+	// List with no registered tasktrees.
+	emptyOutput := testutil.RunTasktree(t, workspace, "list")
+	if !strings.Contains(emptyOutput, "No tasktrees registered.") {
+		t.Fatalf("expected empty list message, got: %q", emptyOutput)
+	}
+
+	testutil.RunTasktree(t, workspace, "init", ws1)
+	testutil.RunTasktree(t, workspace, "init", ws2)
+
+	listOutput := testutil.RunTasktree(t, workspace, "list")
+	for _, expected := range []string{"NAME", "alpha", "beta"} {
+		if !strings.Contains(listOutput, expected) {
+			t.Fatalf("list output %q missing %q", listOutput, expected)
+		}
+	}
+}
+
+func TestCLIListAnnotatesMissingTasktree(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	workspace := t.TempDir()
+	ws := filepath.Join(workspace, "ephemeral")
+
+	testutil.RunTasktree(t, workspace, "init", ws)
+
+	// Remove the directory after init so the registry entry becomes stale.
+	if err := os.RemoveAll(ws); err != nil {
+		t.Fatalf("remove workspace: %v", err)
+	}
+
+	listOutput := testutil.RunTasktree(t, workspace, "list")
+	if !strings.Contains(listOutput, "missing") {
+		t.Fatalf("expected (missing) annotation, got: %q", listOutput)
 	}
 }
 
@@ -68,7 +116,16 @@ func TestCLIShowsHelpfulErrorOutsideTasktree(t *testing.T) {
 	}
 }
 
+func TestCLIReposFailsOutsideTasktree(t *testing.T) {
+	output := testutil.RunTasktreeExpectError(t, t.TempDir(), "repos")
+	if !strings.Contains(output, "Not inside a tasktree") {
+		t.Fatalf("unexpected error output: %q", output)
+	}
+}
+
 func TestCLIVerbosePrintsGitOperationsToStderr(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
 	remoteURL, _ := testutil.CreateRemoteRepo(t)
 	workspace := t.TempDir()
 	tasktreeRoot := filepath.Join(workspace, "feature-payments")

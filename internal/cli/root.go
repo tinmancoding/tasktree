@@ -12,16 +12,18 @@ import (
 	"github.com/tinmancoding/tasktree/internal/domain"
 	"github.com/tinmancoding/tasktree/internal/gitx"
 	"github.com/tinmancoding/tasktree/internal/metadata"
+	"github.com/tinmancoding/tasktree/internal/registry"
 )
 
 type dependencies struct {
-	git           gitx.Client
-	initService   app.InitService
-	rootService   app.RootService
-	listService   app.ListService
-	addService    app.AddService
-	removeService app.RemoveService
-	statusService app.StatusService
+	git                  gitx.Client
+	initService          app.InitService
+	rootService          app.RootService
+	listService          app.ListService
+	listTasktreesService app.ListTasktreesService
+	addService           app.AddService
+	removeService        app.RemoveService
+	statusService        app.StatusService
 }
 
 func defaultDependencies() dependencies {
@@ -31,14 +33,19 @@ func defaultDependencies() dependencies {
 	if err != nil {
 		panic(err)
 	}
+	reg, err := registry.NewStore()
+	if err != nil {
+		panic(fmt.Sprintf("init registry store: %v", err))
+	}
 	return dependencies{
-		git:           git,
-		initService:   app.NewInitService(store),
-		rootService:   app.NewRootService(),
-		listService:   app.NewListService(store),
-		addService:    app.NewAddService(store, cache.NewManager(cacheRoot, git), git),
-		removeService: app.NewRemoveService(store),
-		statusService: app.NewStatusService(store, git),
+		git:                  git,
+		initService:          app.NewInitService(store, reg),
+		rootService:          app.NewRootService(),
+		listService:          app.NewListService(store),
+		listTasktreesService: app.NewListTasktreesService(reg),
+		addService:           app.NewAddService(store, cache.NewManager(cacheRoot, git), git),
+		removeService:        app.NewRemoveService(store),
+		statusService:        app.NewStatusService(store, git),
 	}
 }
 
@@ -72,7 +79,15 @@ func NewRootCmd(deps dependencies) *cobra.Command {
 	}
 	cmd.SetErrPrefix("Error: ")
 	cmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "Print git commands to stderr")
-	cmd.AddCommand(newInitCmd(deps), newAddCmd(deps), newRemoveCmd(deps), newRootSubcommand(deps), newListCmd(deps), newStatusCmd(deps))
+	cmd.AddCommand(
+		newInitCmd(deps),
+		newAddCmd(deps),
+		newRemoveCmd(deps),
+		newRootSubcommand(deps),
+		newListCmd(deps),
+		newReposCmd(deps),
+		newStatusCmd(deps),
+	)
 	cmd.SetFlagErrorFunc(func(c *cobra.Command, err error) error {
 		return formatError(err)
 	})

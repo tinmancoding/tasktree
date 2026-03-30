@@ -9,6 +9,27 @@ import (
 	"testing"
 )
 
+// realGOPATH and realGOMODCACHE are captured at package init time, before any
+// test can override HOME. They are injected into the go build command so that
+// a test-overridden HOME does not redirect the module cache into a temp dir.
+var (
+	realGOPATH     string
+	realGOMODCACHE string
+)
+
+func init() {
+	out, err := exec.Command("go", "env", "GOPATH", "GOMODCACHE").Output()
+	if err == nil {
+		lines := strings.SplitN(strings.TrimSpace(string(out)), "\n", 2)
+		if len(lines) >= 1 {
+			realGOPATH = strings.TrimSpace(lines[0])
+		}
+		if len(lines) >= 2 {
+			realGOMODCACHE = strings.TrimSpace(lines[1])
+		}
+	}
+}
+
 func RunGit(t *testing.T, dir string, args ...string) string {
 	t.Helper()
 	cmd := exec.Command("git", args...)
@@ -112,7 +133,16 @@ func tasktreeBinary(t *testing.T) string {
 	binPath := filepath.Join(binDir, "tasktree-test")
 	build := exec.Command("go", "build", "-o", binPath, "./cmd/tasktree")
 	build.Dir = root
-	build.Env = os.Environ()
+	// Inject the real GOPATH/GOMODCACHE captured at init time so that a
+	// test-overridden HOME does not redirect the module cache into a temp dir.
+	env := os.Environ()
+	if realGOPATH != "" {
+		env = append(env, "GOPATH="+realGOPATH)
+	}
+	if realGOMODCACHE != "" {
+		env = append(env, "GOMODCACHE="+realGOMODCACHE)
+	}
+	build.Env = env
 	output, err := build.CombinedOutput()
 	if err != nil {
 		t.Fatalf("build tasktree binary failed: %v\n%s", err, output)
