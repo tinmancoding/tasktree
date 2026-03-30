@@ -24,8 +24,12 @@ func newAddCmd(deps dependencies) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			repoURL, err := deps.aliasResolve.Run(args[0])
+			if err != nil {
+				return formatError(err)
+			}
 			result, err := deps.addService.Run(context.Background(), cwd, app.AddOptions{
-				RepoURL: args[0],
+				RepoURL: repoURL,
 				Ref:     ref,
 				Branch:  branch,
 				Name:    name,
@@ -33,8 +37,30 @@ func newAddCmd(deps dependencies) *cobra.Command {
 			if err != nil {
 				return formatError(err)
 			}
-			_, err = fmt.Fprintf(cmd.OutOrStdout(), "Added %s at %s\n", result.Repo.Name, result.Repo.Path)
-			return err
+			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Added %s at %s\n", result.Repo.Name, result.Repo.Path); err != nil {
+				return err
+			}
+			registrations, err := deps.aliasRegister.Run(repoURL)
+			if err != nil {
+				return formatError(err)
+			}
+			for _, registration := range registrations {
+				switch registration.Status {
+				case "added":
+					if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Registered alias %s -> %s\n", registration.Alias, repoURL); err != nil {
+						return err
+					}
+				case "existing":
+					if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Alias %s already points to %s\n", registration.Alias, repoURL); err != nil {
+						return err
+					}
+				case "conflict":
+					if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Skipped alias %s; already used by %s\n", registration.Alias, registration.URL); err != nil {
+						return err
+					}
+				}
+			}
+			return nil
 		},
 	}
 	cmd.Flags().StringVar(&ref, "ref", "", "Branch, tag, commit, or ref to check out")

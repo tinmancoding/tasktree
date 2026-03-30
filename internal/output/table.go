@@ -79,3 +79,19 @@ func WriteStatusTable(w io.Writer, tasktreeName, root string, repos []struct {
 	}
 	return tw.Flush()
 }
+
+func WriteRepoAliasTable(w io.Writer, aliases []struct {
+	Alias string
+	URL   string
+}) error {
+	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+	if _, err := fmt.Fprintln(tw, "ALIAS\tURL"); err != nil {
+		return err
+	}
+	for _, alias := range aliases {
+		if _, err := fmt.Fprintf(tw, "%s\t%s\n", alias.Alias, alias.URL); err != nil {
+			return err
+		}
+	}
+	return tw.Flush()
+}

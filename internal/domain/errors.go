@@ -82,3 +82,20 @@ type InvalidBranchNameError struct {
 func (e InvalidBranchNameError) Error() string {
 	return fmt.Sprintf("invalid branch name %q", e.Name)
 }
+
+type RepoAliasNotFoundError struct {
+	Alias string
+}
+
+func (e RepoAliasNotFoundError) Error() string {
+	return fmt.Sprintf("repository alias %q was not found", e.Alias)
+}
+
+type RepoAliasInUseError struct {
+	Alias string
+	URL   string
+}
+
+func (e RepoAliasInUseError) Error() string {
+	return fmt.Sprintf("repository alias %q is already used by %s", e.Alias, e.URL)
+}
