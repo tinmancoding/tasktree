@@ -29,6 +29,7 @@ func newTestDeps(t *testing.T) (dependencies, *registry.Store) {
 		rootService:          app.NewRootService(),
 		listService:          app.NewListService(store),
 		listTasktreesService: app.NewListTasktreesService(reg),
+		pruneService:         app.NewPruneService(reg),
 	}
 	return deps, reg
 }
@@ -499,6 +500,105 @@ func TestAddResolvesRepoAlias(t *testing.T) {
 		t.Fatalf("alias count = %d, want 2", len(aliasFile.Repos[0].Aliases))
 	}
 
+}
+
+func TestPruneRemovesStaleEntries(t *testing.T) {
+	deps, reg := newTestDeps(t)
+	store := metadata.NewStore()
+
+	validRoot := t.TempDir()
+	if err := store.Save(validRoot, domain.TasktreeFile{
+		Version:   domain.MetadataVersion,
+		Name:      "valid",
+		CreatedAt: time.Date(2026, 3, 25, 12, 0, 0, 0, time.UTC),
+	}); err != nil {
+		t.Fatalf("save metadata: %v", err)
+	}
+	if err := reg.Register(validRoot, "valid"); err != nil {
+		t.Fatalf("register valid: %v", err)
+	}
+
+	ghostPath := filepath.Join(t.TempDir(), "ghost-ws")
+	if err := reg.Register(ghostPath, "ghost"); err != nil {
+		t.Fatalf("register ghost: %v", err)
+	}
+
+	cmd := NewRootCmd(deps)
+	out := new(bytes.Buffer)
+	cmd.SetOut(out)
+	cmd.SetErr(new(bytes.Buffer))
+	cmd.SetArgs([]string{"prune"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("execute prune: %v", err)
+	}
+	stdout := out.String()
+	if !strings.Contains(stdout, "ghost") {
+		t.Fatalf("expected ghost in output, got: %q", stdout)
+	}
+	if strings.Contains(stdout, "valid") {
+		t.Fatalf("valid tasktree should not appear in output, got: %q", stdout)
+	}
+
+	f, err := reg.Load()
+	if err != nil {
+		t.Fatalf("load registry: %v", err)
+	}
+	if len(f.Tasktrees) != 1 || f.Tasktrees[0].Name != "valid" {
+		t.Fatalf("registry after prune = %+v, want only valid entry", f.Tasktrees)
+	}
+}
+
+func TestPruneDryRunDoesNotModifyRegistry(t *testing.T) {
+	deps, reg := newTestDeps(t)
+
+	ghostPath := filepath.Join(t.TempDir(), "ghost-ws")
+	if err := reg.Register(ghostPath, "ghost"); err != nil {
+		t.Fatalf("register ghost: %v", err)
+	}
+
+	cmd := NewRootCmd(deps)
+	out := new(bytes.Buffer)
+	cmd.SetOut(out)
+	cmd.SetErr(new(bytes.Buffer))
+	cmd.SetArgs([]string{"prune", "--dry-run"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("execute prune --dry-run: %v", err)
+	}
+	stdout := out.String()
+	if !strings.Contains(stdout, "Would remove") {
+		t.Fatalf("expected 'Would remove' in dry-run output, got: %q", stdout)
+	}
+	if !strings.Contains(stdout, "ghost") {
+		t.Fatalf("expected ghost path in dry-run output, got: %q", stdout)
+	}
+
+	// registry must be untouched
+	f, err := reg.Load()
+	if err != nil {
+		t.Fatalf("load registry: %v", err)
+	}
+	if len(f.Tasktrees) != 1 {
+		t.Fatalf("registry count = %d, want 1 (dry-run must not modify)", len(f.Tasktrees))
+	}
+}
+
+func TestPruneNothingToPrune(t *testing.T) {
+	deps, _ := newTestDeps(t)
+
+	cmd := NewRootCmd(deps)
+	out := new(bytes.Buffer)
+	cmd.SetOut(out)
+	cmd.SetErr(new(bytes.Buffer))
+	cmd.SetArgs([]string{"prune"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("execute prune: %v", err)
+	}
+	if !strings.Contains(out.String(), "Nothing to prune.") {
+		t.Fatalf("stdout = %q", out.String())
+	}
 }
 
 func TestAddLogsSkippedAliasConflicts(t *testing.T) {

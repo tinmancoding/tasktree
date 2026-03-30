@@ -25,6 +25,7 @@ type dependencies struct {
 	addService           app.AddService
 	removeService        app.RemoveService
 	statusService        app.StatusService
+	pruneService         app.PruneService
 	aliasSet             app.RepoAliasSetService
 	aliasRemove          app.RepoAliasRemoveService
 	aliasList            app.RepoAliasListService
@@ -56,6 +57,7 @@ func defaultDependencies() dependencies {
 		addService:           app.NewAddService(store, cache.NewManager(cacheRoot, git), git),
 		removeService:        app.NewRemoveService(store),
 		statusService:        app.NewStatusService(store, git),
+		pruneService:         app.NewPruneService(reg),
 		aliasSet:             app.NewRepoAliasSetService(repoAliasStore),
 		aliasRemove:          app.NewRepoAliasRemoveService(repoAliasStore),
 		aliasList:            app.NewRepoAliasListService(repoAliasStore),
@@ -102,6 +104,7 @@ func NewRootCmd(deps dependencies) *cobra.Command {
 		newListCmd(deps),
 		newReposCmd(deps),
 		newStatusCmd(deps),
+		newPruneCmd(deps),
 		newRepoCmd(deps),
 	)
 	cmd.SetFlagErrorFunc(func(c *cobra.Command, err error) error {

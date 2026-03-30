@@ -11,7 +11,9 @@ It creates a workspace directory with a `.tasktree.toml` file plus one or more n
 - Clone from a repo's default branch, a specific ref, or a new local branch
 - Reuse cached bare clones for faster subsequent checkouts
 - Run tasktree commands from the workspace root or any nested repo subdirectory
-- Inspect all workspace repositories with `list` and `status`
+- Inspect all workspace repositories with `repos` and `status`
+- List all known tasktrees on this machine with `list`
+- Remove stale registry entries with `prune`
 - Remove a checkout without touching the shared bare cache
 - Manage repository aliases in `~/.config/tasktree/repos.yml`
 - Auto-register useful aliases when a repo is added
@@ -44,7 +46,7 @@ tasktree init
 tasktree add git@github.com:myorg/api.git --branch feature/payments
 tasktree add git@github.com:myorg/web.git --branch feature/payments
 
-tasktree list
+tasktree repos
 tasktree status
 ```
 
@@ -100,11 +102,11 @@ tasktree add git@github.com:myorg/api.git --name api-v2
 ### 3. See what was created
 
 ```bash
-tasktree list
+tasktree repos
 tasktree status
 ```
 
-Example `tasktree list` output:
+Example `tasktree repos` output:
 
 ```text
 NAME  PATH  REF    BRANCH
@@ -123,7 +125,7 @@ api   api   feature/checkout  clean
 web   web   feature/checkout  modified
 ```
 
-- `list` shows configured repositories, checkout ref, and branch
+- `repos` shows configured repositories in the current tasktree, including checkout ref and branch
 - `status` shows the tasktree name, root path, current HEAD, and whether each repo is clean or modified
 
 ### 4. Use aliases to make future adds shorter
@@ -235,7 +237,7 @@ What `add` does:
 - attempts to register derived aliases in `repos.yml`
 - prints what aliases were added, already existed, or were skipped due to conflicts
 
-### `tasktree list`
+### `tasktree repos`
 
 List repositories configured in the current tasktree.
 
@@ -245,6 +247,36 @@ Output columns:
 - `PATH`
 - `REF`
 - `BRANCH`
+
+### `tasktree list`
+
+List all tasktrees known to this machine.
+
+Output columns:
+
+- `NAME`
+- `PATH`
+- `STATUS` (omitted when OK; shows `missing` or `invalid` for stale entries)
+
+### `tasktree prune [--dry-run]`
+
+Remove stale entries from the global tasktree registry.
+
+An entry is considered stale when:
+
+- its path no longer exists on disk (`missing`)
+- its path exists but no longer contains a `.tasktree.toml` (`invalid`)
+
+Flags:
+
+- `--dry-run`: preview what would be removed without modifying the registry
+
+Examples:
+
+```bash
+tasktree prune
+tasktree prune --dry-run
+```
 
 ### `tasktree status`
 
@@ -323,6 +355,16 @@ Each workspace stores local metadata in:
 ```
 
 This file tracks the tasktree name, creation time, and repositories in the workspace.
+
+### Global Tasktree Registry
+
+Tasktree keeps a global registry of all initialized tasktrees at:
+
+```text
+~/.local/state/tasktree/registry.toml
+```
+
+This registry is updated automatically on `tasktree init` and is used by `tasktree list` to show all known workspaces. Stale entries (paths that no longer exist or have lost their `.tasktree.toml`) are reported in the `STATUS` column and can be cleaned up with `tasktree prune`.
 
 ### Global Repository Alias Catalog
 
