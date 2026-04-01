@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -16,14 +15,34 @@ import (
 
 type AddOptions struct {
 	RepoURL string
-	Ref     string
-	Branch  string
-	Name    string
+	// Branch is the primary branch selection flag. If the branch exists locally
+	// it is checked out directly; if it exists only on origin it is tracked; if
+	// it does not exist anywhere it is created from From (or the default branch).
+	Branch string
+	// From is the base ref used when Branch does not yet exist. When Branch is
+	// empty, From is checked out directly (headless / tag / SHA workflow).
+	From string
+	Name string
 }
 
+// BranchResolutionPath describes which resolution path was taken so the CLI
+// can print an informative message to the user.
+type BranchResolutionPath int
+
+const (
+	BranchPathLocalExisting  BranchResolutionPath = iota // reused existing local branch
+	BranchPathRemoteTracking                             // created local tracking branch from origin/<branch>
+	BranchPathCreated                                    // created new branch from From / default
+	BranchPathHeadless                                   // checked out From directly, no branch created
+)
+
 type AddResult struct {
-	Root string
-	Repo domain.RepoSpec
+	Root            string
+	Repo            domain.RepoSpec
+	BranchPath      BranchResolutionPath
+	IgnoredFrom     string // non-empty when --from was supplied but ignored
+	EffectiveBranch string // the branch name used (empty for headless)
+	EffectiveFrom   string // the base ref used for creation (only for BranchPathCreated)
 }
 
 type AddService struct {
@@ -93,54 +112,113 @@ func (s AddService) Run(ctx context.Context, start string, opts AddOptions) (Add
 	if err != nil {
 		return AddResult{}, err
 	}
-	requestedCheckout := domain.RequestedCheckout(defaultBranch, opts.Ref)
 
-	// Handle remote branch references
-	needsLocalBranch := false
-	if opts.Ref != "" {
-		// Try to resolve the ref as-is
-		if _, err := s.git.ResolveCommit(ctx, destPath, opts.Ref); err != nil {
-			var cmdErr gitx.CommandError
-			if errors.As(err, &cmdErr) && cmdErr.ExitCode != 0 {
-				// If direct resolution failed, try as a remote branch
-				remoteRef := fmt.Sprintf("origin/%s", opts.Ref)
-				if _, err := s.git.ResolveCommit(ctx, destPath, remoteRef); err == nil {
-					// Remote branch exists, we'll need to create a local tracking branch
-					requestedCheckout = opts.Ref
-					needsLocalBranch = true
-				} else {
-					// Neither the direct ref nor the remote ref exists
-					return AddResult{}, domain.UnresolvedRefError{RepoURL: opts.RepoURL, Ref: opts.Ref}
-				}
-			} else {
-				return AddResult{}, err
-			}
-		}
-	}
+	// --- Branch resolution ---
+	//
+	// The result variables we need to populate:
+	var (
+		requestedCheckout string
+		resolvedBranch    string // the branch name we end up on (empty = headless)
+		branchPath        BranchResolutionPath
+		ignoredFrom       string
+		effectiveFrom     string
+	)
 
-	// Create local tracking branch if needed
-	if needsLocalBranch {
-		if err := s.git.CreateTrackingBranch(ctx, destPath, opts.Ref, fmt.Sprintf("origin/%s", opts.Ref)); err != nil {
-			return AddResult{}, err
-		}
-	} else {
-		if err := s.git.Checkout(ctx, destPath, requestedCheckout); err != nil {
-			return AddResult{}, err
-		}
-	}
 	if opts.Branch != "" {
+		// --branch provided: validate the name first.
 		if err := s.git.ValidateBranchName(ctx, opts.Branch); err != nil {
 			return AddResult{}, err
 		}
-		exists, err := s.git.BranchExists(ctx, destPath, opts.Branch)
+
+		// 1. Does the local branch already exist?
+		localExists, err := s.git.BranchExists(ctx, destPath, opts.Branch)
 		if err != nil {
 			return AddResult{}, err
 		}
-		if exists {
-			return AddResult{}, domain.BranchExistsError{Branch: opts.Branch}
+		if localExists {
+			// Reuse the existing local branch.
+			if opts.From != "" {
+				ignoredFrom = opts.From
+			}
+			if err := s.git.Checkout(ctx, destPath, opts.Branch); err != nil {
+				return AddResult{}, err
+			}
+			requestedCheckout = opts.Branch
+			resolvedBranch = opts.Branch
+			branchPath = BranchPathLocalExisting
+		} else {
+			// 2. Does origin/<branch> exist?
+			remoteRef := fmt.Sprintf("origin/%s", opts.Branch)
+			_, remoteErr := s.git.ResolveCommit(ctx, destPath, remoteRef)
+			if remoteErr == nil {
+				// Remote tracking branch exists — create a local tracking branch.
+				if opts.From != "" {
+					ignoredFrom = opts.From
+				}
+				if err := s.git.CreateTrackingBranch(ctx, destPath, opts.Branch, remoteRef); err != nil {
+					return AddResult{}, err
+				}
+				requestedCheckout = opts.Branch
+				resolvedBranch = opts.Branch
+				branchPath = BranchPathRemoteTracking
+			} else {
+				// 3. Neither local nor remote branch exists — create from From (or default branch).
+				base := opts.From
+				if base == "" {
+					base = defaultBranch
+				}
+				effectiveFrom = base
+				// Resolve base ref to make sure it exists.
+				if _, err := s.git.ResolveCommit(ctx, destPath, base); err != nil {
+					return AddResult{}, domain.UnresolvedRefError{RepoURL: opts.RepoURL, Ref: base}
+				}
+				// Checkout the base first, then create the new branch.
+				if err := s.git.Checkout(ctx, destPath, base); err != nil {
+					return AddResult{}, err
+				}
+				if err := s.git.CreateBranch(ctx, destPath, opts.Branch); err != nil {
+					return AddResult{}, err
+				}
+				requestedCheckout = opts.Branch
+				resolvedBranch = opts.Branch
+				branchPath = BranchPathCreated
+			}
 		}
-		if err := s.git.CreateBranch(ctx, destPath, opts.Branch); err != nil {
-			return AddResult{}, err
+	} else {
+		// No --branch: check out From directly (headless), or the default branch.
+		ref := opts.From
+		if ref == "" {
+			ref = defaultBranch
+		}
+		requestedCheckout = ref
+
+		// Determine whether we need a local tracking branch for a remote-only ref.
+		if opts.From != "" {
+			// Try the ref directly first.
+			if _, err := s.git.ResolveCommit(ctx, destPath, ref); err != nil {
+				// Try as a remote branch.
+				remoteRef := fmt.Sprintf("origin/%s", ref)
+				if _, err2 := s.git.ResolveCommit(ctx, destPath, remoteRef); err2 == nil {
+					if err := s.git.CreateTrackingBranch(ctx, destPath, ref, remoteRef); err != nil {
+						return AddResult{}, err
+					}
+					resolvedBranch = ref
+					branchPath = BranchPathRemoteTracking
+				} else {
+					return AddResult{}, domain.UnresolvedRefError{RepoURL: opts.RepoURL, Ref: ref}
+				}
+			} else {
+				if err := s.git.Checkout(ctx, destPath, ref); err != nil {
+					return AddResult{}, err
+				}
+				branchPath = BranchPathHeadless
+			}
+		} else {
+			// Default branch checkout.
+			if err := s.git.Checkout(ctx, destPath, ref); err != nil {
+				return AddResult{}, err
+			}
+			branchPath = BranchPathHeadless
 		}
 	}
 
@@ -166,7 +244,7 @@ func (s AddService) Run(ctx context.Context, start string, opts AddOptions) (Add
 		Checkout:    requestedCheckout,
 		ResolvedRef: resolvedRef,
 		Commit:      commit,
-		Branch:      opts.Branch,
+		Branch:      resolvedBranch,
 	}
 	file.Repos = append(file.Repos, repo)
 	if err := s.store.Save(root, file); err != nil {
@@ -174,5 +252,12 @@ func (s AddService) Run(ctx context.Context, start string, opts AddOptions) (Add
 	}
 
 	cleanup = false
-	return AddResult{Root: root, Repo: repo}, nil
+	return AddResult{
+		Root:            root,
+		Repo:            repo,
+		BranchPath:      branchPath,
+		IgnoredFrom:     ignoredFrom,
+		EffectiveBranch: resolvedBranch,
+		EffectiveFrom:   effectiveFrom,
+	}, nil
 }

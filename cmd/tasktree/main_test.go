@@ -29,7 +29,7 @@ func TestCLIEndToEndFlow(t *testing.T) {
 
 	// `repos` lists repositories in the current tasktree.
 	reposOutput := testutil.RunTasktree(t, tasktreeRoot, "repos")
-	for _, expected := range []string{"NAME", "app", "main", "feature/payments"} {
+	for _, expected := range []string{"NAME", "app", "feature/payments"} {
 		if !strings.Contains(reposOutput, expected) {
 			t.Fatalf("repos output %q missing %q", reposOutput, expected)
 		}

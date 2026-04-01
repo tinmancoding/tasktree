@@ -51,8 +51,13 @@ func TestAddServiceAddsDefaultBranchAndResetsOrigin(t *testing.T) {
 	if len(file.Repos) != 1 {
 		t.Fatalf("repo count = %d, want 1", len(file.Repos))
 	}
+	if result.BranchPath != app.BranchPathHeadless {
+		t.Fatalf("branch path = %v, want BranchPathHeadless", result.BranchPath)
+	}
 }
 
+// TestAddServiceSupportsTagCheckout verifies that --from v1.2.0 results in a
+// detached HEAD at that tag.
 func TestAddServiceSupportsTagCheckout(t *testing.T) {
 	ctx := context.Background()
 	remoteURL, mutateRemote := testutil.CreateRemoteRepo(t)
@@ -67,7 +72,7 @@ func TestAddServiceSupportsTagCheckout(t *testing.T) {
 	testutil.RunGit(t, repoPath, "tag", "v1.2.0", commit)
 	testutil.RunGit(t, repoPath, "push", "origin", "v1.2.0")
 
-	result, err := service.Run(ctx, root, app.AddOptions{RepoURL: remoteURL, Ref: "v1.2.0", Name: "tagged"})
+	result, err := service.Run(ctx, root, app.AddOptions{RepoURL: remoteURL, From: "v1.2.0", Name: "tagged"})
 	if err != nil {
 		t.Fatalf("add tagged repo: %v", err)
 	}
@@ -78,18 +83,27 @@ func TestAddServiceSupportsTagCheckout(t *testing.T) {
 	if branch != "" {
 		t.Fatalf("branch = %q, want detached HEAD", branch)
 	}
+	if result.BranchPath != app.BranchPathHeadless {
+		t.Fatalf("branch path = %v, want BranchPathHeadless", result.BranchPath)
+	}
 }
 
-func TestAddServiceCreatesBranchFromRequestedRef(t *testing.T) {
+// TestAddServiceCreatesBranchFromExplicitFrom verifies that --branch + --from
+// creates a new local branch from the specified base ref.
+func TestAddServiceCreatesBranchFromExplicitFrom(t *testing.T) {
 	ctx := context.Background()
 	remoteURL, mutateRemote := testutil.CreateRemoteRepo(t)
 	root := createTasktree(t)
 	cacheRoot := filepath.Join(t.TempDir(), "cache")
 	service := app.NewAddService(metadata.NewStore(), cache.NewManager(cacheRoot, gitx.NewClient()), gitx.NewClient())
 
-	commit := mutateRemote(t)
-	_ = commit
-	result, err := service.Run(ctx, root, app.AddOptions{RepoURL: remoteURL, Ref: "main", Branch: "feature/payments", Name: "feature-app"})
+	_ = mutateRemote(t)
+	result, err := service.Run(ctx, root, app.AddOptions{
+		RepoURL: remoteURL,
+		Branch:  "feature/payments",
+		From:    "main",
+		Name:    "feature-app",
+	})
 	if err != nil {
 		t.Fatalf("add branch repo: %v", err)
 	}
@@ -103,8 +117,111 @@ func TestAddServiceCreatesBranchFromRequestedRef(t *testing.T) {
 	if branch != "feature/payments" {
 		t.Fatalf("branch = %q, want feature/payments", branch)
 	}
+	if result.BranchPath != app.BranchPathCreated {
+		t.Fatalf("branch path = %v, want BranchPathCreated", result.BranchPath)
+	}
+	if result.EffectiveFrom != "main" {
+		t.Fatalf("effective from = %q, want main", result.EffectiveFrom)
+	}
 }
 
+// TestAddServiceCreatesBranchFromDefaultBranch verifies that --branch without
+// --from creates the new branch from the repo's default branch.
+func TestAddServiceCreatesBranchFromDefaultBranch(t *testing.T) {
+	ctx := context.Background()
+	remoteURL, mutateRemote := testutil.CreateRemoteRepo(t)
+	root := createTasktree(t)
+	cacheRoot := filepath.Join(t.TempDir(), "cache")
+	service := app.NewAddService(metadata.NewStore(), cache.NewManager(cacheRoot, gitx.NewClient()), gitx.NewClient())
+
+	_ = mutateRemote(t)
+	result, err := service.Run(ctx, root, app.AddOptions{
+		RepoURL: remoteURL,
+		Branch:  "feature/new",
+		Name:    "new-app",
+	})
+	if err != nil {
+		t.Fatalf("add repo: %v", err)
+	}
+	branch := strings.TrimSpace(testutil.RunGit(t, filepath.Join(root, "new-app"), "branch", "--show-current"))
+	if branch != "feature/new" {
+		t.Fatalf("branch = %q, want feature/new", branch)
+	}
+	if result.BranchPath != app.BranchPathCreated {
+		t.Fatalf("branch path = %v, want BranchPathCreated", result.BranchPath)
+	}
+	// effective from should be the default branch (main)
+	if result.EffectiveFrom != "main" {
+		t.Fatalf("effective from = %q, want main", result.EffectiveFrom)
+	}
+}
+
+// TestAddServiceTracksRemoteBranchViaBranchFlag verifies that --branch
+// feature-branch creates a local tracking branch when only origin/feature-branch
+// exists, and that --from is ignored and reported.
+func TestAddServiceTracksRemoteBranchViaBranchFlag(t *testing.T) {
+	ctx := context.Background()
+	remoteURL, _ := testutil.CreateRemoteRepo(t)
+	root := createTasktree(t)
+	cacheRoot := filepath.Join(t.TempDir(), "cache")
+	service := app.NewAddService(metadata.NewStore(), cache.NewManager(cacheRoot, gitx.NewClient()), gitx.NewClient())
+
+	// Create a remote branch.
+	work := t.TempDir()
+	testutil.RunGit(t, work, "clone", remoteURL, filepath.Join(work, "repo"))
+	repoPath := filepath.Join(work, "repo")
+	testutil.RunGit(t, repoPath, "checkout", "-b", "feature-branch")
+	testutil.RunGit(t, repoPath, "commit", "--allow-empty", "-m", "feature commit")
+	testutil.RunGit(t, repoPath, "push", "origin", "feature-branch")
+
+	result, err := service.Run(ctx, root, app.AddOptions{
+		RepoURL: remoteURL,
+		Branch:  "feature-branch",
+		From:    "main", // should be ignored
+		Name:    "feature-app",
+	})
+	if err != nil {
+		t.Fatalf("add repo with remote branch: %v", err)
+	}
+
+	destPath := filepath.Join(root, "feature-app")
+
+	// Verify we're on a local branch (not detached HEAD).
+	currentBranch := strings.TrimSpace(testutil.RunGit(t, destPath, "branch", "--show-current"))
+	if currentBranch != "feature-branch" {
+		t.Fatalf("current branch = %q, want feature-branch", currentBranch)
+	}
+
+	// Verify the branch tracks the remote branch.
+	upstream := strings.TrimSpace(testutil.RunGit(t, destPath, "rev-parse", "--symbolic-full-name", "@{u}"))
+	if upstream != "refs/remotes/origin/feature-branch" {
+		t.Fatalf("upstream = %q, want refs/remotes/origin/feature-branch", upstream)
+	}
+
+	if result.BranchPath != app.BranchPathRemoteTracking {
+		t.Fatalf("branch path = %v, want BranchPathRemoteTracking", result.BranchPath)
+	}
+	if result.IgnoredFrom != "main" {
+		t.Fatalf("ignored from = %q, want main", result.IgnoredFrom)
+	}
+}
+
+// TestAddServiceRejectsInvalidBranchName verifies that an invalid --branch name
+// is rejected early.
+func TestAddServiceRejectsInvalidBranchName(t *testing.T) {
+	ctx := context.Background()
+	remoteURL, _ := testutil.CreateRemoteRepo(t)
+	root := createTasktree(t)
+	service := app.NewAddService(metadata.NewStore(), cache.NewManager(filepath.Join(t.TempDir(), "cache"), gitx.NewClient()), gitx.NewClient())
+
+	_, err := service.Run(ctx, root, app.AddOptions{RepoURL: remoteURL, Branch: "bad..branch", Name: "invalid-branch-app"})
+	if err == nil || !strings.Contains(err.Error(), "invalid branch name") {
+		t.Fatalf("expected invalid branch name error, got %v", err)
+	}
+}
+
+// TestAddServiceRejectsDuplicateRepoName verifies that adding a repo whose
+// directory name already exists in metadata is rejected.
 func TestAddServiceRejectsDuplicateRepoName(t *testing.T) {
 	ctx := context.Background()
 	remoteURL, _ := testutil.CreateRemoteRepo(t)
@@ -126,6 +243,9 @@ func TestAddServiceRejectsDuplicateRepoName(t *testing.T) {
 	}
 }
 
+// TestAddServiceCleansUpAfterUnresolvedRefFailure verifies that when --from
+// points to a non-existent ref the checkout directory is cleaned up and
+// metadata is unchanged.
 func TestAddServiceCleansUpAfterUnresolvedRefFailure(t *testing.T) {
 	ctx := context.Background()
 	remoteURL, _ := testutil.CreateRemoteRepo(t)
@@ -133,7 +253,7 @@ func TestAddServiceCleansUpAfterUnresolvedRefFailure(t *testing.T) {
 	store := metadata.NewStore()
 	service := app.NewAddService(store, cache.NewManager(filepath.Join(t.TempDir(), "cache"), gitx.NewClient()), gitx.NewClient())
 
-	_, err := service.Run(ctx, root, app.AddOptions{RepoURL: remoteURL, Ref: "missing-ref", Name: "broken-app"})
+	_, err := service.Run(ctx, root, app.AddOptions{RepoURL: remoteURL, From: "missing-ref", Name: "broken-app"})
 	if err == nil || !strings.Contains(err.Error(), "could not resolve ref") {
 		t.Fatalf("expected unresolved ref error, got %v", err)
 	}
@@ -149,26 +269,17 @@ func TestAddServiceCleansUpAfterUnresolvedRefFailure(t *testing.T) {
 	}
 }
 
-func TestAddServiceRejectsInvalidBranchName(t *testing.T) {
-	ctx := context.Background()
-	remoteURL, _ := testutil.CreateRemoteRepo(t)
-	root := createTasktree(t)
-	service := app.NewAddService(metadata.NewStore(), cache.NewManager(filepath.Join(t.TempDir(), "cache"), gitx.NewClient()), gitx.NewClient())
-
-	_, err := service.Run(ctx, root, app.AddOptions{RepoURL: remoteURL, Branch: "bad..branch", Name: "invalid-branch-app"})
-	if err == nil || !strings.Contains(err.Error(), "invalid branch name") {
-		t.Fatalf("expected invalid branch name error, got %v", err)
-	}
-}
-
-func TestAddServiceChecksOutRemoteBranchAsLocalTracking(t *testing.T) {
+// TestAddServiceFromAloneChecksOutRemoteBranchAsLocalTracking verifies that
+// --from feature-branch (with no --branch) creates a local tracking branch
+// when only origin/feature-branch exists.
+func TestAddServiceFromAloneChecksOutRemoteBranchAsLocalTracking(t *testing.T) {
 	ctx := context.Background()
 	remoteURL, _ := testutil.CreateRemoteRepo(t)
 	root := createTasktree(t)
 	cacheRoot := filepath.Join(t.TempDir(), "cache")
 	service := app.NewAddService(metadata.NewStore(), cache.NewManager(cacheRoot, gitx.NewClient()), gitx.NewClient())
 
-	// Create a remote branch
+	// Create a remote branch.
 	work := t.TempDir()
 	testutil.RunGit(t, work, "clone", remoteURL, filepath.Join(work, "repo"))
 	repoPath := filepath.Join(work, "repo")
@@ -176,34 +287,38 @@ func TestAddServiceChecksOutRemoteBranchAsLocalTracking(t *testing.T) {
 	testutil.RunGit(t, repoPath, "commit", "--allow-empty", "-m", "feature commit")
 	testutil.RunGit(t, repoPath, "push", "origin", "feature-branch")
 
-	// Add repo with --ref pointing to the remote branch name (without origin/ prefix)
-	result, err := service.Run(ctx, root, app.AddOptions{RepoURL: remoteURL, Ref: "feature-branch", Name: "feature-app"})
+	result, err := service.Run(ctx, root, app.AddOptions{RepoURL: remoteURL, From: "feature-branch", Name: "feature-app"})
 	if err != nil {
 		t.Fatalf("add repo with remote branch ref: %v", err)
 	}
 
 	destPath := filepath.Join(root, "feature-app")
 
-	// Verify we're on a local branch (not detached HEAD)
+	// Verify we're on a local branch (not detached HEAD).
 	currentBranch := strings.TrimSpace(testutil.RunGit(t, destPath, "branch", "--show-current"))
 	if currentBranch != "feature-branch" {
 		t.Fatalf("current branch = %q, want feature-branch", currentBranch)
 	}
 
-	// Verify the branch tracks the remote branch
+	// Verify the branch tracks the remote branch.
 	upstream := strings.TrimSpace(testutil.RunGit(t, destPath, "rev-parse", "--symbolic-full-name", "@{u}"))
 	if upstream != "refs/remotes/origin/feature-branch" {
 		t.Fatalf("upstream = %q, want refs/remotes/origin/feature-branch", upstream)
 	}
 
-	// Verify resolved ref is the local branch
+	// Verify resolved ref is the local branch.
 	if result.Repo.ResolvedRef != "refs/heads/feature-branch" {
 		t.Fatalf("resolved ref = %q, want refs/heads/feature-branch", result.Repo.ResolvedRef)
 	}
 
-	// Verify checkout field shows the branch name
+	// Verify checkout field shows the branch name.
 	if result.Repo.Checkout != "feature-branch" {
 		t.Fatalf("checkout = %q, want feature-branch", result.Repo.Checkout)
+	}
+
+	// --from alone with remote branch = BranchPathRemoteTracking, not BranchPathHeadless.
+	if result.BranchPath != app.BranchPathRemoteTracking {
+		t.Fatalf("branch path = %v, want BranchPathRemoteTracking", result.BranchPath)
 	}
 }
 

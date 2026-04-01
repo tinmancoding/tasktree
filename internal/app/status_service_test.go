@@ -36,7 +36,7 @@ func TestStatusServiceReportsCleanModifiedAndDetached(t *testing.T) {
 	commit := strings.TrimSpace(testutil.RunGit(t, tagRepo, "rev-parse", "HEAD"))
 	testutil.RunGit(t, tagRepo, "tag", "v1.2.0", commit)
 	testutil.RunGit(t, tagRepo, "push", "origin", "v1.2.0")
-	_, err = addService.Run(ctx, root, app.AddOptions{RepoURL: remoteURL, Ref: "v1.2.0", Name: "tagged-app"})
+	_, err = addService.Run(ctx, root, app.AddOptions{RepoURL: remoteURL, From: "v1.2.0", Name: "tagged-app"})
 	if err != nil {
 		t.Fatalf("add tagged repo: %v", err)
 	}

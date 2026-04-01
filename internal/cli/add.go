@@ -11,8 +11,8 @@ import (
 )
 
 func newAddCmd(deps dependencies) *cobra.Command {
-	var ref string
 	var branch string
+	var from string
 	var name string
 
 	cmd := &cobra.Command{
@@ -30,13 +30,44 @@ func newAddCmd(deps dependencies) *cobra.Command {
 			}
 			result, err := deps.addService.Run(context.Background(), cwd, app.AddOptions{
 				RepoURL: repoURL,
-				Ref:     ref,
 				Branch:  branch,
+				From:    from,
 				Name:    name,
 			})
 			if err != nil {
 				return formatError(err)
 			}
+
+			// Print branch resolution path message.
+			switch result.BranchPath {
+			case app.BranchPathLocalExisting:
+				msg := fmt.Sprintf("Using existing local branch %q", result.EffectiveBranch)
+				if result.IgnoredFrom != "" {
+					msg += fmt.Sprintf("; ignoring --from %q", result.IgnoredFrom)
+				}
+				msg += "."
+				if _, err := fmt.Fprintln(cmd.OutOrStdout(), msg); err != nil {
+					return err
+				}
+			case app.BranchPathRemoteTracking:
+				msg := fmt.Sprintf("Using existing remote branch %q from origin", result.EffectiveBranch)
+				if result.IgnoredFrom != "" {
+					msg += fmt.Sprintf("; ignoring --from %q", result.IgnoredFrom)
+				}
+				msg += "."
+				if _, err := fmt.Fprintln(cmd.OutOrStdout(), msg); err != nil {
+					return err
+				}
+			case app.BranchPathCreated:
+				if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Creating new branch %q from %q.\n", result.EffectiveBranch, result.EffectiveFrom); err != nil {
+					return err
+				}
+			case app.BranchPathHeadless:
+				if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Checking out %q without creating a branch.\n", result.Repo.Checkout); err != nil {
+					return err
+				}
+			}
+
 			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Added %s at %s\n", result.Repo.Name, result.Repo.Path); err != nil {
 				return err
 			}
@@ -63,8 +94,8 @@ func newAddCmd(deps dependencies) *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&ref, "ref", "", "Branch, tag, commit, or ref to check out")
-	cmd.Flags().StringVar(&branch, "branch", "", "Create a new local branch from the resolved starting point")
+	cmd.Flags().StringVar(&branch, "branch", "", "Branch to use: reuse if local, track if remote, or create from --from")
+	cmd.Flags().StringVar(&from, "from", "", "Base ref for branch creation, or direct checkout when --branch is omitted")
 	cmd.Flags().StringVar(&name, "name", "", "Checkout directory name")
 	return cmd
 }

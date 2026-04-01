@@ -8,7 +8,7 @@ It creates a workspace directory with a `.tasktree.toml` file plus one or more n
 
 - Create a dedicated workspace for a task, bug fix, or feature branch
 - Add one or many Git repositories to the same tasktree
-- Clone from a repo's default branch, a specific ref, or a new local branch
+- Clone from a repo's default branch, an existing branch, or a new local branch
 - Reuse cached bare clones for faster subsequent checkouts
 - Run tasktree commands from the workspace root or any nested repo subdirectory
 - Inspect all workspace repositories with `repos` and `status`
@@ -80,17 +80,25 @@ Registered alias api -> git@github.com:myorg/api.git
 Registered alias myorg-api -> git@github.com:myorg/api.git
 ```
 
-Add a repo and create a local branch from the resolved starting point:
+Add a repo and check out or create a branch:
 
 ```bash
 tasktree add git@github.com:myorg/web.git --branch feature/checkout
 ```
 
-Add a repo from a tag, branch, or commit:
+`--branch` reuses a local branch if it exists, tracks the remote branch if only `origin/<branch>` exists, or creates a new branch from `--from` (or the default branch) if neither exists.
+
+Add a repo from a tag or commit (headless checkout):
 
 ```bash
-tasktree add git@github.com:myorg/payments.git --ref v1.2.0
-tasktree add git@github.com:myorg/payments.git --ref main --branch feature/checkout
+tasktree add git@github.com:myorg/payments.git --from v1.2.0
+tasktree add git@github.com:myorg/payments.git --from 8f3e2ab
+```
+
+Create a new branch from an explicit base ref:
+
+```bash
+tasktree add git@github.com:myorg/payments.git --branch feature/checkout --from main
 ```
 
 Add a repo with a custom checkout directory name:
@@ -109,9 +117,9 @@ tasktree status
 Example `tasktree repos` output:
 
 ```text
-NAME  PATH  REF    BRANCH
-api   api   main   feature/checkout
-web   web   main   feature/checkout
+NAME  PATH  REF               BRANCH
+api   api   feature/checkout  feature/checkout
+web   web   feature/checkout  feature/checkout
 ```
 
 Example `tasktree status` output:
@@ -154,8 +162,7 @@ After aliases exist, you can add by alias instead of full URL:
 
 ```bash
 tasktree add api
-tasktree add myorg-web --branch feature/checkout
-```
+tasktree add myorg-web --branch feature/checkout```
 
 You can also manage aliases explicitly:
 
@@ -200,7 +207,7 @@ tasktree init
 tasktree init ~/ws/feature-checkout
 ```
 
-### `tasktree add <repo-url> [--ref <ref>] [--branch <branch>] [--name <name>]`
+### `tasktree add <repo-url> [--branch <branch>] [--from <ref>] [--name <name>]`
 
 Add a repository to the current tasktree.
 
@@ -211,20 +218,46 @@ Accepted input:
 
 Flags:
 
-- `--ref <ref>`: start from a branch, tag, commit, or ref
-- `--branch <branch>`: create a new local branch from the resolved starting point
+- `--branch <branch>`: the branch to use. Reuses the branch if it already exists locally, creates a local tracking branch if only `origin/<branch>` exists, or creates a new local branch from `--from` (falling back to the repo default branch) if neither exists.
+- `--from <ref>`: base ref for branch creation when `--branch` is provided but the branch does not yet exist. When `--branch` is omitted, `--from` performs a direct checkout of the given branch, tag, commit, or ref without creating a new branch.
 - `--name <name>`: use a custom checkout directory name
 
 Examples:
 
 ```bash
+# Check out default branch
 tasktree add git@github.com:myorg/api.git
-tasktree add git@github.com:myorg/api.git --ref main
-tasktree add git@github.com:myorg/api.git --ref v1.2.0
+
+# Use an existing local or remote branch
 tasktree add git@github.com:myorg/api.git --branch feature/payments
-tasktree add git@github.com:myorg/api.git --ref main --branch feature/payments
+
+# Create a new branch from an explicit base
+tasktree add git@github.com:myorg/api.git --branch feature/payments --from main
+
+# Headless checkout of a tag, commit, or ref
+tasktree add git@github.com:myorg/api.git --from v1.2.0
+tasktree add git@github.com:myorg/api.git --from 8f3e2ab
+
+# Custom checkout directory name
 tasktree add git@github.com:myorg/api.git --name api2
+
+# Use an alias
 tasktree add api
+```
+
+What `--branch` does:
+
+1. If the branch already exists locally — check it out; ignore `--from`.
+2. Else if `origin/<branch>` exists — create a local tracking branch; ignore `--from`.
+3. Else — resolve `--from` (or the repo default branch) and create the branch from there.
+
+The command prints which path it took so ignored `--from` values are visible:
+
+```text
+Using existing local branch "feature/x".
+Using existing remote branch "feature/x" from origin; ignoring --from "main".
+Creating new branch "feature/x" from "main".
+Checking out "v1.2.0" without creating a branch.
 ```
 
 What `add` does:
