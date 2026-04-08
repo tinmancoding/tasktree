@@ -24,18 +24,17 @@ func TestAddServiceAddsDefaultBranchAndResetsOrigin(t *testing.T) {
 	service := app.NewAddService(metadata.NewStore(), cache.NewManager(cacheRoot, gitx.NewClient()), gitx.NewClient())
 
 	latestCommit := mutateRemote(t)
+	_ = latestCommit
 	result, err := service.Run(ctx, root, app.AddOptions{RepoURL: remoteURL})
 	if err != nil {
 		t.Fatalf("add repo: %v", err)
 	}
-	if result.Repo.Name != "app" {
-		t.Fatalf("repo name = %q, want app", result.Repo.Name)
+	if result.Source.Name != "app" {
+		t.Fatalf("source name = %q, want app", result.Source.Name)
 	}
-	if result.Repo.Checkout != "main" {
-		t.Fatalf("checkout = %q, want main", result.Repo.Checkout)
-	}
-	if result.Repo.Commit != latestCommit {
-		t.Fatalf("commit = %q, want %q", result.Repo.Commit, latestCommit)
+	if result.Source.Git.Ref != "" {
+		// default branch checkout has empty ref in the spec (intent: default branch)
+		t.Fatalf("source git ref = %q, want empty (default branch)", result.Source.Git.Ref)
 	}
 
 	repoPath := filepath.Join(root, "app")
@@ -44,12 +43,12 @@ func TestAddServiceAddsDefaultBranchAndResetsOrigin(t *testing.T) {
 		t.Fatalf("origin url = %q, want %q", originURL, remoteURL)
 	}
 
-	file, err := metadata.NewStore().Load(root)
+	spec, err := metadata.NewStore().Load(root)
 	if err != nil {
 		t.Fatalf("load metadata: %v", err)
 	}
-	if len(file.Repos) != 1 {
-		t.Fatalf("repo count = %d, want 1", len(file.Repos))
+	if len(spec.Spec.Sources) != 1 {
+		t.Fatalf("source count = %d, want 1", len(spec.Spec.Sources))
 	}
 	if result.BranchPath != app.BranchPathHeadless {
 		t.Fatalf("branch path = %v, want BranchPathHeadless", result.BranchPath)
@@ -76,8 +75,9 @@ func TestAddServiceSupportsTagCheckout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("add tagged repo: %v", err)
 	}
-	if result.Repo.ResolvedRef != "refs/tags/v1.2.0" {
-		t.Fatalf("resolved ref = %q, want refs/tags/v1.2.0", result.Repo.ResolvedRef)
+	// With the new declarative approach, Ref holds the user's intent ("v1.2.0").
+	if result.Source.Git.Ref != "v1.2.0" {
+		t.Fatalf("source git ref = %q, want v1.2.0", result.Source.Git.Ref)
 	}
 	branch := strings.TrimSpace(testutil.RunGit(t, filepath.Join(root, "tagged"), "branch", "--show-current"))
 	if branch != "" {
@@ -107,11 +107,8 @@ func TestAddServiceCreatesBranchFromExplicitFrom(t *testing.T) {
 	if err != nil {
 		t.Fatalf("add branch repo: %v", err)
 	}
-	if result.Repo.Branch != "feature/payments" {
-		t.Fatalf("branch = %q, want feature/payments", result.Repo.Branch)
-	}
-	if result.Repo.ResolvedRef != "refs/heads/feature/payments" {
-		t.Fatalf("resolved ref = %q, want refs/heads/feature/payments", result.Repo.ResolvedRef)
+	if result.Source.Git.Branch != "feature/payments" {
+		t.Fatalf("branch = %q, want feature/payments", result.Source.Git.Branch)
 	}
 	branch := strings.TrimSpace(testutil.RunGit(t, filepath.Join(root, "feature-app"), "branch", "--show-current"))
 	if branch != "feature/payments" {
@@ -227,12 +224,17 @@ func TestAddServiceRejectsDuplicateRepoName(t *testing.T) {
 	remoteURL, _ := testutil.CreateRemoteRepo(t)
 	root := createTasktree(t)
 	store := metadata.NewStore()
-	file, err := store.Load(root)
+	spec, err := store.Load(root)
 	if err != nil {
 		t.Fatalf("load metadata: %v", err)
 	}
-	file.Repos = append(file.Repos, domain.RepoSpec{Name: "app", Path: "app"})
-	if err := store.Save(root, file); err != nil {
+	spec.Spec.Sources = append(spec.Spec.Sources, domain.SourceSpec{
+		Name: "app",
+		Type: domain.SourceTypeGit,
+		Path: "app",
+		Git:  &domain.GitSourceSpec{URL: remoteURL},
+	})
+	if err := store.Save(root, spec); err != nil {
 		t.Fatalf("save metadata: %v", err)
 	}
 
@@ -260,12 +262,12 @@ func TestAddServiceCleansUpAfterUnresolvedRefFailure(t *testing.T) {
 	if _, statErr := os.Stat(filepath.Join(root, "broken-app")); !os.IsNotExist(statErr) {
 		t.Fatalf("expected checkout cleanup, got %v", statErr)
 	}
-	file, loadErr := store.Load(root)
+	spec, loadErr := store.Load(root)
 	if loadErr != nil {
 		t.Fatalf("load metadata: %v", loadErr)
 	}
-	if len(file.Repos) != 0 {
-		t.Fatalf("expected metadata to remain unchanged, got %d repos", len(file.Repos))
+	if len(spec.Spec.Sources) != 0 {
+		t.Fatalf("expected metadata to remain unchanged, got %d sources", len(spec.Spec.Sources))
 	}
 }
 
@@ -306,14 +308,9 @@ func TestAddServiceFromAloneChecksOutRemoteBranchAsLocalTracking(t *testing.T) {
 		t.Fatalf("upstream = %q, want refs/remotes/origin/feature-branch", upstream)
 	}
 
-	// Verify resolved ref is the local branch.
-	if result.Repo.ResolvedRef != "refs/heads/feature-branch" {
-		t.Fatalf("resolved ref = %q, want refs/heads/feature-branch", result.Repo.ResolvedRef)
-	}
-
-	// Verify checkout field shows the branch name.
-	if result.Repo.Checkout != "feature-branch" {
-		t.Fatalf("checkout = %q, want feature-branch", result.Repo.Checkout)
+	// With declarative approach, Ref holds the --from value.
+	if result.Source.Git.Ref != "feature-branch" {
+		t.Fatalf("source git ref = %q, want feature-branch", result.Source.Git.Ref)
 	}
 
 	// --from alone with remote branch = BranchPathRemoteTracking, not BranchPathHeadless.
@@ -326,10 +323,16 @@ func createTasktree(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
 	store := metadata.NewStore()
-	if err := store.Save(root, domain.TasktreeFile{
-		Version:   domain.MetadataVersion,
-		Name:      filepath.Base(root),
-		CreatedAt: time.Date(2026, 3, 25, 12, 0, 0, 0, time.UTC),
+	if err := store.Save(root, domain.TasktreeSpec{
+		APIVersion: domain.APIVersion,
+		Kind:       domain.KindTasktree,
+		Metadata: domain.SpecMetadata{
+			Name:      filepath.Base(root),
+			CreatedAt: time.Date(2026, 3, 25, 12, 0, 0, 0, time.UTC),
+		},
+		Spec: domain.WorkspaceSpec{
+			Sources: []domain.SourceSpec{},
+		},
 	}); err != nil {
 		t.Fatalf("save tasktree metadata: %v", err)
 	}

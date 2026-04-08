@@ -34,6 +34,22 @@ func newTestDeps(t *testing.T) (dependencies, *registry.Store) {
 	return deps, reg
 }
 
+// makeSpec creates a minimal TasktreeSpec for test use.
+func makeSpec(name string, sources ...domain.SourceSpec) domain.TasktreeSpec {
+	if sources == nil {
+		sources = []domain.SourceSpec{}
+	}
+	return domain.TasktreeSpec{
+		APIVersion: domain.APIVersion,
+		Kind:       domain.KindTasktree,
+		Metadata: domain.SpecMetadata{
+			Name:      name,
+			CreatedAt: time.Date(2026, 3, 25, 12, 0, 0, 0, time.UTC),
+		},
+		Spec: domain.WorkspaceSpec{Sources: sources},
+	}
+}
+
 func TestInitCreatesMetadataInCurrentDirectory(t *testing.T) {
 	deps, _ := newTestDeps(t)
 	cmd := NewRootCmd(deps)
@@ -57,7 +73,7 @@ func TestInitCreatesMetadataInCurrentDirectory(t *testing.T) {
 		t.Fatalf("execute init: %v", err)
 	}
 
-	if _, err := os.Stat(filepath.Join(root, ".tasktree.toml")); err != nil {
+	if _, err := os.Stat(filepath.Join(root, domain.SpecFileName)); err != nil {
 		t.Fatalf("stat metadata: %v", err)
 	}
 	if !strings.Contains(out.String(), "Initialized tasktree") {
@@ -79,7 +95,7 @@ func TestInitCreatesExplicitPath(t *testing.T) {
 		t.Fatalf("execute init: %v", err)
 	}
 
-	if _, err := os.Stat(filepath.Join(target, ".tasktree.toml")); err != nil {
+	if _, err := os.Stat(filepath.Join(target, domain.SpecFileName)); err != nil {
 		t.Fatalf("stat metadata: %v", err)
 	}
 }
@@ -92,8 +108,9 @@ func TestInitFailsWhenMetadataExists(t *testing.T) {
 	cmd.SetOut(out)
 	cmd.SetErr(errBuf)
 	root := t.TempDir()
-	metadataPath := filepath.Join(root, ".tasktree.toml")
-	if err := os.WriteFile(metadataPath, []byte("version = 1\nname = \"demo\"\ncreated_at = 2026-03-25T12:00:00Z\n"), 0o644); err != nil {
+	// Write a pre-existing Tasktree.yml.
+	specPath := filepath.Join(root, domain.SpecFileName)
+	if err := os.WriteFile(specPath, []byte("apiVersion: tasktree.dev/v1\nkind: Tasktree\nmetadata:\n  name: demo\nspec:\n  sources: []\n"), 0o644); err != nil {
 		t.Fatalf("write metadata: %v", err)
 	}
 	cmd.SetArgs([]string{"init", root})
@@ -115,11 +132,7 @@ func TestRootFindsTasktreeFromNestedDirectory(t *testing.T) {
 	if err := os.MkdirAll(nested, 0o755); err != nil {
 		t.Fatalf("mkdir nested: %v", err)
 	}
-	if err := store.Save(root, domain.TasktreeFile{
-		Version:   domain.MetadataVersion,
-		Name:      filepath.Base(root),
-		CreatedAt: time.Date(2026, 3, 25, 12, 0, 0, 0, time.UTC),
-	}); err != nil {
+	if err := store.Save(root, makeSpec(filepath.Base(root))); err != nil {
 		t.Fatalf("save metadata: %v", err)
 	}
 
@@ -154,21 +167,27 @@ func TestReposPrintsConfiguredRepositories(t *testing.T) {
 	deps, _ := newTestDeps(t)
 	store := metadata.NewStore()
 	root := t.TempDir()
-	if err := store.Save(root, domain.TasktreeFile{
-		Version:   domain.MetadataVersion,
-		Name:      filepath.Base(root),
-		CreatedAt: time.Date(2026, 3, 25, 12, 0, 0, 0, time.UTC),
-		Repos: []domain.RepoSpec{{
-			Name:     "api",
-			Path:     "api",
-			Checkout: "main",
-			Branch:   "feature/payments",
-		}, {
-			Name:     "web",
-			Path:     "web",
-			Checkout: "v1.4.0",
-		}},
-	}); err != nil {
+	if err := store.Save(root, makeSpec(filepath.Base(root),
+		domain.SourceSpec{
+			Name: "api",
+			Type: domain.SourceTypeGit,
+			Path: "api",
+			Git: &domain.GitSourceSpec{
+				URL:    "git@github.com:myorg/api.git",
+				Ref:    "main",
+				Branch: "feature/payments",
+			},
+		},
+		domain.SourceSpec{
+			Name: "web",
+			Type: domain.SourceTypeGit,
+			Path: "web",
+			Git: &domain.GitSourceSpec{
+				URL: "git@github.com:myorg/web.git",
+				Ref: "v1.4.0",
+			},
+		},
+	)); err != nil {
 		t.Fatalf("save metadata: %v", err)
 	}
 
@@ -247,16 +266,10 @@ func TestListShowsRegisteredTasktrees(t *testing.T) {
 	root1 := t.TempDir()
 	root2 := t.TempDir()
 	store := metadata.NewStore()
-	if err := store.Save(root1, domain.TasktreeFile{
-		Version: domain.MetadataVersion, Name: "alpha",
-		CreatedAt: time.Date(2026, 3, 25, 12, 0, 0, 0, time.UTC),
-	}); err != nil {
+	if err := store.Save(root1, makeSpec("alpha")); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Save(root2, domain.TasktreeFile{
-		Version: domain.MetadataVersion, Name: "beta",
-		CreatedAt: time.Date(2026, 3, 25, 12, 0, 0, 0, time.UTC),
-	}); err != nil {
+	if err := store.Save(root2, makeSpec("beta")); err != nil {
 		t.Fatal(err)
 	}
 	if err := reg.Register(root1, "alpha"); err != nil {
@@ -423,11 +436,7 @@ func TestAddResolvesRepoAlias(t *testing.T) {
 	remoteURL, _ := testutil.CreateRemoteRepo(t)
 	root := t.TempDir()
 	store := metadata.NewStore()
-	if err := store.Save(root, domain.TasktreeFile{
-		Version:   domain.MetadataVersion,
-		Name:      filepath.Base(root),
-		CreatedAt: time.Date(2026, 3, 25, 12, 0, 0, 0, time.UTC),
-	}); err != nil {
+	if err := store.Save(root, makeSpec(filepath.Base(root))); err != nil {
 		t.Fatalf("save metadata: %v", err)
 	}
 	cacheRoot := filepath.Join(t.TempDir(), "cache")
@@ -474,15 +483,15 @@ func TestAddResolvesRepoAlias(t *testing.T) {
 		t.Fatalf("stdout = %q", stdout)
 	}
 
-	file, err := store.Load(root)
+	spec, err := store.Load(root)
 	if err != nil {
 		t.Fatalf("load metadata: %v", err)
 	}
-	if len(file.Repos) != 1 {
-		t.Fatalf("repo count = %d, want 1", len(file.Repos))
+	if len(spec.Spec.Sources) != 1 {
+		t.Fatalf("source count = %d, want 1", len(spec.Spec.Sources))
 	}
-	if file.Repos[0].URL != remoteURL {
-		t.Fatalf("repo url = %q, want %q", file.Repos[0].URL, remoteURL)
+	if spec.Spec.Sources[0].Git.URL != remoteURL {
+		t.Fatalf("source url = %q, want %q", spec.Spec.Sources[0].Git.URL, remoteURL)
 	}
 
 	if _, err := os.Stat(filepath.Join(root, "app")); err != nil {
@@ -507,11 +516,7 @@ func TestPruneRemovesStaleEntries(t *testing.T) {
 	store := metadata.NewStore()
 
 	validRoot := t.TempDir()
-	if err := store.Save(validRoot, domain.TasktreeFile{
-		Version:   domain.MetadataVersion,
-		Name:      "valid",
-		CreatedAt: time.Date(2026, 3, 25, 12, 0, 0, 0, time.UTC),
-	}); err != nil {
+	if err := store.Save(validRoot, makeSpec("valid")); err != nil {
 		t.Fatalf("save metadata: %v", err)
 	}
 	if err := reg.Register(validRoot, "valid"); err != nil {
@@ -605,11 +610,7 @@ func TestAddLogsSkippedAliasConflicts(t *testing.T) {
 	remoteURL, _ := testutil.CreateRemoteRepo(t)
 	root := t.TempDir()
 	store := metadata.NewStore()
-	if err := store.Save(root, domain.TasktreeFile{
-		Version:   domain.MetadataVersion,
-		Name:      filepath.Base(root),
-		CreatedAt: time.Date(2026, 3, 25, 12, 0, 0, 0, time.UTC),
-	}); err != nil {
+	if err := store.Save(root, makeSpec(filepath.Base(root))); err != nil {
 		t.Fatalf("save metadata: %v", err)
 	}
 	cacheRoot := filepath.Join(t.TempDir(), "cache")

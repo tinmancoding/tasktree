@@ -44,17 +44,22 @@ func (s InitService) Run(targetPath string) (string, error) {
 		return "", domain.MetadataExistsError{Path: metadataPath}
 	}
 
-	file := domain.TasktreeFile{
-		Version:   domain.MetadataVersion,
-		Name:      filepath.Base(root),
-		CreatedAt: s.now(),
-		Repos:     []domain.RepoSpec{},
+	spec := domain.TasktreeSpec{
+		APIVersion: domain.APIVersion,
+		Kind:       domain.KindTasktree,
+		Metadata: domain.SpecMetadata{
+			Name:      filepath.Base(root),
+			CreatedAt: s.now(),
+		},
+		Spec: domain.WorkspaceSpec{
+			Sources: []domain.SourceSpec{},
+		},
 	}
-	if err := s.store.Save(root, file); err != nil {
+	if err := s.store.Save(root, spec); err != nil {
 		return "", fmt.Errorf("save metadata: %w", err)
 	}
 
-	if regErr := s.registry.Register(root, file.Name); regErr != nil {
+	if regErr := s.registry.Register(root, spec.Metadata.Name); regErr != nil {
 		// Non-fatal: the tasktree is valid on disk. Warn but do not fail.
 		_, _ = fmt.Fprintf(os.Stderr, "warning: could not update registry: %v\n", regErr)
 	}

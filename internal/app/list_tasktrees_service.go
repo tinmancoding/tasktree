@@ -13,11 +13,11 @@ import (
 type TasktreeStatus string
 
 const (
-	// TasktreeStatusOK means the path exists and contains a valid .tasktree.toml.
+	// TasktreeStatusOK means the path exists and contains a valid Tasktree.yml.
 	TasktreeStatusOK TasktreeStatus = "ok"
 	// TasktreeStatusMissing means the path no longer exists on disk.
 	TasktreeStatusMissing TasktreeStatus = "missing"
-	// TasktreeStatusInvalid means the path exists but contains no .tasktree.toml.
+	// TasktreeStatusInvalid means the path exists but contains no Tasktree.yml.
 	TasktreeStatusInvalid TasktreeStatus = "invalid"
 )
 
@@ -51,7 +51,7 @@ func (s ListTasktreesService) Run() ([]TasktreeListEntry, error) {
 
 		if _, err := os.Stat(te.Path); os.IsNotExist(err) {
 			entry.Status = TasktreeStatusMissing
-		} else if _, err := os.Stat(filepath.Join(te.Path, domain.MetadataFileName)); os.IsNotExist(err) {
+		} else if _, err := os.Stat(filepath.Join(te.Path, domain.SpecFileName)); os.IsNotExist(err) {
 			entry.Status = TasktreeStatusInvalid
 		} else {
 			entry.Status = TasktreeStatusOK

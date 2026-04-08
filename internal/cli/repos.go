@@ -18,11 +18,11 @@ func newReposCmd(deps dependencies) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			_, file, err := deps.listService.Run(cwd)
+			_, spec, err := deps.listService.Run(cwd)
 			if err != nil {
 				return formatError(err)
 			}
-			return output.WriteRepoTable(cmd.OutOrStdout(), file.Repos)
+			return output.WriteRepoTable(cmd.OutOrStdout(), spec.Spec.Sources)
 		},
 	}
 }

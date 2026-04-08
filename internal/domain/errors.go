@@ -7,7 +7,15 @@ type NotInTasktreeError struct {
 }
 
 func (e NotInTasktreeError) Error() string {
-	return "Not inside a tasktree (no .tasktree.toml found in current directory or parents).\nRun `tasktree init` to create one."
+	return "Not inside a tasktree (no Tasktree.yml found in current directory or parents).\nRun `tasktree init` to create one."
+}
+
+type LegacyMetadataError struct {
+	Path string
+}
+
+func (e LegacyMetadataError) Error() string {
+	return fmt.Sprintf("Found legacy .tasktree.toml at %s.\nRun `tasktree migrate` to convert to Tasktree.yml.", e.Path)
 }
 
 type MetadataExistsError struct {
@@ -98,4 +106,21 @@ type RepoAliasInUseError struct {
 
 func (e RepoAliasInUseError) Error() string {
 	return fmt.Sprintf("repository alias %q is already used by %s", e.Alias, e.URL)
+}
+
+type UnknownSourceTypeError struct {
+	Type SourceType
+}
+
+func (e UnknownSourceTypeError) Error() string {
+	return fmt.Sprintf("unknown source type %q", e.Type)
+}
+
+type MissingSourceSpecError struct {
+	Name string
+	Type SourceType
+}
+
+func (e MissingSourceSpecError) Error() string {
+	return fmt.Sprintf("source %q of type %q is missing its type-specific spec block", e.Name, e.Type)
 }

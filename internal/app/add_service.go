@@ -38,7 +38,7 @@ const (
 
 type AddResult struct {
 	Root            string
-	Repo            domain.RepoSpec
+	Source          domain.SourceSpec
 	BranchPath      BranchResolutionPath
 	IgnoredFrom     string // non-empty when --from was supplied but ignored
 	EffectiveBranch string // the branch name used (empty for headless)
@@ -60,7 +60,7 @@ func (s AddService) Run(ctx context.Context, start string, opts AddOptions) (Add
 	if err != nil {
 		return AddResult{}, err
 	}
-	file, err := s.store.Load(root)
+	spec, err := s.store.Load(root)
 	if err != nil {
 		return AddResult{}, err
 	}
@@ -76,8 +76,8 @@ func (s AddService) Run(ctx context.Context, start string, opts AddOptions) (Add
 		return AddResult{}, err
 	}
 	destRelPath := domain.RepoPathForName(repoName)
-	for _, repo := range file.Repos {
-		if repo.Name == repoName || repo.Path == destRelPath {
+	for _, source := range spec.Spec.Sources {
+		if source.Name == repoName || source.Path == destRelPath {
 			return AddResult{}, domain.DuplicateRepoNameError{Name: repoName}
 		}
 	}
@@ -117,11 +117,10 @@ func (s AddService) Run(ctx context.Context, start string, opts AddOptions) (Add
 	//
 	// The result variables we need to populate:
 	var (
-		requestedCheckout string
-		resolvedBranch    string // the branch name we end up on (empty = headless)
-		branchPath        BranchResolutionPath
-		ignoredFrom       string
-		effectiveFrom     string
+		resolvedBranch string // the branch name we end up on (empty = headless)
+		branchPath     BranchResolutionPath
+		ignoredFrom    string
+		effectiveFrom  string
 	)
 
 	if opts.Branch != "" {
@@ -143,7 +142,6 @@ func (s AddService) Run(ctx context.Context, start string, opts AddOptions) (Add
 			if err := s.git.Checkout(ctx, destPath, opts.Branch); err != nil {
 				return AddResult{}, err
 			}
-			requestedCheckout = opts.Branch
 			resolvedBranch = opts.Branch
 			branchPath = BranchPathLocalExisting
 		} else {
@@ -158,7 +156,6 @@ func (s AddService) Run(ctx context.Context, start string, opts AddOptions) (Add
 				if err := s.git.CreateTrackingBranch(ctx, destPath, opts.Branch, remoteRef); err != nil {
 					return AddResult{}, err
 				}
-				requestedCheckout = opts.Branch
 				resolvedBranch = opts.Branch
 				branchPath = BranchPathRemoteTracking
 			} else {
@@ -179,7 +176,6 @@ func (s AddService) Run(ctx context.Context, start string, opts AddOptions) (Add
 				if err := s.git.CreateBranch(ctx, destPath, opts.Branch); err != nil {
 					return AddResult{}, err
 				}
-				requestedCheckout = opts.Branch
 				resolvedBranch = opts.Branch
 				branchPath = BranchPathCreated
 			}
@@ -190,7 +186,6 @@ func (s AddService) Run(ctx context.Context, start string, opts AddOptions) (Add
 		if ref == "" {
 			ref = defaultBranch
 		}
-		requestedCheckout = ref
 
 		// Determine whether we need a local tracking branch for a remote-only ref.
 		if opts.From != "" {
@@ -222,39 +217,34 @@ func (s AddService) Run(ctx context.Context, start string, opts AddOptions) (Add
 		}
 	}
 
-	commit, err := s.git.CommitSHA(ctx, destPath)
-	if err != nil {
-		return AddResult{}, err
-	}
-	resolvedRef, err := s.git.CurrentFullRef(ctx, destPath)
-	if err != nil {
-		return AddResult{}, err
-	}
-	if resolvedRef == "" {
-		resolvedRef, err = s.git.ResolveFullRef(ctx, destPath, requestedCheckout)
-		if err != nil {
-			return AddResult{}, err
-		}
+	// Build the source spec — pure intent, no resolved state.
+	// ref field: use opts.From if provided (explicit intent), else opts.Branch, else leave empty (default branch).
+	var sourceRef string
+	if opts.From != "" {
+		sourceRef = opts.From
+	} else if opts.Branch != "" {
+		sourceRef = opts.Branch
 	}
 
-	repo := domain.RepoSpec{
-		Name:        repoName,
-		Path:        destRelPath,
-		URL:         opts.RepoURL,
-		Checkout:    requestedCheckout,
-		ResolvedRef: resolvedRef,
-		Commit:      commit,
-		Branch:      resolvedBranch,
+	source := domain.SourceSpec{
+		Name: repoName,
+		Path: destRelPath,
+		Type: domain.SourceTypeGit,
+		Git: &domain.GitSourceSpec{
+			URL:    opts.RepoURL,
+			Ref:    sourceRef,
+			Branch: resolvedBranch,
+		},
 	}
-	file.Repos = append(file.Repos, repo)
-	if err := s.store.Save(root, file); err != nil {
+	spec.Spec.Sources = append(spec.Spec.Sources, source)
+	if err := s.store.Save(root, spec); err != nil {
 		return AddResult{}, fmt.Errorf("save metadata: %w", err)
 	}
 
 	cleanup = false
 	return AddResult{
 		Root:            root,
-		Repo:            repo,
+		Source:          source,
 		BranchPath:      branchPath,
 		IgnoredFrom:     ignoredFrom,
 		EffectiveBranch: resolvedBranch,

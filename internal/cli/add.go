@@ -63,12 +63,22 @@ func newAddCmd(deps dependencies) *cobra.Command {
 					return err
 				}
 			case app.BranchPathHeadless:
-				if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Checking out %q without creating a branch.\n", result.Repo.Checkout); err != nil {
+				// Use the Ref field if set (explicit checkout request), else the source name.
+				ref := result.Source.Git.Ref
+				if ref == "" {
+					ref = result.Source.Name
+				}
+				if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Checking out %q without creating a branch.\n", ref); err != nil {
 					return err
 				}
 			}
 
-			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Added %s at %s\n", result.Repo.Name, result.Repo.Path); err != nil {
+			// Resolve display path: use Path if set, else Name.
+			sourcePath := result.Source.Path
+			if sourcePath == "" {
+				sourcePath = result.Source.Name
+			}
+			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Added %s at %s\n", result.Source.Name, sourcePath); err != nil {
 				return err
 			}
 			registrations, err := deps.aliasRegister.Run(repoURL)

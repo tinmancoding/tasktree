@@ -23,9 +23,11 @@ type dependencies struct {
 	listService          app.ListService
 	listTasktreesService app.ListTasktreesService
 	addService           app.AddService
+	applyService         app.ApplyService
 	removeService        app.RemoveService
 	statusService        app.StatusService
 	pruneService         app.PruneService
+	migrateService       app.MigrateService
 	aliasSet             app.RepoAliasSetService
 	aliasRemove          app.RepoAliasRemoveService
 	aliasList            app.RepoAliasListService
@@ -55,9 +57,11 @@ func defaultDependencies() dependencies {
 		listService:          app.NewListService(store),
 		listTasktreesService: app.NewListTasktreesService(reg),
 		addService:           app.NewAddService(store, cache.NewManager(cacheRoot, git), git),
+		applyService:         app.NewApplyService(store, cache.NewManager(cacheRoot, git), git),
 		removeService:        app.NewRemoveService(store),
 		statusService:        app.NewStatusService(store, git),
 		pruneService:         app.NewPruneService(reg),
+		migrateService:       app.NewMigrateService(store),
 		aliasSet:             app.NewRepoAliasSetService(repoAliasStore),
 		aliasRemove:          app.NewRepoAliasRemoveService(repoAliasStore),
 		aliasList:            app.NewRepoAliasListService(repoAliasStore),
@@ -99,6 +103,7 @@ func NewRootCmd(deps dependencies) *cobra.Command {
 	cmd.AddCommand(
 		newInitCmd(deps),
 		newAddCmd(deps),
+		newApplyCmd(deps),
 		newRemoveCmd(deps),
 		newRootSubcommand(deps),
 		newListCmd(deps),
@@ -106,6 +111,7 @@ func NewRootCmd(deps dependencies) *cobra.Command {
 		newStatusCmd(deps),
 		newPruneCmd(deps),
 		newRepoCmd(deps),
+		newMigrateCmd(deps),
 	)
 	cmd.SetFlagErrorFunc(func(c *cobra.Command, err error) error {
 		return formatError(err)
@@ -116,6 +122,11 @@ func NewRootCmd(deps dependencies) *cobra.Command {
 func formatError(err error) error {
 	var notInTasktree domain.NotInTasktreeError
 	if errors.As(err, &notInTasktree) {
+		return err
+	}
+
+	var legacyMetadata domain.LegacyMetadataError
+	if errors.As(err, &legacyMetadata) {
 		return err
 	}
 

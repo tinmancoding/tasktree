@@ -1,0 +1,281 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tasktree.dev/schema/v1/tasktree.schema.json",
+  "title": "Tasktree",
+  "description": "Declarative specification of a tasktree workspace. This file (Tasktree.yml) is user-authored and should be committed to version control. It describes the desired state of the workspace: which sources to materialize and how.",
+  "type": "object",
+  "required": ["apiVersion", "kind", "metadata", "spec"],
+  "additionalProperties": false,
+  "properties": {
+    "apiVersion": {
+      "type": "string",
+      "description": "Schema version identifier. Must be 'tasktree.dev/v1'.",
+      "const": "tasktree.dev/v1"
+    },
+    "kind": {
+      "type": "string",
+      "description": "Resource kind. Must be 'Tasktree'.",
+      "const": "Tasktree"
+    },
+    "metadata": {
+      "type": "object",
+      "description": "Metadata about the tasktree resource itself.",
+      "required": ["name"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Human-readable name for this tasktree. Typically the directory base name. Must be a valid identifier (letters, digits, hyphens, underscores).",
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_\\-]*$",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "description": {
+          "type": "string",
+          "description": "Optional free-text description of the task or purpose of this workspace.",
+          "maxLength": 1024
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "RFC3339 timestamp when this tasktree was initialized. Set automatically by 'tasktree init'. Do not edit manually.",
+          "format": "date-time"
+        },
+        "labels": {
+          "type": "object",
+          "description": "Arbitrary key/value string labels for filtering, grouping, or tooling integration. Keys and values must be strings.",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "spec": {
+      "type": "object",
+      "description": "The desired state of the workspace: which sources to materialize and where.",
+      "required": ["sources"],
+      "additionalProperties": false,
+      "properties": {
+        "sources": {
+          "type": "array",
+          "description": "Ordered list of sources to materialize into the workspace directory.",
+          "items": {
+            "$ref": "#/$defs/SourceSpec"
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "SourceSpec": {
+      "type": "object",
+      "description": "A single source entry: describes one thing to materialize into the workspace.",
+      "required": ["name", "type"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Logical name for this source within the tasktree. Used in CLI commands (e.g., 'tasktree remove api'). Must be unique within the tasktree. Defaults to the inferred basename if omitted, but is always written explicitly by the tool.",
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_\\-]*$",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "type": {
+          "type": "string",
+          "description": "Discriminator for the source kind. Determines which type-specific block is required.",
+          "enum": ["git", "http", "archive", "static", "local"]
+        },
+        "path": {
+          "type": "string",
+          "description": "Relative path inside the tasktree directory where this source will be materialized. Must not start with '/' or contain '..'. Defaults to the source name. For 'git' sources this is the checkout directory. For file sources it is the target file path.",
+          "pattern": "^[^/].*[^/]$|^[a-zA-Z0-9_\\-.]$",
+          "examples": ["api", "web", "config/base.json", "contracts"]
+        },
+        "git": {
+          "$ref": "#/$defs/GitSourceSpec"
+        },
+        "http": {
+          "$ref": "#/$defs/HttpSourceSpec"
+        },
+        "archive": {
+          "$ref": "#/$defs/ArchiveSourceSpec"
+        },
+        "static": {
+          "$ref": "#/$defs/StaticSourceSpec"
+        },
+        "local": {
+          "$ref": "#/$defs/LocalSourceSpec"
+        }
+      },
+      "if": {
+        "properties": { "type": { "const": "git" } }
+      },
+      "then": {
+        "required": ["git"]
+      },
+      "else": {
+        "if": {
+          "properties": { "type": { "const": "http" } }
+        },
+        "then": {
+          "required": ["http"]
+        },
+        "else": {
+          "if": {
+            "properties": { "type": { "const": "archive" } }
+          },
+          "then": {
+            "required": ["archive"]
+          },
+          "else": {
+            "if": {
+              "properties": { "type": { "const": "static" } }
+            },
+            "then": {
+              "required": ["static"]
+            },
+            "else": {
+              "if": {
+                "properties": { "type": { "const": "local" } }
+              },
+              "then": {
+                "required": ["local"]
+              }
+            }
+          }
+        }
+      }
+    },
+
+    "GitSourceSpec": {
+      "type": "object",
+      "description": "Configuration for a Git repository source. The repository will be cloned into the workspace using the tasktree caching mechanism.",
+      "required": ["url"],
+      "additionalProperties": false,
+      "properties": {
+        "url": {
+          "type": "string",
+          "description": "Git clone URL. Supports SSH (git@host:org/repo.git) and HTTPS (https://host/org/repo.git) formats.",
+          "minLength": 1,
+          "examples": [
+            "git@github.com:myorg/api.git",
+            "https://github.com/myorg/api.git"
+          ]
+        },
+        "ref": {
+          "type": "string",
+          "description": "The ref to check out. May be a branch name, tag name, or commit SHA. If omitted, the remote default branch is used.",
+          "examples": ["main", "v1.4.0", "feature/payments", "4f3c2ab"]
+        },
+        "branch": {
+          "type": "string",
+          "description": "Optional local branch name to create or track. If the branch already exists locally it is checked out directly. If it exists on origin it is tracked. If it does not exist anywhere a new local branch is created from 'ref' (or the default branch). Analogous to 'git checkout -b <branch> <ref>'.",
+          "examples": ["feature/payments", "fix/login-bug"]
+        }
+      }
+    },
+
+    "HttpSourceSpec": {
+      "type": "object",
+      "description": "Configuration for an HTTP/HTTPS file download source. The file is downloaded once and placed at the declared path. Re-running 'tasktree apply' re-downloads if the file is missing or the sha256 does not match.",
+      "required": ["url"],
+      "additionalProperties": false,
+      "properties": {
+        "url": {
+          "type": "string",
+          "description": "HTTPS URL to download. HTTP is not permitted; use HTTPS only.",
+          "format": "uri",
+          "pattern": "^https://",
+          "examples": ["https://example.com/config/base.json"]
+        },
+        "sha256": {
+          "type": "string",
+          "description": "Expected SHA-256 hex digest of the downloaded file. If provided, the download is verified and the apply fails if the digest does not match. Strongly recommended for reproducibility.",
+          "pattern": "^[a-fA-F0-9]{64}$",
+          "examples": ["e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"]
+        },
+        "headers": {
+          "type": "object",
+          "description": "Optional HTTP request headers to include (e.g., Authorization tokens). Values are strings.",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      }
+    },
+
+    "ArchiveSourceSpec": {
+      "type": "object",
+      "description": "Configuration for a remote archive (tarball, zip) to download and extract into the workspace directory.",
+      "required": ["url"],
+      "additionalProperties": false,
+      "properties": {
+        "url": {
+          "type": "string",
+          "description": "HTTPS URL of the archive file to download.",
+          "format": "uri",
+          "pattern": "^https://",
+          "examples": [
+            "https://github.com/myorg/api/archive/refs/tags/v1.4.0.tar.gz"
+          ]
+        },
+        "sha256": {
+          "type": "string",
+          "description": "Expected SHA-256 hex digest of the downloaded archive. Strongly recommended for reproducibility and security.",
+          "pattern": "^[a-fA-F0-9]{64}$"
+        },
+        "format": {
+          "type": "string",
+          "description": "Archive format. If omitted the tool infers from the URL file extension.",
+          "enum": ["tar.gz", "tar.bz2", "tar.xz", "zip"],
+          "examples": ["tar.gz", "zip"]
+        },
+        "stripComponents": {
+          "type": "integer",
+          "description": "Number of leading path components to strip when extracting. Equivalent to tar --strip-components. Useful for GitHub archives that wrap content in a top-level directory.",
+          "minimum": 0,
+          "default": 0,
+          "examples": [1]
+        }
+      }
+    },
+
+    "StaticSourceSpec": {
+      "type": "object",
+      "description": "Configuration for a static inline file. The content is embedded directly in the Tasktree.yml and written to the target path on apply. Useful for small configuration stubs, placeholder files, or shared scripts that should be identical across environments.",
+      "required": ["content"],
+      "additionalProperties": false,
+      "properties": {
+        "content": {
+          "type": "string",
+          "description": "The literal file content to write. Use YAML block scalars (| for literal, > for folded) for multi-line content."
+        },
+        "mode": {
+          "type": "string",
+          "description": "Unix file permission mode in octal string notation. Defaults to '0644'.",
+          "pattern": "^0[0-7]{3}$",
+          "default": "0644",
+          "examples": ["0644", "0755"]
+        }
+      }
+    },
+
+    "LocalSourceSpec": {
+      "type": "object",
+      "description": "Configuration for a source materialized from a local filesystem path. The source can be symlinked or copied into the tasktree.",
+      "required": ["sourcePath"],
+      "additionalProperties": false,
+      "properties": {
+        "sourcePath": {
+          "type": "string",
+          "description": "Absolute or relative path (relative to Tasktree.yml location) to the local source file or directory.",
+          "examples": ["/home/user/shared-config", "../sibling-repo"]
+        },
+        "copy": {
+          "type": "boolean",
+          "description": "If true, the source is copied (not symlinked) into the tasktree. Defaults to false (symlink).",
+          "default": false
+        }
+      }
+    }
+  }
+}

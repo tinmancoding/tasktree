@@ -5,7 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/pelletier/go-toml/v2"
+	"gopkg.in/yaml.v3"
 
 	"github.com/tinmancoding/tasktree/internal/domain"
 	"github.com/tinmancoding/tasktree/internal/fsx"
@@ -18,23 +18,23 @@ func NewStore() Store {
 }
 
 func (s Store) Path(root string) string {
-	return filepath.Join(root, domain.MetadataFileName)
+	return filepath.Join(root, domain.SpecFileName)
 }
 
-func (s Store) Load(root string) (domain.TasktreeFile, error) {
-	var file domain.TasktreeFile
+func (s Store) Load(root string) (domain.TasktreeSpec, error) {
+	var spec domain.TasktreeSpec
 	contents, err := os.ReadFile(s.Path(root))
 	if err != nil {
-		return file, fmt.Errorf("read metadata: %w", err)
+		return spec, fmt.Errorf("read metadata: %w", err)
 	}
-	if err := toml.Unmarshal(contents, &file); err != nil {
-		return file, fmt.Errorf("parse metadata: %w", err)
+	if err := yaml.Unmarshal(contents, &spec); err != nil {
+		return spec, fmt.Errorf("parse metadata: %w", err)
 	}
-	return file, nil
+	return spec, nil
 }
 
-func (s Store) Save(root string, file domain.TasktreeFile) error {
-	contents, err := toml.Marshal(file)
+func (s Store) Save(root string, spec domain.TasktreeSpec) error {
+	contents, err := yaml.Marshal(spec)
 	if err != nil {
 		return fmt.Errorf("encode metadata: %w", err)
 	}

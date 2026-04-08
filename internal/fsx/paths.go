@@ -16,13 +16,21 @@ func ResolveTasktreeRoot(start string) (string, error) {
 	}
 
 	for {
-		metadataPath := filepath.Join(current, domain.MetadataFileName)
-		info, statErr := os.Stat(metadataPath)
+		// Check for new Tasktree.yml first.
+		specPath := filepath.Join(current, domain.SpecFileName)
+		info, statErr := os.Stat(specPath)
 		if statErr == nil && !info.IsDir() {
 			return current, nil
 		}
 		if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
 			return "", statErr
+		}
+
+		// Check for legacy .tasktree.toml and surface a migration error.
+		legacyPath := filepath.Join(current, domain.LegacyFileName)
+		legacyInfo, legacyStatErr := os.Stat(legacyPath)
+		if legacyStatErr == nil && !legacyInfo.IsDir() {
+			return "", domain.LegacyMetadataError{Path: legacyPath}
 		}
 
 		parent := filepath.Dir(current)

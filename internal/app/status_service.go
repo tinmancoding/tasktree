@@ -37,21 +37,25 @@ func (s StatusService) Run(ctx context.Context, start string) (StatusResult, err
 	if err != nil {
 		return StatusResult{}, err
 	}
-	file, err := s.store.Load(root)
+	spec, err := s.store.Load(root)
 	if err != nil {
 		return StatusResult{}, err
 	}
 
-	result := StatusResult{TasktreeName: file.Name, Root: root, Repos: make([]RepoStatus, 0, len(file.Repos))}
-	for _, repo := range file.Repos {
-		repoPath := filepath.Join(root, repo.Path)
+	result := StatusResult{TasktreeName: spec.Metadata.Name, Root: root, Repos: make([]RepoStatus, 0, len(spec.Spec.Sources))}
+	for _, source := range spec.Spec.Sources {
+		sourcePath := source.Path
+		if sourcePath == "" {
+			sourcePath = source.Name
+		}
+		repoPath := filepath.Join(root, sourcePath)
 		branch, err := s.git.CurrentBranch(ctx, repoPath)
 		if err != nil {
-			return StatusResult{}, fmt.Errorf("inspect branch for %s: %w", repo.Name, err)
+			return StatusResult{}, fmt.Errorf("inspect branch for %s: %w", source.Name, err)
 		}
 		dirty, err := s.git.IsDirty(ctx, repoPath)
 		if err != nil {
-			return StatusResult{}, fmt.Errorf("inspect status for %s: %w", repo.Name, err)
+			return StatusResult{}, fmt.Errorf("inspect status for %s: %w", source.Name, err)
 		}
 
 		head := branch
@@ -62,7 +66,7 @@ func (s StatusService) Run(ctx context.Context, start string) (StatusResult, err
 		if branch == "" {
 			head, err = s.git.HeadDescription(ctx, repoPath)
 			if err != nil {
-				return StatusResult{}, fmt.Errorf("inspect detached HEAD for %s: %w", repo.Name, err)
+				return StatusResult{}, fmt.Errorf("inspect detached HEAD for %s: %w", source.Name, err)
 			}
 			if dirty {
 				state = "detached, modified"
@@ -72,8 +76,8 @@ func (s StatusService) Run(ctx context.Context, start string) (StatusResult, err
 		}
 
 		result.Repos = append(result.Repos, RepoStatus{
-			Name:  repo.Name,
-			Path:  repo.Path,
+			Name:  source.Name,
+			Path:  sourcePath,
 			Head:  head,
 			State: state,
 		})

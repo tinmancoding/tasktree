@@ -39,17 +39,25 @@ func WriteTasktreeTable(w io.Writer, rows []TasktreeRow) error {
 	return tw.Flush()
 }
 
-func WriteRepoTable(w io.Writer, repos []domain.RepoSpec) error {
+func WriteRepoTable(w io.Writer, sources []domain.SourceSpec) error {
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 	if _, err := fmt.Fprintln(tw, "NAME\tPATH\tREF\tBRANCH"); err != nil {
 		return err
 	}
-	for _, repo := range repos {
-		branch := repo.Branch
+	for _, source := range sources {
+		sourcePath := source.Path
+		if sourcePath == "" {
+			sourcePath = source.Name
+		}
+		var ref, branch string
+		if source.Git != nil {
+			ref = source.Git.Ref
+			branch = source.Git.Branch
+		}
 		if branch == "" {
 			branch = "-"
 		}
-		if _, err := fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", repo.Name, repo.Path, repo.Checkout, branch); err != nil {
+		if _, err := fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", source.Name, sourcePath, ref, branch); err != nil {
 			return err
 		}
 	}

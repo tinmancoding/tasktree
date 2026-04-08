@@ -45,7 +45,11 @@ func TestStatusServiceReportsCleanModifiedAndDetached(t *testing.T) {
 	if err != nil {
 		t.Fatalf("add modified repo: %v", err)
 	}
-	modifiedFile := filepath.Join(root, modifiedResult.Repo.Path, "README.md")
+	modifiedSourcePath := modifiedResult.Source.Path
+	if modifiedSourcePath == "" {
+		modifiedSourcePath = modifiedResult.Source.Name
+	}
+	modifiedFile := filepath.Join(root, modifiedSourcePath, "README.md")
 	if err := os.WriteFile(modifiedFile, []byte("locally modified\n"), 0o644); err != nil {
 		t.Fatalf("write modified file: %v", err)
 	}
@@ -62,13 +66,13 @@ func TestStatusServiceReportsCleanModifiedAndDetached(t *testing.T) {
 	for _, repo := range status.Repos {
 		got[repo.Name] = repo
 	}
-	if got[cleanResult.Repo.Name].Head != "main" || got[cleanResult.Repo.Name].State != "clean" {
-		t.Fatalf("clean repo status = %#v", got[cleanResult.Repo.Name])
+	if got[cleanResult.Source.Name].Head != "main" || got[cleanResult.Source.Name].State != "clean" {
+		t.Fatalf("clean repo status = %#v", got[cleanResult.Source.Name])
 	}
 	if got["tagged-app"].Head != "v1.2.0" || got["tagged-app"].State != "detached, clean" {
 		t.Fatalf("tagged repo status = %#v", got["tagged-app"])
 	}
-	if got[modifiedResult.Repo.Name].Head != "main" || got[modifiedResult.Repo.Name].State != "modified" {
-		t.Fatalf("modified repo status = %#v", got[modifiedResult.Repo.Name])
+	if got[modifiedResult.Source.Name].Head != "main" || got[modifiedResult.Source.Name].State != "modified" {
+		t.Fatalf("modified repo status = %#v", got[modifiedResult.Source.Name])
 	}
 }

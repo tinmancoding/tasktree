@@ -13,7 +13,7 @@ func newPruneCmd(deps dependencies) *cobra.Command {
 		Use:   "prune",
 		Short: "Remove stale tasktrees from the global registry",
 		Long: `Remove registry entries whose paths no longer exist on disk or no longer
-contain a .tasktree.toml file.
+contain a Tasktree.yml file.
 
 Use --dry-run to preview what would be removed without making any changes.`,
 		Args: cobra.NoArgs,

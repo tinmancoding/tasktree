@@ -14,14 +14,14 @@ func NewListService(store metadata.Store) ListService {
 	return ListService{store: store}
 }
 
-func (s ListService) Run(start string) (string, domain.TasktreeFile, error) {
+func (s ListService) Run(start string) (string, domain.TasktreeSpec, error) {
 	root, err := fsx.ResolveTasktreeRoot(start)
 	if err != nil {
-		return "", domain.TasktreeFile{}, err
+		return "", domain.TasktreeSpec{}, err
 	}
-	file, err := s.store.Load(root)
+	spec, err := s.store.Load(root)
 	if err != nil {
-		return "", domain.TasktreeFile{}, err
+		return "", domain.TasktreeSpec{}, err
 	}
-	return root, file, nil
+	return root, spec, nil
 }

@@ -23,17 +23,17 @@ func (s RemoveService) Run(start, name string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	file, err := s.store.Load(root)
+	spec, err := s.store.Load(root)
 	if err != nil {
 		return "", err
 	}
 
 	index := -1
-	var repo domain.RepoSpec
-	for i, candidate := range file.Repos {
+	var source domain.SourceSpec
+	for i, candidate := range spec.Spec.Sources {
 		if candidate.Name == name {
 			index = i
-			repo = candidate
+			source = candidate
 			break
 		}
 	}
@@ -41,7 +41,11 @@ func (s RemoveService) Run(start, name string) (string, error) {
 		return "", domain.RepoNotFoundError{Name: name}
 	}
 
-	removePath := filepath.Join(root, repo.Path)
+	sourcePath := source.Path
+	if sourcePath == "" {
+		sourcePath = source.Name
+	}
+	removePath := filepath.Join(root, sourcePath)
 	within, err := fsx.IsWithin(root, removePath)
 	if err != nil {
 		return "", err
@@ -53,8 +57,8 @@ func (s RemoveService) Run(start, name string) (string, error) {
 		return "", fmt.Errorf("remove repo directory: %w", err)
 	}
 
-	file.Repos = append(file.Repos[:index], file.Repos[index+1:]...)
-	if err := s.store.Save(root, file); err != nil {
+	spec.Spec.Sources = append(spec.Spec.Sources[:index], spec.Spec.Sources[index+1:]...)
+	if err := s.store.Save(root, spec); err != nil {
 		return "", fmt.Errorf("save metadata: %w", err)
 	}
 

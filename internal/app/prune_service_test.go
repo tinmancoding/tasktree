@@ -12,16 +12,26 @@ import (
 	"github.com/tinmancoding/tasktree/internal/registry"
 )
 
+func makeTasktreeSpec(name string) domain.TasktreeSpec {
+	return domain.TasktreeSpec{
+		APIVersion: domain.APIVersion,
+		Kind:       domain.KindTasktree,
+		Metadata: domain.SpecMetadata{
+			Name:      name,
+			CreatedAt: time.Date(2026, 3, 25, 12, 0, 0, 0, time.UTC),
+		},
+		Spec: domain.WorkspaceSpec{
+			Sources: []domain.SourceSpec{},
+		},
+	}
+}
+
 func TestPruneServiceReturnsNothingWhenAllValid(t *testing.T) {
 	reg := registry.NewStoreAt(filepath.Join(t.TempDir(), "registry.toml"))
 	store := metadata.NewStore()
 
 	root := t.TempDir()
-	if err := store.Save(root, domain.TasktreeFile{
-		Version:   domain.MetadataVersion,
-		Name:      filepath.Base(root),
-		CreatedAt: time.Date(2026, 3, 25, 12, 0, 0, 0, time.UTC),
-	}); err != nil {
+	if err := store.Save(root, makeTasktreeSpec(filepath.Base(root))); err != nil {
 		t.Fatalf("save metadata: %v", err)
 	}
 	if err := reg.Register(root, "valid-ws"); err != nil {
@@ -80,9 +90,9 @@ func TestPruneServiceRemovesMissingEntry(t *testing.T) {
 func TestPruneServiceRemovesInvalidEntry(t *testing.T) {
 	reg := registry.NewStoreAt(filepath.Join(t.TempDir(), "registry.toml"))
 
-	// path exists but has no .tasktree.toml
+	// path exists but has no Tasktree.yml
 	invalidRoot := t.TempDir()
-	if err := reg.Register(invalidRoot, "no-toml"); err != nil {
+	if err := reg.Register(invalidRoot, "no-yaml"); err != nil {
 		t.Fatalf("register: %v", err)
 	}
 
@@ -139,11 +149,7 @@ func TestPruneServiceOnlyRemovesStaleEntries(t *testing.T) {
 	store := metadata.NewStore()
 
 	validRoot := t.TempDir()
-	if err := store.Save(validRoot, domain.TasktreeFile{
-		Version:   domain.MetadataVersion,
-		Name:      "valid",
-		CreatedAt: time.Date(2026, 3, 25, 12, 0, 0, 0, time.UTC),
-	}); err != nil {
+	if err := store.Save(validRoot, makeTasktreeSpec("valid")); err != nil {
 		t.Fatalf("save metadata: %v", err)
 	}
 	if err := reg.Register(validRoot, "valid"); err != nil {
@@ -155,13 +161,10 @@ func TestPruneServiceOnlyRemovesStaleEntries(t *testing.T) {
 		t.Fatalf("register ghost: %v", err)
 	}
 
-	invalidRoot := t.TempDir() // exists but no .tasktree.toml
-	if err := reg.Register(invalidRoot, "no-toml"); err != nil {
+	invalidRoot := t.TempDir() // exists but no Tasktree.yml
+	if err := reg.Register(invalidRoot, "no-yaml"); err != nil {
 		t.Fatalf("register invalid: %v", err)
 	}
-
-	// manually remove the .tasktree.toml that was never created
-	// (TempDir creates only the dir, no toml — nothing to do)
 
 	service := app.NewPruneService(reg)
 	results, err := service.Run(false)
@@ -197,25 +200,21 @@ func TestPruneServiceNothingToPruneMessage(t *testing.T) {
 	}
 }
 
-func TestPruneServiceRespectsDeletedToml(t *testing.T) {
+func TestPruneServiceRespectsDeletedYaml(t *testing.T) {
 	reg := registry.NewStoreAt(filepath.Join(t.TempDir(), "registry.toml"))
 	store := metadata.NewStore()
 
 	root := t.TempDir()
-	if err := store.Save(root, domain.TasktreeFile{
-		Version:   domain.MetadataVersion,
-		Name:      "was-valid",
-		CreatedAt: time.Date(2026, 3, 25, 12, 0, 0, 0, time.UTC),
-	}); err != nil {
+	if err := store.Save(root, makeTasktreeSpec("was-valid")); err != nil {
 		t.Fatalf("save metadata: %v", err)
 	}
 	if err := reg.Register(root, "was-valid"); err != nil {
 		t.Fatalf("register: %v", err)
 	}
 
-	// now delete the toml
-	if err := os.Remove(filepath.Join(root, domain.MetadataFileName)); err != nil {
-		t.Fatalf("remove toml: %v", err)
+	// now delete the Tasktree.yml
+	if err := os.Remove(filepath.Join(root, domain.SpecFileName)); err != nil {
+		t.Fatalf("remove yaml: %v", err)
 	}
 
 	service := app.NewPruneService(reg)

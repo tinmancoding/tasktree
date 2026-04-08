@@ -15,9 +15,10 @@ func TestResolveTasktreeRootFindsParent(t *testing.T) {
 	if err := os.MkdirAll(nested, 0o755); err != nil {
 		t.Fatalf("mkdir nested: %v", err)
 	}
-	metadataPath := filepath.Join(root, domain.MetadataFileName)
-	if err := os.WriteFile(metadataPath, []byte("version = 1\nname = \"demo\"\ncreated_at = 2026-03-25T12:00:00Z\n"), 0o644); err != nil {
-		t.Fatalf("write metadata: %v", err)
+	// Write a Tasktree.yml at the root.
+	specPath := filepath.Join(root, domain.SpecFileName)
+	if err := os.WriteFile(specPath, []byte("apiVersion: tasktree.dev/v1\nkind: Tasktree\nmetadata:\n  name: demo\nspec:\n  sources: []\n"), 0o644); err != nil {
+		t.Fatalf("write spec: %v", err)
 	}
 
 	resolved, err := fsx.ResolveTasktreeRoot(nested)
@@ -36,6 +37,22 @@ func TestResolveTasktreeRootReturnsTypedError(t *testing.T) {
 	}
 	if _, ok := err.(domain.NotInTasktreeError); !ok {
 		t.Fatalf("expected NotInTasktreeError, got %T", err)
+	}
+}
+
+func TestResolveTasktreeRootDetectsLegacyToml(t *testing.T) {
+	root := t.TempDir()
+	legacyPath := filepath.Join(root, domain.LegacyFileName)
+	if err := os.WriteFile(legacyPath, []byte("version = 1\nname = \"demo\"\ncreated_at = 2026-03-25T12:00:00Z\n"), 0o644); err != nil {
+		t.Fatalf("write legacy: %v", err)
+	}
+
+	_, err := fsx.ResolveTasktreeRoot(root)
+	if err == nil {
+		t.Fatal("expected error for legacy .tasktree.toml")
+	}
+	if _, ok := err.(domain.LegacyMetadataError); !ok {
+		t.Fatalf("expected LegacyMetadataError, got %T: %v", err, err)
 	}
 }
 

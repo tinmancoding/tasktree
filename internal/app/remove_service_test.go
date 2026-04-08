@@ -30,25 +30,29 @@ func TestRemoveServiceRemovesCheckoutAndKeepsCache(t *testing.T) {
 	}
 	cachePath := cache.NewManager(cacheRoot, gitx.NewClient()).PathForURL(remoteURL)
 
-	removedPath, err := removeService.Run(root, result.Repo.Name)
+	sourcePath := result.Source.Path
+	if sourcePath == "" {
+		sourcePath = result.Source.Name
+	}
+	removedPath, err := removeService.Run(root, result.Source.Name)
 	if err != nil {
 		t.Fatalf("remove repo: %v", err)
 	}
-	if removedPath != filepath.Join(root, result.Repo.Path) {
-		t.Fatalf("removed path = %q", removedPath)
+	if removedPath != filepath.Join(root, sourcePath) {
+		t.Fatalf("removed path = %q, want %q", removedPath, filepath.Join(root, sourcePath))
 	}
-	if _, err := os.Stat(filepath.Join(root, result.Repo.Path)); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(root, sourcePath)); !os.IsNotExist(err) {
 		t.Fatalf("expected repo directory to be removed, got %v", err)
 	}
 	if _, err := os.Stat(cachePath); err != nil {
 		t.Fatalf("expected cache to remain, got %v", err)
 	}
-	file, err := store.Load(root)
+	spec, err := store.Load(root)
 	if err != nil {
 		t.Fatalf("load metadata: %v", err)
 	}
-	if len(file.Repos) != 0 {
-		t.Fatalf("expected empty repo metadata, got %d entries", len(file.Repos))
+	if len(spec.Spec.Sources) != 0 {
+		t.Fatalf("expected empty sources metadata, got %d entries", len(spec.Spec.Sources))
 	}
 }
 

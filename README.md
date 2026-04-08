@@ -2,7 +2,7 @@
 
 Tasktree is a task-first workspace manager for local development across one or more Git repositories.
 
-It creates a workspace directory with a `.tasktree.toml` file plus one or more normal Git checkouts. Repeated clones stay fast because tasktree keeps deterministic local bare-repo caches under the user cache directory.
+It creates a workspace directory with a `Tasktree.yml` file plus one or more normal Git checkouts. Repeated clones stay fast because tasktree keeps deterministic local bare-repo caches under the user cache directory.
 
 ## Features
 
@@ -17,6 +17,8 @@ It creates a workspace directory with a `.tasktree.toml` file plus one or more n
 - Remove a checkout without touching the shared bare cache
 - Manage repository aliases in `~/.config/tasktree/repos.yml`
 - Auto-register useful aliases when a repo is added
+- Migrate from the legacy `.tasktree.toml` format with `tasktree migrate`
+- Reproduce a workspace on any machine with `tasktree apply`
 
 ## Getting Started
 
@@ -62,7 +64,7 @@ cd ~/ws/feature-checkout
 tasktree init
 ```
 
-This creates the tasktree root and writes `.tasktree.toml`.
+This creates the tasktree root and writes `Tasktree.yml`.
 
 ### 2. Add repositories
 
@@ -190,6 +192,21 @@ tasktree root
 tasktree status
 ```
 
+### 7. Share or reproduce a workspace
+
+`Tasktree.yml` is pure desired state — no resolved commit SHAs, no machine-specific paths. It is safe to commit to version control or share with teammates.
+
+To reproduce a workspace on a new machine, copy `Tasktree.yml` to a directory and run `tasktree apply`:
+
+```bash
+mkdir ~/ws/feature-checkout-copy
+cp ~/ws/feature-checkout/Tasktree.yml ~/ws/feature-checkout-copy/
+cd ~/ws/feature-checkout-copy
+tasktree apply
+```
+
+`apply` clones every source in the spec that is not yet present on disk. Sources already present are skipped, so `apply` is safe to run repeatedly.
+
 ## CLI Reference
 
 ### Global Flags
@@ -198,7 +215,7 @@ tasktree status
 
 ### `tasktree init [path]`
 
-Initialize a tasktree in the current directory or the provided path.
+Initialize a tasktree in the current directory or the provided path. Writes `Tasktree.yml`.
 
 Examples:
 
@@ -266,9 +283,35 @@ What `add` does:
 - resolves the input as an alias if one exists
 - uses the shared local bare-repo cache when cloning
 - creates a normal checkout inside the tasktree
-- records the repo in `.tasktree.toml`
+- records the source in `Tasktree.yml` under `spec.sources`
 - attempts to register derived aliases in `repos.yml`
 - prints what aliases were added, already existed, or were skipped due to conflicts
+
+### `tasktree apply [--dry-run]`
+
+Materialize all sources declared in `Tasktree.yml` that are not yet present on disk.
+
+For each source in `spec.sources`:
+
+- If the destination path already exists — skip it without error
+- If the source type is `git` — populate the bare-clone cache and clone the repo, then apply the declared branch or ref
+- If the source type is not yet supported — skip with a warning
+
+Flags:
+
+- `--dry-run`: preview what would be done without creating any directories
+
+Examples:
+
+```bash
+# Reproduce a workspace from Tasktree.yml
+tasktree apply
+
+# See what would be cloned without doing anything
+tasktree apply --dry-run
+```
+
+`apply` is idempotent: running it when all sources are already present prints "All sources are already present." and exits cleanly.
 
 ### `tasktree repos`
 
@@ -298,7 +341,7 @@ Remove stale entries from the global tasktree registry.
 An entry is considered stale when:
 
 - its path no longer exists on disk (`missing`)
-- its path exists but no longer contains a `.tasktree.toml` (`invalid`)
+- its path exists but no longer contains a `Tasktree.yml` (`invalid`)
 
 Flags:
 
@@ -325,7 +368,47 @@ Output includes:
 
 Remove a repository checkout from the current tasktree.
 
-This removes the working checkout and updates `.tasktree.toml`. It does not remove shared cached clones.
+This removes the working checkout and updates `Tasktree.yml`. It does not remove shared cached clones.
+
+### `tasktree migrate [path]`
+
+Convert a legacy `.tasktree.toml` to `Tasktree.yml`.
+
+Run this once in any workspace created with an older version of tasktree:
+
+```bash
+tasktree migrate
+```
+
+What it does:
+
+1. Reads `.tasktree.toml` in the current directory (or `path` if provided)
+2. Maps each `[[repos]]` entry to a `spec.sources` entry of type `git`
+3. Writes `Tasktree.yml`
+4. Renames `.tasktree.toml` to `.tasktree.toml.bak`
+
+Resolved state fields (`resolved_ref`, `commit`) are intentionally discarded — live state is always queried from the Git checkouts directly.
+
+Example output:
+
+```text
+Found .tasktree.toml in current directory.
+
+Converting to Tasktree.yml...
+
+  api          git  git@github.com:myorg/api.git  (branch: feature/checkout)
+  web          git  git@github.com:myorg/web.git  (branch: feature/checkout)
+
+Note: resolved_ref and commit fields are not carried over.
+      Live state is always queried from the Git checkouts directly.
+
+Written: Tasktree.yml
+Renamed: .tasktree.toml → .tasktree.toml.bak
+
+Migration complete. Review Tasktree.yml and commit it to version control.
+```
+
+If tasktree detects a `.tasktree.toml` without a `Tasktree.yml`, all commands (except `migrate`) will prompt you to run `tasktree migrate` first.
 
 ### `tasktree root`
 
@@ -379,15 +462,50 @@ tasktree completion zsh
 
 ## Configuration
 
-### Tasktree Metadata
+### Tasktree Metadata (`Tasktree.yml`)
 
-Each workspace stores local metadata in:
+Each workspace stores its desired state in a `Tasktree.yml` file at the workspace root. It uses a Kubernetes-style structure:
 
-```text
-.tasktree.toml
+```yaml
+apiVersion: tasktree.dev/v1
+kind: Tasktree
+
+metadata:
+  name: feature-checkout
+  createdAt: "2026-03-25T12:00:00Z"
+
+spec:
+  sources:
+    - name: api
+      type: git
+      path: api
+      git:
+        url: "git@github.com:myorg/api.git"
+        branch: feature/checkout
+
+    - name: web
+      type: git
+      git:
+        url: "git@github.com:myorg/web.git"
+        branch: feature/checkout
 ```
 
-This file tracks the tasktree name, creation time, and repositories in the workspace.
+`Tasktree.yml` is pure desired state — it contains no resolved commit SHAs, no timestamps written by the tool beyond `createdAt`, and no machine-specific paths. It is safe to commit to version control and share with teammates.
+
+The tool appends or removes entries in `spec.sources` on `tasktree add` / `tasktree remove`. It never writes resolved state back into the file.
+
+A JSON Schema for editor validation and autocompletion is available at `schema/tasktree.schema.json` in the tasktree repository.
+
+### Migrating from `.tasktree.toml`
+
+Workspaces created with older versions of tasktree use `.tasktree.toml`. Run `tasktree migrate` once to convert:
+
+```bash
+cd ~/ws/my-old-workspace
+tasktree migrate
+```
+
+See [`tasktree migrate`](#tasktree-migrate-path) for full details.
 
 ### Global Tasktree Registry
 
@@ -397,7 +515,7 @@ Tasktree keeps a global registry of all initialized tasktrees at:
 ~/.local/state/tasktree/registry.toml
 ```
 
-This registry is updated automatically on `tasktree init` and is used by `tasktree list` to show all known workspaces. Stale entries (paths that no longer exist or have lost their `.tasktree.toml`) are reported in the `STATUS` column and can be cleaned up with `tasktree prune`.
+This registry is updated automatically on `tasktree init` and is used by `tasktree list` to show all known workspaces. Stale entries (paths that no longer exist or have lost their `Tasktree.yml`) are reported in the `STATUS` column and can be cleaned up with `tasktree prune`.
 
 ### Global Repository Alias Catalog
 

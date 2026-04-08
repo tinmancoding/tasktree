@@ -123,6 +123,69 @@ func TestCLIReposFailsOutsideTasktree(t *testing.T) {
 	}
 }
 
+func TestCLIApplyMaterializesAllSources(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	remoteURL, _ := testutil.CreateRemoteRepo(t)
+	workspace := t.TempDir()
+	tasktreeRoot := filepath.Join(workspace, "feature-payments")
+
+	testutil.RunTasktree(t, workspace, "init", tasktreeRoot)
+	testutil.RunTasktree(t, tasktreeRoot, "add", remoteURL, "--branch", "feature/x", "--name", "app")
+
+	// Remove the checkout to simulate a fresh environment where only
+	// Tasktree.yml exists (e.g. after cloning a shared workspace spec).
+	if err := os.RemoveAll(filepath.Join(tasktreeRoot, "app")); err != nil {
+		t.Fatalf("remove checkout: %v", err)
+	}
+
+	applyOutput := testutil.RunTasktree(t, tasktreeRoot, "apply")
+	if !strings.Contains(applyOutput, "Cloned app at app") {
+		t.Fatalf("unexpected apply output: %q", applyOutput)
+	}
+	if _, err := os.Stat(filepath.Join(tasktreeRoot, "app")); os.IsNotExist(err) {
+		t.Fatalf("expected checkout to be restored after apply")
+	}
+}
+
+func TestCLIApplyDryRun(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	remoteURL, _ := testutil.CreateRemoteRepo(t)
+	workspace := t.TempDir()
+	tasktreeRoot := filepath.Join(workspace, "ws")
+
+	testutil.RunTasktree(t, workspace, "init", tasktreeRoot)
+	testutil.RunTasktree(t, tasktreeRoot, "add", remoteURL, "--name", "app")
+
+	// Remove the checkout so apply would have something to do.
+	if err := os.RemoveAll(filepath.Join(tasktreeRoot, "app")); err != nil {
+		t.Fatalf("remove checkout: %v", err)
+	}
+
+	applyOutput := testutil.RunTasktree(t, tasktreeRoot, "apply", "--dry-run")
+	if !strings.Contains(applyOutput, "Would clone app at app") {
+		t.Fatalf("unexpected dry-run output: %q", applyOutput)
+	}
+	if _, err := os.Stat(filepath.Join(tasktreeRoot, "app")); !os.IsNotExist(err) {
+		t.Fatalf("expected no checkout after dry-run")
+	}
+}
+
+func TestCLIApplyIsIdempotent(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	remoteURL, _ := testutil.CreateRemoteRepo(t)
+	workspace := t.TempDir()
+	tasktreeRoot := filepath.Join(workspace, "ws")
+
+	testutil.RunTasktree(t, workspace, "init", tasktreeRoot)
+	testutil.RunTasktree(t, tasktreeRoot, "add", remoteURL, "--name", "app")
+
+	// All sources are already present; apply should report that.
+	applyOutput := testutil.RunTasktree(t, tasktreeRoot, "apply")
+	if !strings.Contains(applyOutput, "All sources are already present.") {
+		t.Fatalf("unexpected idempotent apply output: %q", applyOutput)
+	}
+}
+
 func TestCLIVerbosePrintsGitOperationsToStderr(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
