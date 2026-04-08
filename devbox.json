@@ -2,6 +2,7 @@
   "packages": [
     "go@latest",
     "git@latest",
-    "golangci-lint@latest"
+    "golangci-lint@latest",
+    "python313Packages.mkdocs-material@latest"
   ]
 }
