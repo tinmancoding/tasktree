@@ -20,6 +20,7 @@ type RepoStatus struct {
 type StatusResult struct {
 	TasktreeName string
 	Root         string
+	Annotations  map[string]string
 	Repos        []RepoStatus
 }
 
@@ -42,7 +43,7 @@ func (s StatusService) Run(ctx context.Context, start string) (StatusResult, err
 		return StatusResult{}, err
 	}
 
-	result := StatusResult{TasktreeName: spec.Metadata.Name, Root: root, Repos: make([]RepoStatus, 0, len(spec.Spec.Sources))}
+	result := StatusResult{TasktreeName: spec.Metadata.Name, Root: root, Annotations: spec.Metadata.Annotations, Repos: make([]RepoStatus, 0, len(spec.Spec.Sources))}
 	for _, source := range spec.Spec.Sources {
 		sourcePath := source.Path
 		if sourcePath == "" {

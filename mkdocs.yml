@@ -52,6 +52,7 @@ nav:
     - remove: cli/remove.md
     - repos: cli/repos.md
     - status: cli/status.md
+    - annotate: cli/annotate.md
     - list: cli/list.md
     - root: cli/root.md
     - prune: cli/prune.md

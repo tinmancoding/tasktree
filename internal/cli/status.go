@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"os"
+	"sort"
 
 	"github.com/spf13/cobra"
 
@@ -23,21 +24,39 @@ func newStatusCmd(deps dependencies) *cobra.Command {
 			if err != nil {
 				return formatError(err)
 			}
-			rows := make([]struct {
+
+			// Build sorted annotations slice for deterministic output.
+			annotationKeys := make([]string, 0, len(result.Annotations))
+			for k := range result.Annotations {
+				annotationKeys = append(annotationKeys, k)
+			}
+			sort.Strings(annotationKeys)
+			annotations := make([]struct {
+				Key   string
+				Value string
+			}, 0, len(annotationKeys))
+			for _, k := range annotationKeys {
+				annotations = append(annotations, struct {
+					Key   string
+					Value string
+				}{Key: k, Value: result.Annotations[k]})
+			}
+
+			repos := make([]struct {
 				Name  string
 				Path  string
 				Head  string
 				State string
 			}, 0, len(result.Repos))
 			for _, repo := range result.Repos {
-				rows = append(rows, struct {
+				repos = append(repos, struct {
 					Name  string
 					Path  string
 					Head  string
 					State string
 				}{Name: repo.Name, Path: repo.Path, Head: repo.Head, State: repo.State})
 			}
-			return output.WriteStatusTable(cmd.OutOrStdout(), result.TasktreeName, result.Root, rows)
+			return output.WriteStatusTable(cmd.OutOrStdout(), result.TasktreeName, result.Root, annotations, repos)
 		},
 	}
 }

@@ -26,7 +26,15 @@ func NewInitService(store metadata.Store, reg *registry.Store) InitService {
 	}
 }
 
-func (s InitService) Run(targetPath string) (string, error) {
+// InitOptions carries optional configuration for workspace initialization.
+type InitOptions struct {
+	// Annotations is an optional set of annotation key/value pairs to store in
+	// the workspace metadata at creation time. Keys must satisfy
+	// domain.ValidateAnnotationKey. A nil map means no annotations.
+	Annotations map[string]string
+}
+
+func (s InitService) Run(targetPath string, opts InitOptions) (string, error) {
 	root, err := filepath.Abs(targetPath)
 	if err != nil {
 		return "", fmt.Errorf("resolve path: %w", err)
@@ -44,12 +52,25 @@ func (s InitService) Run(targetPath string) (string, error) {
 		return "", domain.MetadataExistsError{Path: metadataPath}
 	}
 
+	// Validate annotation keys before writing anything to disk.
+	for k := range opts.Annotations {
+		if err := domain.ValidateAnnotationKey(k); err != nil {
+			return "", err
+		}
+	}
+
+	var annotations map[string]string
+	if len(opts.Annotations) > 0 {
+		annotations = opts.Annotations
+	}
+
 	spec := domain.TasktreeSpec{
 		APIVersion: domain.APIVersion,
 		Kind:       domain.KindTasktree,
 		Metadata: domain.SpecMetadata{
-			Name:      filepath.Base(root),
-			CreatedAt: s.now(),
+			Name:        filepath.Base(root),
+			CreatedAt:   s.now(),
+			Annotations: annotations,
 		},
 		Spec: domain.WorkspaceSpec{
 			Sources: []domain.SourceSpec{},

@@ -46,6 +46,14 @@
           "additionalProperties": {
             "type": "string"
           }
+        },
+        "annotations": {
+          "type": "object",
+          "description": "Arbitrary key/value string annotations for human-readable context: purpose, ownership, linked tickets, documentation URLs, sprint info, etc. Unlike labels (which are for machine-readable selection), annotations are intended to be read and displayed by humans. Keys must match ^[a-zA-Z0-9][a-zA-Z0-9._-]*$ and may be at most 128 characters. Values may be at most 4096 characters.",
+          "additionalProperties": {
+            "type": "string",
+            "maxLength": 4096
+          }
         }
       }
     },

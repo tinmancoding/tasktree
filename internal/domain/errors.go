@@ -124,3 +124,13 @@ type MissingSourceSpecError struct {
 func (e MissingSourceSpecError) Error() string {
 	return fmt.Sprintf("source %q of type %q is missing its type-specific spec block", e.Name, e.Type)
 }
+
+// InvalidAnnotationKeyError is returned when an annotation key fails validation.
+type InvalidAnnotationKeyError struct {
+	Key    string
+	Reason string
+}
+
+func (e InvalidAnnotationKeyError) Error() string {
+	return fmt.Sprintf("invalid annotation key %q: %s", e.Key, e.Reason)
+}

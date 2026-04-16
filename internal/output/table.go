@@ -64,7 +64,10 @@ func WriteRepoTable(w io.Writer, sources []domain.SourceSpec) error {
 	return tw.Flush()
 }
 
-func WriteStatusTable(w io.Writer, tasktreeName, root string, repos []struct {
+func WriteStatusTable(w io.Writer, tasktreeName, root string, annotations []struct {
+	Key   string
+	Value string
+}, repos []struct {
 	Name  string
 	Path  string
 	Head  string
@@ -73,7 +76,24 @@ func WriteStatusTable(w io.Writer, tasktreeName, root string, repos []struct {
 	if _, err := fmt.Fprintf(w, "Tasktree: %s\n", tasktreeName); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintf(w, "Root: %s\n\n", root); err != nil {
+	if _, err := fmt.Fprintf(w, "Root:     %s\n", root); err != nil {
+		return err
+	}
+	if len(annotations) > 0 {
+		if _, err := fmt.Fprintln(w); err != nil {
+			return err
+		}
+		tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+		for _, a := range annotations {
+			if _, err := fmt.Fprintf(tw, "  %s\t%s\n", a.Key, a.Value); err != nil {
+				return err
+			}
+		}
+		if err := tw.Flush(); err != nil {
+			return err
+		}
+	}
+	if _, err := fmt.Fprintln(w); err != nil {
 		return err
 	}
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
@@ -82,6 +102,31 @@ func WriteStatusTable(w io.Writer, tasktreeName, root string, repos []struct {
 	}
 	for _, repo := range repos {
 		if _, err := fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", repo.Name, repo.Path, repo.Head, repo.State); err != nil {
+			return err
+		}
+	}
+	return tw.Flush()
+}
+
+// AnnotationRow is a single row in the annotations table.
+type AnnotationRow struct {
+	Key   string
+	Value string
+}
+
+// WriteAnnotationsTable renders the annotations as a two-column table.
+// Prints "No annotations set." when rows is empty.
+func WriteAnnotationsTable(w io.Writer, rows []AnnotationRow) error {
+	if len(rows) == 0 {
+		_, err := fmt.Fprintln(w, "No annotations set.")
+		return err
+	}
+	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+	if _, err := fmt.Fprintln(tw, "KEY\tVALUE"); err != nil {
+		return err
+	}
+	for _, r := range rows {
+		if _, err := fmt.Fprintf(tw, "%s\t%s\n", r.Key, r.Value); err != nil {
 			return err
 		}
 	}

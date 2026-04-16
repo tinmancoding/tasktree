@@ -28,6 +28,7 @@ type dependencies struct {
 	statusService        app.StatusService
 	pruneService         app.PruneService
 	migrateService       app.MigrateService
+	annotateService      app.AnnotateService
 	aliasSet             app.RepoAliasSetService
 	aliasRemove          app.RepoAliasRemoveService
 	aliasList            app.RepoAliasListService
@@ -62,6 +63,7 @@ func defaultDependencies() dependencies {
 		statusService:        app.NewStatusService(store, git),
 		pruneService:         app.NewPruneService(reg),
 		migrateService:       app.NewMigrateService(store),
+		annotateService:      app.NewAnnotateService(store),
 		aliasSet:             app.NewRepoAliasSetService(repoAliasStore),
 		aliasRemove:          app.NewRepoAliasRemoveService(repoAliasStore),
 		aliasList:            app.NewRepoAliasListService(repoAliasStore),
@@ -112,6 +114,7 @@ func NewRootCmd(deps dependencies) *cobra.Command {
 		newPruneCmd(deps),
 		newRepoCmd(deps),
 		newMigrateCmd(deps),
+		newAnnotateCmd(deps),
 	)
 	cmd.SetFlagErrorFunc(func(c *cobra.Command, err error) error {
 		return formatError(err)
@@ -182,6 +185,11 @@ func formatError(err error) error {
 
 	var repoAliasInUse domain.RepoAliasInUseError
 	if errors.As(err, &repoAliasInUse) {
+		return err
+	}
+
+	var invalidAnnotationKey domain.InvalidAnnotationKeyError
+	if errors.As(err, &invalidAnnotationKey) {
 		return err
 	}
 

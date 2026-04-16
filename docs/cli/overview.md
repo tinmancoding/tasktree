@@ -39,6 +39,7 @@ Error: found legacy .tasktree.toml at <path> — run 'tasktree migrate' to conve
 | [`remove`](remove.md) | Remove a repository from the current tasktree |
 | [`repos`](repos.md) | List repositories declared in the current tasktree |
 | [`status`](status.md) | Show live git status for all repositories |
+| [`annotate`](annotate.md) | Manage annotations for the current tasktree |
 | [`list`](list.md) | List all known tasktrees on this machine |
 | [`root`](root.md) | Print the current tasktree root path |
 | [`prune`](prune.md) | Remove stale entries from the global registry |

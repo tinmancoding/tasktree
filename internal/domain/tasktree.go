@@ -1,6 +1,30 @@
 package domain
 
-import "time"
+import (
+	"fmt"
+	"regexp"
+	"time"
+)
+
+// annotationKeyRe is the pattern a valid annotation key must match.
+// Keys must start with a letter or digit and may contain letters, digits,
+// dots, hyphens, and underscores. Dots allow simple namespacing (e.g. "jira.ticket").
+var annotationKeyRe = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._\-]*$`)
+
+// ValidateAnnotationKey returns an InvalidAnnotationKeyError when k is not a
+// valid annotation key.
+func ValidateAnnotationKey(k string) error {
+	if k == "" {
+		return InvalidAnnotationKeyError{Key: k, Reason: "key must not be empty"}
+	}
+	if len(k) > 128 {
+		return InvalidAnnotationKeyError{Key: k, Reason: fmt.Sprintf("key length %d exceeds maximum of 128", len(k))}
+	}
+	if !annotationKeyRe.MatchString(k) {
+		return InvalidAnnotationKeyError{Key: k, Reason: "key must match ^[a-zA-Z0-9][a-zA-Z0-9._-]*$"}
+	}
+	return nil
+}
 
 const (
 	SpecFileName   = "Tasktree.yml"
@@ -23,6 +47,7 @@ type SpecMetadata struct {
 	Description string            `yaml:"description,omitempty"`
 	CreatedAt   time.Time         `yaml:"createdAt,omitempty"`
 	Labels      map[string]string `yaml:"labels,omitempty"`
+	Annotations map[string]string `yaml:"annotations,omitempty"`
 }
 
 type WorkspaceSpec struct {
