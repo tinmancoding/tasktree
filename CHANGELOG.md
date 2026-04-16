@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.0](https://github.com/tinmancoding/tasktree/compare/v1.1.0...v1.2.0) (2026-04-16)
+
+
+### Features
+
+* annotations ([e6b164b](https://github.com/tinmancoding/tasktree/commit/e6b164b063716f660c0cce3fa00f1f7853178c35))
+
 ## [1.1.0](https://github.com/tinmancoding/tasktree/compare/v1.0.1...v1.1.0) (2026-04-08)
 
 
