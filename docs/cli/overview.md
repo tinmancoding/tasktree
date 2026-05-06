@@ -45,3 +45,4 @@ Error: found legacy .tasktree.toml at <path> — run 'tasktree migrate' to conve
 | [`prune`](prune.md) | Remove stale entries from the global registry |
 | [`migrate`](migrate.md) | Convert a legacy `.tasktree.toml` to `Tasktree.yml` |
 | [`repo`](repo.md) | Manage repository aliases |
+| [`template`](template.md) | List, inspect, and validate workspace templates |

@@ -1,0 +1,32 @@
+apiVersion: tasktree.dev/v1
+kind: Template
+
+metadata:
+  name: feature
+  description: Single-repo feature branch workspace
+
+parameters:
+  - name: feature_name
+    required: true
+    description: Feature name (used in branch name)
+  - name: repo
+    required: true
+    description: Repository alias or URL
+  - name: base_branch
+    default: main
+    description: Base branch to fork from
+
+template:
+  metadata:
+    name: "feature-{{feature_name}}"
+    annotations:
+      type: feature
+
+  spec:
+    sources:
+      - name: repo
+        type: git
+        git:
+          url: "{{repo}}"
+          ref: "{{base_branch}}"
+          branch: "feature/{{feature_name}}"

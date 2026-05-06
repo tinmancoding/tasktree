@@ -1,0 +1,41 @@
+apiVersion: tasktree.dev/v1
+kind: Template
+
+metadata:
+  name: fullstack-feature
+  description: API + Web + Shared libs for a feature
+
+parameters:
+  - name: feature_name
+    required: true
+    description: Feature name (used in branch names)
+  - name: ticket_number
+    default: ""
+    description: Optional ticket reference
+
+template:
+  metadata:
+    name: "{{feature_name}}"
+    annotations:
+      ticket: "{{ticket_number}}"
+      type: feature
+
+  spec:
+    sources:
+      - name: api
+        type: git
+        git:
+          url: "@api"
+          branch: "feature/{{feature_name}}"
+
+      - name: web
+        type: git
+        git:
+          url: "@web"
+          branch: "feature/{{feature_name}}"
+
+      - name: shared
+        type: git
+        git:
+          url: "@shared"
+          ref: main

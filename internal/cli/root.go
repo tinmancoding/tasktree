@@ -14,6 +14,7 @@ import (
 	"github.com/tinmancoding/tasktree/internal/metadata"
 	"github.com/tinmancoding/tasktree/internal/registry"
 	"github.com/tinmancoding/tasktree/internal/repoalias"
+	tmplstore "github.com/tinmancoding/tasktree/internal/template"
 )
 
 type dependencies struct {
@@ -34,6 +35,7 @@ type dependencies struct {
 	aliasList            app.RepoAliasListService
 	aliasResolve         app.RepoAliasResolveService
 	aliasRegister        app.RepoAliasRegisterDerivedService
+	templateService      app.TemplateService
 }
 
 func defaultDependencies() dependencies {
@@ -51,9 +53,20 @@ func defaultDependencies() dependencies {
 	if err != nil {
 		panic(err)
 	}
+
+	// Template store: discover from current directory and user config.
+	cwd, err := os.Getwd()
+	if err != nil {
+		panic(fmt.Sprintf("get working directory: %v", err))
+	}
+	ts, err := tmplstore.NewStore(cwd)
+	if err != nil {
+		panic(fmt.Sprintf("init template store: %v", err))
+	}
+
 	return dependencies{
 		git:                  git,
-		initService:          app.NewInitService(store, reg),
+		initService:          app.NewInitServiceWithTemplates(store, reg, ts),
 		rootService:          app.NewRootService(),
 		listService:          app.NewListService(store),
 		listTasktreesService: app.NewListTasktreesService(reg),
@@ -69,6 +82,7 @@ func defaultDependencies() dependencies {
 		aliasList:            app.NewRepoAliasListService(repoAliasStore),
 		aliasResolve:         app.NewRepoAliasResolveService(repoAliasStore),
 		aliasRegister:        app.NewRepoAliasRegisterDerivedService(repoAliasStore),
+		templateService:      app.NewTemplateService(ts),
 	}
 }
 
@@ -115,6 +129,7 @@ func NewRootCmd(deps dependencies) *cobra.Command {
 		newRepoCmd(deps),
 		newMigrateCmd(deps),
 		newAnnotateCmd(deps),
+		newTemplateCmd(deps),
 	)
 	cmd.SetFlagErrorFunc(func(c *cobra.Command, err error) error {
 		return formatError(err)
@@ -190,6 +205,27 @@ func formatError(err error) error {
 
 	var invalidAnnotationKey domain.InvalidAnnotationKeyError
 	if errors.As(err, &invalidAnnotationKey) {
+		return err
+	}
+
+	// Template-related errors.
+	var templateNotFound domain.TemplateNotFoundError
+	if errors.As(err, &templateNotFound) {
+		return err
+	}
+
+	var missingVariable domain.MissingVariableError
+	if errors.As(err, &missingVariable) {
+		return err
+	}
+
+	var unknownVariable domain.UnknownVariableError
+	if errors.As(err, &unknownVariable) {
+		return err
+	}
+
+	var invalidVariableName domain.InvalidVariableNameError
+	if errors.As(err, &invalidVariableName) {
 		return err
 	}
 

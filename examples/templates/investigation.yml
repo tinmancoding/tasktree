@@ -1,0 +1,34 @@
+apiVersion: tasktree.dev/v1
+kind: Template
+
+metadata:
+  name: investigation
+  description: Single-repo investigation workspace (read-only)
+
+parameters:
+  - name: ticket_number
+    required: true
+    description: Investigation ticket
+  - name: repo
+    required: true
+    description: Repository to investigate
+  - name: ref
+    default: main
+    description: Branch/tag/commit to investigate
+
+template:
+  metadata:
+    name: "investigate-{{ticket_number}}"
+    annotations:
+      ticket: "{{ticket_number}}"
+      type: investigation
+      readonly: "true"
+
+  spec:
+    sources:
+      - name: repo
+        type: git
+        git:
+          url: "{{repo}}"
+          ref: "{{ref}}"
+          # No branch - detached HEAD for investigation

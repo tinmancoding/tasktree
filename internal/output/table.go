@@ -3,6 +3,7 @@ package output
 import (
 	"fmt"
 	"io"
+	"strings"
 	"text/tabwriter"
 
 	"github.com/tinmancoding/tasktree/internal/domain"
@@ -147,4 +148,107 @@ func WriteRepoAliasTable(w io.Writer, aliases []struct {
 		}
 	}
 	return tw.Flush()
+}
+
+// TemplateRow is a single row in the template list table.
+type TemplateRow struct {
+	Name        string
+	Description string
+	Parameters  string // comma-separated parameter names
+}
+
+// WriteTemplateTable renders the list of templates as a table.
+func WriteTemplateTable(w io.Writer, rows []TemplateRow) error {
+	if len(rows) == 0 {
+		_, err := fmt.Fprintln(w, "No templates found.")
+		return err
+	}
+	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+	if _, err := fmt.Fprintln(tw, "NAME\tDESCRIPTION\tPARAMETERS"); err != nil {
+		return err
+	}
+	for _, r := range rows {
+		if _, err := fmt.Fprintf(tw, "%s\t%s\t%s\n", r.Name, r.Description, r.Parameters); err != nil {
+			return err
+		}
+	}
+	return tw.Flush()
+}
+
+// WriteTemplateDetail renders full details for a single template.
+func WriteTemplateDetail(w io.Writer, spec domain.TemplateSpec, location string) error {
+	if _, err := fmt.Fprintf(w, "Name:        %s\n", spec.Metadata.Name); err != nil {
+		return err
+	}
+	if spec.Metadata.Description != "" {
+		if _, err := fmt.Fprintf(w, "Description: %s\n", spec.Metadata.Description); err != nil {
+			return err
+		}
+	}
+	if location != "" {
+		if _, err := fmt.Fprintf(w, "Location:    %s\n", location); err != nil {
+			return err
+		}
+	}
+
+	if len(spec.Parameters) > 0 {
+		if _, err := fmt.Fprintln(w, "\nParameters:"); err != nil {
+			return err
+		}
+		tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+		for _, p := range spec.Parameters {
+			req := "(optional)"
+			if p.Required {
+				req = "(required)"
+			}
+			desc := p.Description
+			if p.Default != "" {
+				desc += " [default: " + p.Default + "]"
+			}
+			if _, err := fmt.Fprintf(tw, "  %s\t%s\t%s\n", p.Name, req, desc); err != nil {
+				return err
+			}
+		}
+		if err := tw.Flush(); err != nil {
+			return err
+		}
+	}
+
+	if _, err := fmt.Fprintln(w, "\nTemplate Preview:"); err != nil {
+		return err
+	}
+	if spec.Template.Metadata.Name != "" {
+		if _, err := fmt.Fprintf(w, "  metadata.name: %s\n", spec.Template.Metadata.Name); err != nil {
+			return err
+		}
+	}
+	if len(spec.Template.Spec.Sources) > 0 {
+		if _, err := fmt.Fprintln(w, "  sources:"); err != nil {
+			return err
+		}
+		for _, src := range spec.Template.Spec.Sources {
+			srcType := string(src.Type)
+			if srcType == "" {
+				srcType = "git"
+			}
+			if _, err := fmt.Fprintf(w, "    - %s (%s)", src.Name, srcType); err != nil {
+				return err
+			}
+			if src.Git != nil {
+				parts := []string{src.Git.URL}
+				if src.Git.Branch != "" {
+					parts = append(parts, "branch: "+src.Git.Branch)
+				} else if src.Git.Ref != "" {
+					parts = append(parts, "ref: "+src.Git.Ref)
+				}
+				if _, err := fmt.Fprintf(w, ": %s", strings.Join(parts, ", ")); err != nil {
+					return err
+				}
+			}
+			if _, err := fmt.Fprintln(w); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }

@@ -104,5 +104,6 @@ Deletes the `api/` checkout directory and removes the source entry from `Tasktre
 ## Next steps
 
 - [Basic Concepts](../concepts/overview.md) — understand what a tasktree is and how it works
+- [Templates](../concepts/templates.md) — define reusable workspace patterns and create workspaces with one command
 - [CLI Reference](../cli/overview.md) — full flag and option documentation
 - [Common Patterns](../patterns/multi-service-feature.md) — real-world workflows

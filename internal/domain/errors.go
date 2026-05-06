@@ -134,3 +134,47 @@ type InvalidAnnotationKeyError struct {
 func (e InvalidAnnotationKeyError) Error() string {
 	return fmt.Sprintf("invalid annotation key %q: %s", e.Key, e.Reason)
 }
+
+// TemplateNotFoundError is returned when a named template cannot be found
+// in any of the template discovery paths.
+type TemplateNotFoundError struct {
+	Name string
+}
+
+func (e TemplateNotFoundError) Error() string {
+	return fmt.Sprintf("template %q not found in search paths", e.Name)
+}
+
+// MissingVariableError is returned when a required template variable has no
+// value after exhausting all resolution sources.
+type MissingVariableError struct {
+	Name string
+}
+
+func (e MissingVariableError) Error() string {
+	return fmt.Sprintf("missing required variable %q", e.Name)
+}
+
+// UnknownVariableError is returned when a template body references a variable
+// that was not declared in the template's parameters section.
+type UnknownVariableError struct {
+	Name       string
+	Suggestion string // non-empty when a close match exists
+}
+
+func (e UnknownVariableError) Error() string {
+	if e.Suggestion != "" {
+		return fmt.Sprintf("template references unknown variable %q (did you mean %q?)", e.Name, e.Suggestion)
+	}
+	return fmt.Sprintf("template references unknown variable %q", e.Name)
+}
+
+// InvalidVariableNameError is returned when a variable name in a template does
+// not conform to the required pattern [a-z][a-z0-9_]*.
+type InvalidVariableNameError struct {
+	Name string
+}
+
+func (e InvalidVariableNameError) Error() string {
+	return fmt.Sprintf("invalid variable name %q (must match [a-z][a-z0-9_]*)", e.Name)
+}

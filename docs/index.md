@@ -23,5 +23,6 @@ tasktree apply
 ## Learn more
 
 - [Concepts: What is a tasktree?](concepts/overview.md)
+- [Concepts: Templates](concepts/templates.md)
 - [CLI Reference](cli/overview.md)
 - [Common Patterns](patterns/multi-service-feature.md)

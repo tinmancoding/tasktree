@@ -1,0 +1,171 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tasktree.dev/schema/v1/template.schema.json",
+  "title": "TasktreeTemplate",
+  "description": "A workspace template file (kind: Template). Templates define reusable workspace configurations with variable substitution, reducing repetitive setup for common task patterns.",
+  "type": "object",
+  "required": ["apiVersion", "kind", "metadata", "template"],
+  "additionalProperties": false,
+  "properties": {
+    "apiVersion": {
+      "type": "string",
+      "description": "Schema version identifier. Must be 'tasktree.dev/v1'.",
+      "const": "tasktree.dev/v1"
+    },
+    "kind": {
+      "type": "string",
+      "description": "Resource kind. Must be 'Template'.",
+      "const": "Template"
+    },
+    "metadata": {
+      "type": "object",
+      "description": "Template-level metadata.",
+      "required": ["name"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Template name used to reference it in CLI commands (e.g., 'tasktree init --from bugfix').",
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_\\-]*$",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "description": {
+          "type": "string",
+          "description": "Human-readable description of the template's purpose.",
+          "maxLength": 1024
+        }
+      }
+    },
+    "parameters": {
+      "type": "array",
+      "description": "Declared template parameters. All {{variable}} references in the template body must be listed here.",
+      "items": {
+        "$ref": "#/$defs/ParameterSpec"
+      }
+    },
+    "template": {
+      "type": "object",
+      "description": "The template body. May contain {{variable}} and {{variable | default:value}} references in any string field.",
+      "required": ["metadata"],
+      "additionalProperties": false,
+      "properties": {
+        "metadata": {
+          "type": "object",
+          "description": "Workspace metadata template. May contain variable references.",
+          "required": ["name"],
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "type": "string",
+              "description": "Workspace name template. Variable references like {{ticket_number}} are resolved at init time.",
+              "minLength": 1
+            },
+            "description": {
+              "type": "string",
+              "description": "Optional workspace description template."
+            },
+            "labels": {
+              "type": "object",
+              "description": "Label templates. Values may contain variable references.",
+              "additionalProperties": { "type": "string" }
+            },
+            "annotations": {
+              "type": "object",
+              "description": "Annotation templates. Values may contain variable references.",
+              "additionalProperties": { "type": "string" }
+            }
+          }
+        },
+        "spec": {
+          "type": "object",
+          "description": "Workspace spec template.",
+          "additionalProperties": false,
+          "properties": {
+            "sources": {
+              "type": "array",
+              "description": "Source templates. Fields may contain variable references.",
+              "items": {
+                "$ref": "#/$defs/SourceSpecTemplate"
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "ParameterSpec": {
+      "type": "object",
+      "description": "A template parameter declaration.",
+      "required": ["name"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Parameter name. Must match [a-z][a-z0-9_]*.",
+          "pattern": "^[a-z][a-z0-9_]*$"
+        },
+        "required": {
+          "type": "boolean",
+          "description": "If true, the parameter must be provided at init time (no default). Defaults to false.",
+          "default": false
+        },
+        "default": {
+          "type": "string",
+          "description": "Default value used when the parameter is not explicitly provided."
+        },
+        "description": {
+          "type": "string",
+          "description": "Human-readable description of this parameter's purpose."
+        }
+      }
+    },
+    "SourceSpecTemplate": {
+      "type": "object",
+      "description": "A source spec within a template. String fields may contain {{variable}} references.",
+      "required": ["name", "type"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Source name (may contain variable references).",
+          "minLength": 1
+        },
+        "type": {
+          "type": "string",
+          "description": "Source type discriminator.",
+          "enum": ["git", "http", "archive", "static", "local"]
+        },
+        "path": {
+          "type": "string",
+          "description": "Relative checkout path (may contain variable references)."
+        },
+        "git": {
+          "$ref": "#/$defs/GitSourceSpecTemplate"
+        }
+      }
+    },
+    "GitSourceSpecTemplate": {
+      "type": "object",
+      "description": "Git source configuration within a template. All string fields may contain {{variable}} references.",
+      "required": ["url"],
+      "additionalProperties": false,
+      "properties": {
+        "url": {
+          "type": "string",
+          "description": "Git clone URL or alias (may contain variable references).",
+          "minLength": 1
+        },
+        "ref": {
+          "type": "string",
+          "description": "Ref to check out (may contain variable references)."
+        },
+        "branch": {
+          "type": "string",
+          "description": "Branch name to create or track (may contain variable references)."
+        }
+      }
+    }
+  }
+}

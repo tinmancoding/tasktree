@@ -1,0 +1,33 @@
+apiVersion: tasktree.dev/v1
+kind: Template
+
+metadata:
+  name: bugfix
+  description: Single-repo bugfix workspace
+
+parameters:
+  - name: ticket_number
+    required: true
+    description: Ticket/issue identifier (e.g., BUG-123)
+  - name: repo
+    required: true
+    description: Repository alias or URL
+  - name: base_branch
+    default: main
+    description: Base branch to fork from
+
+template:
+  metadata:
+    name: "bugfix-{{ticket_number}}"
+    annotations:
+      ticket: "{{ticket_number}}"
+      type: bugfix
+
+  spec:
+    sources:
+      - name: repo
+        type: git
+        git:
+          url: "{{repo}}"
+          ref: "{{base_branch}}"
+          branch: "fix/{{ticket_number}}"
