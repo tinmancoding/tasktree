@@ -178,3 +178,64 @@ type InvalidVariableNameError struct {
 func (e InvalidVariableNameError) Error() string {
 	return fmt.Sprintf("invalid variable name %q (must match [a-z][a-z0-9_]*)", e.Name)
 }
+
+// DuplicateSourceNameError is returned when a source name or path conflicts
+// with an existing entry in Tasktree.yml.
+type DuplicateSourceNameError struct {
+	Name string
+}
+
+func (e DuplicateSourceNameError) Error() string {
+	return fmt.Sprintf("source %q already exists in this tasktree; use --name to choose a different name", e.Name)
+}
+
+// InvalidSourceNameError is returned when a source name fails validation.
+type InvalidSourceNameError struct {
+	Name string
+}
+
+func (e InvalidSourceNameError) Error() string {
+	return fmt.Sprintf("invalid source name %q", e.Name)
+}
+
+// InvalidHTTPSSchemeError is returned when an http/archive source URL does not
+// use the HTTPS scheme.
+type InvalidHTTPSSchemeError struct {
+	URL string
+}
+
+func (e InvalidHTTPSSchemeError) Error() string {
+	return fmt.Sprintf("URL %q must use the https:// scheme", e.URL)
+}
+
+// SHA256MismatchError is returned when a downloaded file's digest does not
+// match the expected sha256 value declared in the source spec.
+type SHA256MismatchError struct {
+	URL      string
+	Expected string
+	Got      string
+}
+
+func (e SHA256MismatchError) Error() string {
+	return fmt.Sprintf("sha256 mismatch for %s: expected %s, got %s", e.URL, e.Expected, e.Got)
+}
+
+// UnknownArchiveFormatError is returned when the archive format cannot be
+// inferred from the URL and was not specified explicitly.
+type UnknownArchiveFormatError struct {
+	URL string
+}
+
+func (e UnknownArchiveFormatError) Error() string {
+	return fmt.Sprintf("cannot determine archive format for %q; set the 'format' field explicitly", e.URL)
+}
+
+// LocalSourceNotFoundError is returned when the sourcePath for a local source
+// does not exist on disk.
+type LocalSourceNotFoundError struct {
+	Path string
+}
+
+func (e LocalSourceNotFoundError) Error() string {
+	return fmt.Sprintf("local source path %q does not exist", e.Path)
+}

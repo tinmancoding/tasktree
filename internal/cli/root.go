@@ -23,7 +23,12 @@ type dependencies struct {
 	rootService          app.RootService
 	listService          app.ListService
 	listTasktreesService app.ListTasktreesService
-	addService           app.AddService
+	addService           app.AddGitService // backward-compat field name; same as addGitService
+	addGitService        app.AddGitService
+	addHTTPService       app.AddHTTPService
+	addArchiveService    app.AddArchiveService
+	addStaticService     app.AddStaticService
+	addLocalService      app.AddLocalService
 	applyService         app.ApplyService
 	removeService        app.RemoveService
 	statusService        app.StatusService
@@ -64,13 +69,19 @@ func defaultDependencies() dependencies {
 		panic(fmt.Sprintf("init template store: %v", err))
 	}
 
+	addGitSvc := app.NewAddGitService(store, cache.NewManager(cacheRoot, git), git)
 	return dependencies{
 		git:                  git,
 		initService:          app.NewInitServiceWithTemplates(store, reg, ts),
 		rootService:          app.NewRootService(),
 		listService:          app.NewListService(store),
 		listTasktreesService: app.NewListTasktreesService(reg),
-		addService:           app.NewAddService(store, cache.NewManager(cacheRoot, git), git),
+		addService:           addGitSvc,
+		addGitService:        addGitSvc,
+		addHTTPService:       app.NewAddHTTPService(store),
+		addArchiveService:    app.NewAddArchiveService(store),
+		addStaticService:     app.NewAddStaticService(store),
+		addLocalService:      app.NewAddLocalService(store),
 		applyService:         app.NewApplyService(store, cache.NewManager(cacheRoot, git), git),
 		removeService:        app.NewRemoveService(store),
 		statusService:        app.NewStatusService(store, git),
@@ -205,6 +216,36 @@ func formatError(err error) error {
 
 	var invalidAnnotationKey domain.InvalidAnnotationKeyError
 	if errors.As(err, &invalidAnnotationKey) {
+		return err
+	}
+
+	var duplicateSourceName domain.DuplicateSourceNameError
+	if errors.As(err, &duplicateSourceName) {
+		return err
+	}
+
+	var invalidSourceName domain.InvalidSourceNameError
+	if errors.As(err, &invalidSourceName) {
+		return err
+	}
+
+	var invalidHTTPS domain.InvalidHTTPSSchemeError
+	if errors.As(err, &invalidHTTPS) {
+		return err
+	}
+
+	var sha256Mismatch domain.SHA256MismatchError
+	if errors.As(err, &sha256Mismatch) {
+		return err
+	}
+
+	var unknownArchiveFormat domain.UnknownArchiveFormatError
+	if errors.As(err, &unknownArchiveFormat) {
+		return err
+	}
+
+	var localSourceNotFound domain.LocalSourceNotFoundError
+	if errors.As(err, &localSourceNotFound) {
 		return err
 	}
 

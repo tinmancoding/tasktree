@@ -60,10 +60,10 @@ func TestApplyServiceSkipsExistingSource(t *testing.T) {
 	store := metadata.NewStore()
 	cacheRoot := filepath.Join(t.TempDir(), "cache")
 	git := gitx.NewClient()
-	addService := app.NewAddService(store, cache.NewManager(cacheRoot, git), git)
+	addService := app.NewAddGitService(store, cache.NewManager(cacheRoot, git), git)
 	applyService := app.NewApplyService(store, cache.NewManager(cacheRoot, git), git)
 
-	if _, err := addService.Run(ctx, root, app.AddOptions{RepoURL: remoteURL}); err != nil {
+	if _, err := addService.Run(ctx, root, app.AddGitOptions{RepoURL: remoteURL}); err != nil {
 		t.Fatalf("add: %v", err)
 	}
 
@@ -114,7 +114,7 @@ func TestApplyServiceIsIdempotent(t *testing.T) {
 }
 
 // TestApplyServiceDryRunDoesNotMaterialize verifies that --dry-run returns
-// SourceApplyStatusWouldClone without creating any directories.
+// SourceApplyStatusWouldApply without creating any directories.
 func TestApplyServiceDryRunDoesNotMaterialize(t *testing.T) {
 	ctx := context.Background()
 	remoteURL, _ := testutil.CreateRemoteRepo(t)
@@ -133,16 +133,16 @@ func TestApplyServiceDryRunDoesNotMaterialize(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dry-run apply: %v", err)
 	}
-	if result.Results[0].Status != app.SourceApplyStatusWouldClone {
-		t.Fatalf("status = %v, want SourceApplyStatusWouldClone", result.Results[0].Status)
+	if result.Results[0].Status != app.SourceApplyStatusWouldApply {
+		t.Fatalf("status = %v, want SourceApplyStatusWouldApply", result.Results[0].Status)
 	}
 	if _, err := os.Stat(filepath.Join(root, "myapp")); !os.IsNotExist(err) {
 		t.Fatalf("expected no checkout after dry-run, but found one")
 	}
 }
 
-// TestApplyServiceSkipsUnsupportedSourceType verifies that sources with types
-// other than "git" are reported as unsupported and do not cause an error.
+// TestApplyServiceSkipsUnsupportedSourceType verifies that sources with an
+// unrecognised type are reported as unsupported and do not cause an error.
 func TestApplyServiceSkipsUnsupportedSourceType(t *testing.T) {
 	ctx := context.Background()
 	root := createTasktree(t)
@@ -151,7 +151,7 @@ func TestApplyServiceSkipsUnsupportedSourceType(t *testing.T) {
 
 	spec, _ := store.Load(root)
 	spec.Spec.Sources = []domain.SourceSpec{
-		{Name: "cfg", Type: domain.SourceTypeHTTP, Path: "cfg"},
+		{Name: "cfg", Type: domain.SourceType("unknown-type"), Path: "cfg"},
 	}
 	_ = store.Save(root, spec)
 

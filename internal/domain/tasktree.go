@@ -55,11 +55,14 @@ type WorkspaceSpec struct {
 }
 
 type SourceSpec struct {
-	Name string         `yaml:"name"`
-	Type SourceType     `yaml:"type"`
-	Path string         `yaml:"path,omitempty"`
-	Git  *GitSourceSpec `yaml:"git,omitempty"`
-	// future: HTTP, Archive, Static, Local
+	Name    string             `yaml:"name"`
+	Type    SourceType         `yaml:"type"`
+	Path    string             `yaml:"path,omitempty"`
+	Git     *GitSourceSpec     `yaml:"git,omitempty"`
+	HTTP    *HTTPSourceSpec    `yaml:"http,omitempty"`
+	Archive *ArchiveSourceSpec `yaml:"archive,omitempty"`
+	Static  *StaticSourceSpec  `yaml:"static,omitempty"`
+	Local   *LocalSourceSpec   `yaml:"local,omitempty"`
 }
 
 type SourceType string
@@ -76,4 +79,27 @@ type GitSourceSpec struct {
 	URL    string `yaml:"url"`
 	Ref    string `yaml:"ref,omitempty"`
 	Branch string `yaml:"branch,omitempty"`
+}
+
+type HTTPSourceSpec struct {
+	URL     string            `yaml:"url"`
+	SHA256  string            `yaml:"sha256,omitempty"`
+	Headers map[string]string `yaml:"headers,omitempty"`
+}
+
+type ArchiveSourceSpec struct {
+	URL             string `yaml:"url"`
+	SHA256          string `yaml:"sha256,omitempty"`
+	Format          string `yaml:"format,omitempty"` // tar.gz | tar.bz2 | tar.xz | zip
+	StripComponents int    `yaml:"stripComponents,omitempty"`
+}
+
+type StaticSourceSpec struct {
+	Content string `yaml:"content"`
+	Mode    string `yaml:"mode,omitempty"` // octal string, default "0644"
+}
+
+type LocalSourceSpec struct {
+	SourcePath string `yaml:"sourcePath"`
+	Copy       bool   `yaml:"copy,omitempty"` // false = symlink (default), true = copy
 }

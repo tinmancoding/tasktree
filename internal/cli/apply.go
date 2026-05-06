@@ -21,9 +21,7 @@ func newApplyCmd(deps dependencies) *cobra.Command {
 Sources whose destination path already exists are skipped without error,
 making apply safe to run repeatedly.
 
-Use --dry-run to preview what would be done without making any changes.
-
-Source types other than "git" are not yet implemented and will be skipped.`,
+Use --dry-run to preview what would be done without making any changes.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := context.Background()
 			cwd, err := os.Getwd()
@@ -62,10 +60,10 @@ Source types other than "git" are not yet implemented and will be skipped.`,
 					fmt.Fprintf(cmd.OutOrStdout(), "Skipped %s (already present)\n", r.Source.Name)
 
 				case app.SourceApplyStatusUnsupported:
-					fmt.Fprintf(cmd.OutOrStdout(), "Skipped %s (source type %q is not yet supported)\n", r.Source.Name, r.Source.Type)
+					fmt.Fprintf(cmd.OutOrStdout(), "Skipped %s (unknown source type %q)\n", r.Source.Name, r.Source.Type)
 
-				case app.SourceApplyStatusWouldClone:
-					msg := fmt.Sprintf("Would clone %s at %s", r.Source.Name, sourcePath)
+				case app.SourceApplyStatusWouldApply:
+					msg := fmt.Sprintf("Would apply %s at %s", r.Source.Name, sourcePath)
 					if r.Source.Git != nil {
 						if r.Source.Git.Branch != "" {
 							msg += fmt.Sprintf(" (branch: %s)", r.Source.Git.Branch)
@@ -89,6 +87,21 @@ Source types other than "git" are not yet implemented and will be skipped.`,
 						}
 					}
 					fmt.Fprintf(cmd.OutOrStdout(), "Cloned %s at %s\n", r.Source.Name, sourcePath)
+
+				case app.SourceApplyStatusCreated:
+					fmt.Fprintf(cmd.OutOrStdout(), "Created %s at %s\n", r.Source.Name, sourcePath)
+
+				case app.SourceApplyStatusLinked:
+					fmt.Fprintf(cmd.OutOrStdout(), "Linked %s at %s\n", r.Source.Name, sourcePath)
+
+				case app.SourceApplyStatusCopied:
+					fmt.Fprintf(cmd.OutOrStdout(), "Copied %s at %s\n", r.Source.Name, sourcePath)
+
+				case app.SourceApplyStatusDownloaded:
+					fmt.Fprintf(cmd.OutOrStdout(), "Downloaded %s at %s\n", r.Source.Name, sourcePath)
+
+				case app.SourceApplyStatusExtracted:
+					fmt.Fprintf(cmd.OutOrStdout(), "Extracted %s at %s\n", r.Source.Name, sourcePath)
 				}
 			}
 			return nil

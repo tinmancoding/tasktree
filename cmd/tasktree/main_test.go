@@ -162,7 +162,7 @@ func TestCLIApplyDryRun(t *testing.T) {
 	}
 
 	applyOutput := testutil.RunTasktree(t, tasktreeRoot, "apply", "--dry-run")
-	if !strings.Contains(applyOutput, "Would clone app at app") {
+	if !strings.Contains(applyOutput, "Would apply app at app") {
 		t.Fatalf("unexpected dry-run output: %q", applyOutput)
 	}
 	if _, err := os.Stat(filepath.Join(tasktreeRoot, "app")); !os.IsNotExist(err) {

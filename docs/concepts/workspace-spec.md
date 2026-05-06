@@ -109,9 +109,13 @@ An ordered list of sources to materialize. Each entry is a `SourceSpec`:
 | Field | Required | Description |
 |---|---|---|
 | `name` | yes | Logical name for this source within the workspace. Used by `remove`. Must be unique. |
-| `type` | yes | Source kind: `git`, `http`, `archive`, `static`, or `local`. Only `git` is currently implemented. |
+| `type` | yes | Source kind: `git`, `http`, `archive`, `static`, or `local`. All five are implemented. |
 | `path` | no | Relative path inside the workspace directory. Defaults to `name`. |
 | `git` | conditional | Required when `type: git`. See below. |
+| `http` | conditional | Required when `type: http`. See [Source Types](./source-types.md). |
+| `archive` | conditional | Required when `type: archive`. See [Source Types](./source-types.md). |
+| `static` | conditional | Required when `type: static`. See [Source Types](./source-types.md). |
+| `local` | conditional | Required when `type: local`. See [Source Types](./source-types.md). |
 
 ## git source
 

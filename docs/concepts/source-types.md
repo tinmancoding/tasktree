@@ -1,8 +1,8 @@
 # Source Types
 
-The `type` field in a `SourceSpec` determines what gets materialized and how. The schema defines five types; only `git` is currently implemented.
+The `type` field in a `SourceSpec` determines what gets materialized and how. All five types are implemented.
 
-## git (implemented)
+## git
 
 Clones a Git repository into the workspace directory.
 
@@ -20,7 +20,14 @@ Cloning is accelerated by a per-URL bare-repo cache at `~/.cache/tasktree/repos/
 
 See [Workspace Spec](./workspace-spec.md) for full `git` field documentation.
 
-## http (not yet implemented)
+**CLI:**
+```
+tasktree add git <url> [--branch <branch>] [--from <ref>] [--name <name>]
+# Backward-compat shorthand (equivalent):
+tasktree add <url> [--branch <branch>] [--from <ref>] [--name <name>]
+```
+
+## http
 
 Downloads a single file from an HTTPS URL and places it at `path`.
 
@@ -39,7 +46,12 @@ Downloads a single file from an HTTPS URL and places it at `path`.
 | `sha256` | Expected SHA-256 hex digest. If provided, the download is verified. Strongly recommended. |
 | `headers` | Optional HTTP request headers (e.g., `Authorization`). |
 
-## archive (not yet implemented)
+**CLI:**
+```
+tasktree add http <url> [--sha256 <hex>] [--header "Key: Value"] [--name <name>] [--path <path>]
+```
+
+## archive
 
 Downloads a remote archive (tarball or zip) and extracts it into `path`.
 
@@ -57,10 +69,15 @@ Downloads a remote archive (tarball or zip) and extracts it into `path`.
 |---|---|
 | `url` | HTTPS URL of the archive. |
 | `sha256` | Expected SHA-256 hex digest of the archive file. |
-| `format` | `tar.gz`, `tar.bz2`, `tar.xz`, or `zip`. Inferred from the URL if omitted. |
+| `format` | `tar.gz`, `tar.bz2`, or `zip`. Inferred from the URL if omitted. (`tar.xz` is not yet supported.) |
 | `stripComponents` | Number of leading path components to strip on extraction (like `tar --strip-components`). Default `0`. |
 
-## static (not yet implemented)
+**CLI:**
+```
+tasktree add archive <url> [--sha256 <hex>] [--format <fmt>] [--strip-components <n>] [--name <name>] [--path <path>]
+```
+
+## static
 
 Writes inline content from `Tasktree.yml` directly to a file at `path`.
 
@@ -82,7 +99,12 @@ Writes inline content from `Tasktree.yml` directly to a file at `path`.
 | `content` | Literal file content. Use YAML block scalars (`\|` for literal, `>` for folded). |
 | `mode` | Unix file permission mode in octal string notation. Default `0644`. |
 
-## local (not yet implemented)
+**CLI:**
+```
+tasktree add static <name> --content <value> [--mode <octal>] [--path <path>]
+```
+
+## local
 
 Links or copies a local filesystem path into the workspace.
 
@@ -99,3 +121,8 @@ Links or copies a local filesystem path into the workspace.
 |---|---|
 | `sourcePath` | Absolute or workspace-relative path to the local source. |
 | `copy` | If `true`, copy instead of symlink. Default `false`. |
+
+**CLI:**
+```
+tasktree add local <src-path> [--name <name>] [--path <path>] [--copy]
+```

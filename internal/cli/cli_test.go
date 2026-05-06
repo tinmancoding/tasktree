@@ -447,6 +447,7 @@ func TestAddResolvesRepoAlias(t *testing.T) {
 
 	deps := dependencies{
 		addService:    app.NewAddService(store, cache.NewManager(cacheRoot, gitx.NewClient()), gitx.NewClient()),
+		addGitService: app.NewAddGitService(store, cache.NewManager(cacheRoot, gitx.NewClient()), gitx.NewClient()),
 		aliasResolve:  app.NewRepoAliasResolveService(aliasStore),
 		aliasRegister: app.NewRepoAliasRegisterDerivedService(aliasStore),
 	}
@@ -621,6 +622,7 @@ func TestAddLogsSkippedAliasConflicts(t *testing.T) {
 
 	deps := dependencies{
 		addService:    app.NewAddService(store, cache.NewManager(cacheRoot, gitx.NewClient()), gitx.NewClient()),
+		addGitService: app.NewAddGitService(store, cache.NewManager(cacheRoot, gitx.NewClient()), gitx.NewClient()),
 		aliasResolve:  app.NewRepoAliasResolveService(aliasStore),
 		aliasRegister: app.NewRepoAliasRegisterDerivedService(aliasStore),
 	}

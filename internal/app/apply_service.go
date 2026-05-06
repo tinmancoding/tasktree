@@ -3,13 +3,13 @@ package app
 import (
 	"context"
 	"fmt"
-	"os"
 	"path/filepath"
 
 	"github.com/tinmancoding/tasktree/internal/cache"
 	"github.com/tinmancoding/tasktree/internal/domain"
 	"github.com/tinmancoding/tasktree/internal/fsx"
 	"github.com/tinmancoding/tasktree/internal/gitx"
+	"github.com/tinmancoding/tasktree/internal/materialize"
 	"github.com/tinmancoding/tasktree/internal/metadata"
 )
 
@@ -22,21 +22,35 @@ type ApplyOptions struct {
 type SourceApplyStatus string
 
 const (
-	// SourceApplyStatusCloned indicates the source was materialized successfully.
+	// SourceApplyStatusCloned indicates a git source was cloned successfully.
 	SourceApplyStatusCloned SourceApplyStatus = "cloned"
+	// SourceApplyStatusCreated indicates a static source was written successfully.
+	SourceApplyStatusCreated SourceApplyStatus = "created"
+	// SourceApplyStatusLinked indicates a local source was symlinked successfully.
+	SourceApplyStatusLinked SourceApplyStatus = "linked"
+	// SourceApplyStatusCopied indicates a local source was copied successfully.
+	SourceApplyStatusCopied SourceApplyStatus = "copied"
+	// SourceApplyStatusDownloaded indicates an http source was downloaded successfully.
+	SourceApplyStatusDownloaded SourceApplyStatus = "downloaded"
+	// SourceApplyStatusExtracted indicates an archive source was extracted successfully.
+	SourceApplyStatusExtracted SourceApplyStatus = "extracted"
 	// SourceApplyStatusSkipped indicates the destination already exists on disk.
 	SourceApplyStatusSkipped SourceApplyStatus = "skipped"
-	// SourceApplyStatusWouldClone indicates the source would be cloned (dry-run only).
-	SourceApplyStatusWouldClone SourceApplyStatus = "would-clone"
-	// SourceApplyStatusUnsupported indicates the source type is not yet implemented.
+	// SourceApplyStatusWouldApply indicates the source would be materialized (dry-run only).
+	SourceApplyStatusWouldApply SourceApplyStatus = "would-apply"
+	// SourceApplyStatusUnsupported indicates the source type is unrecognised.
 	SourceApplyStatusUnsupported SourceApplyStatus = "unsupported"
 )
+
+// SourceApplyStatusWouldClone is a deprecated alias for SourceApplyStatusWouldApply.
+// It is kept for backward compatibility with existing tests.
+const SourceApplyStatusWouldClone = SourceApplyStatusWouldApply
 
 // SourceApplyResult holds the outcome for a single source entry.
 type SourceApplyResult struct {
 	Source          domain.SourceSpec
 	Status          SourceApplyStatus
-	BranchPath      BranchResolutionPath // meaningful only when Status == SourceApplyStatusCloned
+	BranchPath      BranchResolutionPath // meaningful only for git sources
 	EffectiveBranch string               // live branch name after checkout; empty for headless
 	EffectiveFrom   string               // base ref used when a branch was created
 }
@@ -99,59 +113,33 @@ func (s ApplyService) applySource(ctx context.Context, root string, source domai
 
 	// Dry-run: report intent only, do not touch the filesystem.
 	if opts.DryRun {
-		return SourceApplyResult{Source: source, Status: SourceApplyStatusWouldClone}, nil
+		return SourceApplyResult{Source: source, Status: SourceApplyStatusWouldApply}, nil
 	}
 
-	// Only the git source type is implemented in v1.
-	if source.Type != domain.SourceTypeGit {
+	switch source.Type {
+	case domain.SourceTypeGit:
+		return s.applyGitSource(ctx, destPath, source)
+	case domain.SourceTypeStatic:
+		return s.applyStaticSource(destPath, source)
+	case domain.SourceTypeLocal:
+		return s.applyLocalSource(root, destPath, source)
+	case domain.SourceTypeHTTP:
+		return s.applyHTTPSource(ctx, destPath, source)
+	case domain.SourceTypeArchive:
+		return s.applyArchiveSource(ctx, destPath, source)
+	default:
 		return SourceApplyResult{Source: source, Status: SourceApplyStatusUnsupported}, nil
 	}
+}
+
+func (s ApplyService) applyGitSource(ctx context.Context, destPath string, source domain.SourceSpec) (SourceApplyResult, error) {
 	if source.Git == nil {
 		return SourceApplyResult{}, domain.MissingSourceSpecError{Name: source.Name, Type: source.Type}
 	}
 
-	branchPath, effectiveBranch, effectiveFrom, err := s.materializeGitSource(ctx, destPath, source.Git)
-	if err != nil {
-		return SourceApplyResult{}, err
-	}
-	return SourceApplyResult{
-		Source:          source,
-		Status:          SourceApplyStatusCloned,
-		BranchPath:      branchPath,
-		EffectiveBranch: effectiveBranch,
-		EffectiveFrom:   effectiveFrom,
-	}, nil
-}
-
-// materializeGitSource clones and checks out a git source. It is the apply
-// equivalent of the clone+checkout block in AddService.Run.
-func (s ApplyService) materializeGitSource(ctx context.Context, destPath string, g *domain.GitSourceSpec) (BranchResolutionPath, string, string, error) {
-	cachePath, err := s.cache.Ensure(ctx, g.URL)
-	if err != nil {
-		return 0, "", "", err
-	}
-	if err := s.git.Clone(ctx, cachePath, destPath); err != nil {
-		return 0, "", "", err
-	}
-	cleanup := true
-	defer func() {
-		if cleanup {
-			_ = os.RemoveAll(destPath)
-		}
-	}()
-
-	if err := s.git.RemoteSetURL(ctx, destPath, "origin", g.URL); err != nil {
-		return 0, "", "", err
-	}
-
-	defaultBranch, err := s.git.DefaultBranch(ctx, destPath)
-	if err != nil {
-		return 0, "", "", err
-	}
-
 	// Reconstruct the original --from intent from the stored spec fields.
 	//
-	// AddService writes the spec as follows:
+	// AddGitService writes the spec as follows:
 	//   --from F  --branch B  → Ref=F,         Branch=B  (F is the explicit base)
 	//   --branch B            → Ref=B,         Branch=B  (Ref == Branch: no explicit from)
 	//   --from F              → Ref=F,         Branch="" (direct ref checkout)
@@ -159,88 +147,69 @@ func (s ApplyService) materializeGitSource(ctx context.Context, destPath string,
 	//
 	// When Ref == Branch, no explicit --from was provided; use "" so the branch
 	// resolution falls back to the repo default branch.
-	fromRef := g.Ref
-	if fromRef == g.Branch {
+	fromRef := source.Git.Ref
+	if fromRef == source.Git.Branch {
 		fromRef = ""
 	}
 
-	var (
-		resolvedBranch string
-		branchPath     BranchResolutionPath
-		effectiveFrom  string
-	)
-
-	switch {
-	case g.Branch != "":
-		// A specific branch was requested.
-		localExists, err := s.git.BranchExists(ctx, destPath, g.Branch)
-		if err != nil {
-			return 0, "", "", err
-		}
-		if localExists {
-			if err := s.git.Checkout(ctx, destPath, g.Branch); err != nil {
-				return 0, "", "", err
-			}
-			resolvedBranch = g.Branch
-			branchPath = BranchPathLocalExisting
-		} else {
-			remoteRef := fmt.Sprintf("origin/%s", g.Branch)
-			_, remoteErr := s.git.ResolveCommit(ctx, destPath, remoteRef)
-			if remoteErr == nil {
-				if err := s.git.CreateTrackingBranch(ctx, destPath, g.Branch, remoteRef); err != nil {
-					return 0, "", "", err
-				}
-				resolvedBranch = g.Branch
-				branchPath = BranchPathRemoteTracking
-			} else {
-				base := fromRef
-				if base == "" {
-					base = defaultBranch
-				}
-				effectiveFrom = base
-				if _, err := s.git.ResolveCommit(ctx, destPath, base); err != nil {
-					return 0, "", "", domain.UnresolvedRefError{RepoURL: g.URL, Ref: base}
-				}
-				if err := s.git.Checkout(ctx, destPath, base); err != nil {
-					return 0, "", "", err
-				}
-				if err := s.git.CreateBranch(ctx, destPath, g.Branch); err != nil {
-					return 0, "", "", err
-				}
-				resolvedBranch = g.Branch
-				branchPath = BranchPathCreated
-			}
-		}
-
-	case g.Ref != "":
-		// Direct ref checkout (tag, commit, or remote-only branch via --from without --branch).
-		if _, err := s.git.ResolveCommit(ctx, destPath, g.Ref); err != nil {
-			// Not a local/tag ref — try as a remote branch.
-			remoteRef := fmt.Sprintf("origin/%s", g.Ref)
-			if _, err2 := s.git.ResolveCommit(ctx, destPath, remoteRef); err2 == nil {
-				if err := s.git.CreateTrackingBranch(ctx, destPath, g.Ref, remoteRef); err != nil {
-					return 0, "", "", err
-				}
-				resolvedBranch = g.Ref
-				branchPath = BranchPathRemoteTracking
-			} else {
-				return 0, "", "", domain.UnresolvedRefError{RepoURL: g.URL, Ref: g.Ref}
-			}
-		} else {
-			if err := s.git.Checkout(ctx, destPath, g.Ref); err != nil {
-				return 0, "", "", err
-			}
-			branchPath = BranchPathHeadless
-		}
-
-	default:
-		// No branch, no ref: check out the default branch.
-		if err := s.git.Checkout(ctx, destPath, defaultBranch); err != nil {
-			return 0, "", "", err
-		}
-		branchPath = BranchPathHeadless
+	gitResult, err := materialize.Git(ctx, destPath, materialize.GitParams{
+		URL:    source.Git.URL,
+		Branch: source.Git.Branch,
+		From:   fromRef,
+	}, s.cache, s.git)
+	if err != nil {
+		return SourceApplyResult{}, err
 	}
 
-	cleanup = false
-	return branchPath, resolvedBranch, effectiveFrom, nil
+	return SourceApplyResult{
+		Source:          source,
+		Status:          SourceApplyStatusCloned,
+		BranchPath:      gitResult.BranchPath,
+		EffectiveBranch: gitResult.EffectiveBranch,
+		EffectiveFrom:   gitResult.EffectiveFrom,
+	}, nil
+}
+
+func (s ApplyService) applyStaticSource(destPath string, source domain.SourceSpec) (SourceApplyResult, error) {
+	if source.Static == nil {
+		return SourceApplyResult{}, domain.MissingSourceSpecError{Name: source.Name, Type: source.Type}
+	}
+	if err := materialize.Static(destPath, source.Static); err != nil {
+		return SourceApplyResult{}, err
+	}
+	return SourceApplyResult{Source: source, Status: SourceApplyStatusCreated}, nil
+}
+
+func (s ApplyService) applyLocalSource(root, destPath string, source domain.SourceSpec) (SourceApplyResult, error) {
+	if source.Local == nil {
+		return SourceApplyResult{}, domain.MissingSourceSpecError{Name: source.Name, Type: source.Type}
+	}
+	if err := materialize.Local(root, destPath, source.Local); err != nil {
+		return SourceApplyResult{}, err
+	}
+	status := SourceApplyStatusLinked
+	if source.Local.Copy {
+		status = SourceApplyStatusCopied
+	}
+	return SourceApplyResult{Source: source, Status: status}, nil
+}
+
+func (s ApplyService) applyHTTPSource(ctx context.Context, destPath string, source domain.SourceSpec) (SourceApplyResult, error) {
+	if source.HTTP == nil {
+		return SourceApplyResult{}, domain.MissingSourceSpecError{Name: source.Name, Type: source.Type}
+	}
+	if err := materialize.HTTP(ctx, destPath, source.HTTP); err != nil {
+		return SourceApplyResult{}, err
+	}
+	return SourceApplyResult{Source: source, Status: SourceApplyStatusDownloaded}, nil
+}
+
+func (s ApplyService) applyArchiveSource(ctx context.Context, destPath string, source domain.SourceSpec) (SourceApplyResult, error) {
+	if source.Archive == nil {
+		return SourceApplyResult{}, domain.MissingSourceSpecError{Name: source.Name, Type: source.Type}
+	}
+	if err := materialize.Archive(ctx, destPath, source.Archive); err != nil {
+		return SourceApplyResult{}, err
+	}
+	return SourceApplyResult{Source: source, Status: SourceApplyStatusExtracted}, nil
 }

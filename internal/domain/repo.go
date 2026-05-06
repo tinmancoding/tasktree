@@ -65,6 +65,21 @@ func ValidateRepoName(name string) error {
 	return nil
 }
 
+// ValidateSourceName validates the name for any non-git source. It enforces
+// the same path-safety rules as ValidateRepoName.
+func ValidateSourceName(name string) error {
+	if name == "" || name == "." || name == ".." {
+		return InvalidSourceNameError{Name: name}
+	}
+	if filepath.Base(name) != name {
+		return InvalidSourceNameError{Name: name}
+	}
+	if strings.Contains(name, string(filepath.Separator)) || strings.Contains(name, "/") || strings.Contains(name, `\`) {
+		return InvalidSourceNameError{Name: name}
+	}
+	return nil
+}
+
 func RequestedCheckout(defaultBranch, requestedRef string) string {
 	if requestedRef != "" {
 		return requestedRef
