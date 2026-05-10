@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -98,6 +99,12 @@ func defaultDependencies() dependencies {
 }
 
 func Execute() int {
+	// Pre-parse -C/--chdir before full dependency initialization so that
+	// cwd-sensitive setup (e.g. template store discovery) uses the right path.
+	if err := preApplyChdir(os.Args[1:]); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		return 1
+	}
 	cmd := NewRootCmd(defaultDependencies())
 	cmd.SetOut(os.Stdout)
 	cmd.SetErr(os.Stderr)
@@ -108,8 +115,33 @@ func Execute() int {
 	return 0
 }
 
+// preApplyChdir scans args for the first -C / --chdir occurrence and calls
+// os.Chdir so that subsequent cwd-sensitive initialization (e.g. template
+// store discovery) uses the intended path.
+func preApplyChdir(args []string) error {
+	for i, arg := range args {
+		var dir string
+		switch {
+		case (arg == "-C" || arg == "--chdir") && i+1 < len(args):
+			dir = args[i+1]
+		case strings.HasPrefix(arg, "-C="):
+			dir = strings.TrimPrefix(arg, "-C=")
+		case strings.HasPrefix(arg, "--chdir="):
+			dir = strings.TrimPrefix(arg, "--chdir=")
+		}
+		if dir != "" {
+			if err := os.Chdir(dir); err != nil {
+				return fmt.Errorf("chdir %q: %w", dir, err)
+			}
+			return nil
+		}
+	}
+	return nil
+}
+
 func NewRootCmd(deps dependencies) *cobra.Command {
 	var verbose bool
+	var chdir string
 	deps.git = deps.git.WithDefaults()
 
 	cmd := &cobra.Command{
@@ -117,16 +149,23 @@ func NewRootCmd(deps dependencies) *cobra.Command {
 		Short:         "Manage task-focused multi-repo workspaces",
 		SilenceUsage:  true,
 		SilenceErrors: true,
-		PersistentPreRun: func(cmd *cobra.Command, args []string) {
+		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+			if chdir != "" {
+				if err := os.Chdir(chdir); err != nil {
+					return fmt.Errorf("chdir %q: %w", chdir, err)
+				}
+			}
 			if verbose {
 				deps.git.SetVerboseWriter(cmd.ErrOrStderr())
-				return
+			} else {
+				deps.git.SetVerboseWriter(nil)
 			}
-			deps.git.SetVerboseWriter(nil)
+			return nil
 		},
 	}
 	cmd.SetErrPrefix("Error: ")
 	cmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "Print git commands to stderr")
+	cmd.PersistentFlags().StringVarP(&chdir, "chdir", "C", "", "Run as if started in `path` instead of the current working directory")
 	cmd.AddCommand(
 		newInitCmd(deps),
 		newAddCmd(deps),

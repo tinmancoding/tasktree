@@ -100,6 +100,73 @@ func TestInitCreatesExplicitPath(t *testing.T) {
 	}
 }
 
+func TestChdirFlagInitializesInSpecifiedDirectory(t *testing.T) {
+	deps, _ := newTestDeps(t)
+	cmd := NewRootCmd(deps)
+	out := new(bytes.Buffer)
+	cmd.SetOut(out)
+
+	target := t.TempDir()
+
+	originalWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	defer func() { _ = os.Chdir(originalWD) }()
+
+	cmd.SetArgs([]string{"-C", target, "init"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(target, domain.SpecFileName)); err != nil {
+		t.Fatalf("stat metadata: %v", err)
+	}
+	if !strings.Contains(out.String(), "Initialized tasktree") {
+		t.Fatalf("stdout = %q", out.String())
+	}
+}
+
+func TestChdirFlagLongFormInitializesInSpecifiedDirectory(t *testing.T) {
+	deps, _ := newTestDeps(t)
+	cmd := NewRootCmd(deps)
+	out := new(bytes.Buffer)
+	cmd.SetOut(out)
+
+	target := t.TempDir()
+
+	originalWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	defer func() { _ = os.Chdir(originalWD) }()
+
+	cmd.SetArgs([]string{"--chdir", target, "init"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(target, domain.SpecFileName)); err != nil {
+		t.Fatalf("stat metadata: %v", err)
+	}
+}
+
+func TestChdirFlagErrorsOnNonexistentDirectory(t *testing.T) {
+	deps, _ := newTestDeps(t)
+	cmd := NewRootCmd(deps)
+	cmd.SetOut(new(bytes.Buffer))
+	cmd.SetErr(new(bytes.Buffer))
+
+	cmd.SetArgs([]string{"-C", "/nonexistent/path/xyz", "init"})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error for nonexistent chdir path")
+	}
+	if !strings.Contains(err.Error(), "chdir") {
+		t.Fatalf("error = %q, want chdir error", err)
+	}
+}
+
 func TestInitFailsWhenMetadataExists(t *testing.T) {
 	deps, _ := newTestDeps(t)
 	cmd := NewRootCmd(deps)
