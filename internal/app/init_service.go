@@ -235,6 +235,33 @@ func renderTemplate(tmpl domain.TemplateSpec, values map[string]string, workspac
 				Branch: variable.RenderString(src.Git.Branch, values),
 			}
 		}
+		if src.HTTP != nil {
+			rendered.HTTP = &domain.HTTPSourceSpec{
+				URL:     variable.RenderString(src.HTTP.URL, values),
+				SHA256:  src.HTTP.SHA256,
+				Headers: variable.RenderStringMap(src.HTTP.Headers, values),
+			}
+		}
+		if src.Archive != nil {
+			rendered.Archive = &domain.ArchiveSourceSpec{
+				URL:             variable.RenderString(src.Archive.URL, values),
+				SHA256:          src.Archive.SHA256,
+				Format:          src.Archive.Format,
+				StripComponents: src.Archive.StripComponents,
+			}
+		}
+		if src.Static != nil {
+			rendered.Static = &domain.StaticSourceSpec{
+				Content: variable.RenderString(src.Static.Content, values),
+				Mode:    src.Static.Mode,
+			}
+		}
+		if src.Local != nil {
+			rendered.Local = &domain.LocalSourceSpec{
+				SourcePath: variable.RenderString(src.Local.SourcePath, values),
+				Copy:       src.Local.Copy,
+			}
+		}
 		sources = append(sources, rendered)
 	}
 
@@ -297,6 +324,21 @@ func extractAllRefs(tmpl domain.TemplateSpec) []variable.VariableRef {
 		strs = append(strs, src.Name, string(src.Type), src.Path)
 		if src.Git != nil {
 			strs = append(strs, src.Git.URL, src.Git.Ref, src.Git.Branch)
+		}
+		if src.HTTP != nil {
+			strs = append(strs, src.HTTP.URL, src.HTTP.SHA256)
+			for k, v := range src.HTTP.Headers {
+				strs = append(strs, k, v)
+			}
+		}
+		if src.Archive != nil {
+			strs = append(strs, src.Archive.URL, src.Archive.SHA256, src.Archive.Format)
+		}
+		if src.Static != nil {
+			strs = append(strs, src.Static.Content, src.Static.Mode)
+		}
+		if src.Local != nil {
+			strs = append(strs, src.Local.SourcePath)
 		}
 	}
 	seen := make(map[string]struct{})

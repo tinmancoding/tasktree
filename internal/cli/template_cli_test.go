@@ -405,3 +405,77 @@ template:
 		t.Errorf("Name = %q, want custom-payments", spec.Metadata.Name)
 	}
 }
+
+func TestInitFromTemplate_LocalSourcePreserved(t *testing.T) {
+	// A template with a local source must have its local: sub-spec
+	// (sourcePath, copy) forwarded into the generated Tasktree.yml.
+	// Previously renderTemplate only forwarded git sources; local sources were
+	// silently dropped, so the .opencode symlink was never created.
+	srcDir := t.TempDir() // stand-in for the real source path
+
+	tmplContent := `
+apiVersion: tasktree.dev/v1
+kind: Template
+metadata:
+  name: local-test
+parameters:
+  - name: ticket
+    required: true
+template:
+  metadata:
+    name: "ws-{{ticket}}"
+  spec:
+    sources:
+      - name: opencode-config
+        type: local
+        path: .opencode
+        local:
+          sourcePath: "` + srcDir + `"
+          copy: false
+`
+	tmplDir := t.TempDir()
+	tmplPath := filepath.Join(tmplDir, "local-test.yml")
+	if err := os.WriteFile(tmplPath, []byte(tmplContent), 0o644); err != nil {
+		t.Fatalf("write template file: %v", err)
+	}
+
+	deps := newTestDepsWithTemplates(t, "")
+	cmd := NewRootCmd(deps)
+	cmd.SetOut(new(bytes.Buffer))
+	cmd.SetErr(new(bytes.Buffer))
+
+	targetDir := filepath.Join(t.TempDir(), "ws")
+	cmd.SetArgs([]string{
+		"init",
+		"--from", tmplPath,
+		"ticket=AIBM-1234",
+		"--dir", targetDir,
+	})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+
+	store := metadata.NewStore()
+	spec, err := store.Load(targetDir)
+	if err != nil {
+		t.Fatalf("load spec: %v", err)
+	}
+
+	if len(spec.Spec.Sources) != 1 {
+		t.Fatalf("expected 1 source, got %d", len(spec.Spec.Sources))
+	}
+	src := spec.Spec.Sources[0]
+	if src.Local == nil {
+		t.Fatal("local sub-spec is nil: renderTemplate dropped the local source")
+	}
+	if src.Local.SourcePath != srcDir {
+		t.Errorf("SourcePath = %q, want %q", src.Local.SourcePath, srcDir)
+	}
+	if src.Local.Copy {
+		t.Error("Copy = true, want false")
+	}
+	if src.Path != ".opencode" {
+		t.Errorf("Path = %q, want .opencode", src.Path)
+	}
+}
