@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.3.0](https://github.com/tinmancoding/tasktree/compare/v1.2.0...v1.3.0) (2026-05-15)
+
+
+### Features
+
+* --chdir (-C) CLI argument ([78756a5](https://github.com/tinmancoding/tasktree/commit/78756a597ecf7133635dd2330597b714df8f80d4))
+* additional sources ([cb2729c](https://github.com/tinmancoding/tasktree/commit/cb2729c642452f7b4f97a939a4091ad2dfd3a367))
+* templates ([9be52b9](https://github.com/tinmancoding/tasktree/commit/9be52b908eff52016c0d984e17fe4f689b46bc3e))
+
+
+### Bug Fixes
+
+* renderTemplate other source types ([eda3693](https://github.com/tinmancoding/tasktree/commit/eda36934e2389ebe5798bd81499f935b30f35864))
+
 ## [1.2.0](https://github.com/tinmancoding/tasktree/compare/v1.1.0...v1.2.0) (2026-04-16)
 
 
