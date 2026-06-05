@@ -88,6 +88,13 @@
               "items": {
                 "$ref": "#/$defs/SourceSpecTemplate"
               }
+            },
+            "bootstrap": {
+              "type": "array",
+              "description": "Bootstrap step templates. Fields may contain variable references.",
+              "items": {
+                "$ref": "#/$defs/BootstrapStepTemplate"
+              }
             }
           }
         }
@@ -95,6 +102,21 @@
     }
   },
   "$defs": {
+    "BootstrapStepTemplate": {
+      "type": "object",
+      "description": "A bootstrap step template. String fields may contain variable references.",
+      "required": ["name", "run"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string" },
+        "run": { "type": "string" },
+        "workdir": { "type": "string" },
+        "env": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        }
+      }
+    },
     "ParameterSpec": {
       "type": "object",
       "description": "A template parameter declaration.",

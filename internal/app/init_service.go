@@ -265,6 +265,20 @@ func renderTemplate(tmpl domain.TemplateSpec, values map[string]string, workspac
 		sources = append(sources, rendered)
 	}
 
+	// Render bootstrap steps.
+	var bootstrapSteps []domain.BootstrapStep
+	if len(t.Spec.Bootstrap) > 0 {
+		bootstrapSteps = make([]domain.BootstrapStep, 0, len(t.Spec.Bootstrap))
+		for _, b := range t.Spec.Bootstrap {
+			bootstrapSteps = append(bootstrapSteps, domain.BootstrapStep{
+				Name:    variable.RenderString(b.Name, values),
+				Run:     variable.RenderString(b.Run, values),
+				Workdir: variable.RenderString(b.Workdir, values),
+				Env:     variable.RenderStringMap(b.Env, values),
+			})
+		}
+	}
+
 	var labelMap map[string]string
 	if len(labels) > 0 {
 		labelMap = labels
@@ -281,7 +295,8 @@ func renderTemplate(tmpl domain.TemplateSpec, values map[string]string, workspac
 			Labels:      labelMap,
 		},
 		Spec: domain.WorkspaceSpec{
-			Sources: sources,
+			Sources:   sources,
+			Bootstrap: bootstrapSteps,
 		},
 	}
 }
@@ -339,6 +354,12 @@ func extractAllRefs(tmpl domain.TemplateSpec) []variable.VariableRef {
 		}
 		if src.Local != nil {
 			strs = append(strs, src.Local.SourcePath)
+		}
+	}
+	for _, b := range t.Spec.Bootstrap {
+		strs = append(strs, b.Name, b.Run, b.Workdir)
+		for k, v := range b.Env {
+			strs = append(strs, k, v)
 		}
 	}
 	seen := make(map[string]struct{})

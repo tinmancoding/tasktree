@@ -51,7 +51,17 @@ type SpecMetadata struct {
 }
 
 type WorkspaceSpec struct {
-	Sources []SourceSpec `yaml:"sources"`
+	Sources   []SourceSpec    `yaml:"sources"`
+	Bootstrap []BootstrapStep `yaml:"bootstrap,omitempty"`
+}
+
+// BootstrapStep is a single idempotent setup step run after all sources are
+// materialized. Steps run sequentially, fail-fast, on every apply.
+type BootstrapStep struct {
+	Name    string            `yaml:"name"`
+	Run     string            `yaml:"run"`
+	Workdir string            `yaml:"workdir,omitempty"` // relative to workspace root; defaults to root
+	Env     map[string]string `yaml:"env,omitempty"`
 }
 
 type SourceSpec struct {

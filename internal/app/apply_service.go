@@ -3,8 +3,10 @@ package app
 import (
 	"context"
 	"fmt"
+	"io"
 	"path/filepath"
 
+	"github.com/tinmancoding/tasktree/internal/bootstrap"
 	"github.com/tinmancoding/tasktree/internal/cache"
 	"github.com/tinmancoding/tasktree/internal/domain"
 	"github.com/tinmancoding/tasktree/internal/fsx"
@@ -15,7 +17,11 @@ import (
 
 // ApplyOptions holds runtime options for ApplyService.Run.
 type ApplyOptions struct {
-	DryRun bool
+	DryRun        bool
+	SkipBootstrap bool
+	// Stderr receives bootstrap step headers and live child output. If nil,
+	// the executor falls back to os.Stderr.
+	Stderr io.Writer
 }
 
 // SourceApplyStatus describes what happened when applying a single source.
@@ -57,20 +63,42 @@ type SourceApplyResult struct {
 
 // ApplyResult holds the overall outcome of an apply run.
 type ApplyResult struct {
-	Root    string
-	Results []SourceApplyResult
+	Root          string
+	Results       []SourceApplyResult
+	BootstrapPlan []bootstrap.PlanStep // populated on dry-run when bootstrap steps exist
+	BootstrapRan  bool                 // true when bootstrap steps were executed
+}
+
+// BootstrapRunner executes bootstrap steps. It is an interface so tests can
+// substitute a fake; the default wraps bootstrap.Run.
+type BootstrapRunner interface {
+	Run(ctx context.Context, root string, steps []domain.BootstrapStep, opts bootstrap.Options) error
+}
+
+type defaultBootstrapRunner struct{}
+
+func (defaultBootstrapRunner) Run(ctx context.Context, root string, steps []domain.BootstrapStep, opts bootstrap.Options) error {
+	return bootstrap.Run(ctx, root, steps, opts)
 }
 
 // ApplyService materializes sources declared in Tasktree.yml that are not yet
 // present on disk.
 type ApplyService struct {
-	store metadata.Store
-	cache cache.Manager
-	git   gitx.Client
+	store     metadata.Store
+	cache     cache.Manager
+	git       gitx.Client
+	bootstrap BootstrapRunner
 }
 
 func NewApplyService(store metadata.Store, cache cache.Manager, git gitx.Client) ApplyService {
-	return ApplyService{store: store, cache: cache, git: git}
+	return ApplyService{store: store, cache: cache, git: git, bootstrap: defaultBootstrapRunner{}}
+}
+
+// WithBootstrapRunner returns a copy of the service using the given bootstrap
+// runner. Intended for tests.
+func (s ApplyService) WithBootstrapRunner(r BootstrapRunner) ApplyService {
+	s.bootstrap = r
+	return s
 }
 
 func (s ApplyService) Run(ctx context.Context, start string, opts ApplyOptions) (ApplyResult, error) {
@@ -92,7 +120,28 @@ func (s ApplyService) Run(ctx context.Context, start string, opts ApplyOptions) 
 		results = append(results, result)
 	}
 
-	return ApplyResult{Root: root, Results: results}, nil
+	out := ApplyResult{Root: root, Results: results}
+
+	steps := spec.Spec.Bootstrap
+	if opts.SkipBootstrap || len(steps) == 0 {
+		return out, nil
+	}
+
+	// Runtime validation gate (Load does not validate); fail before executing.
+	if err := domain.ValidateBootstrap(steps); err != nil {
+		return ApplyResult{}, err
+	}
+
+	if opts.DryRun {
+		out.BootstrapPlan = bootstrap.Plan(root, steps)
+		return out, nil
+	}
+
+	if err := s.bootstrap.Run(ctx, root, steps, bootstrap.Options{Stderr: opts.Stderr}); err != nil {
+		return ApplyResult{}, err
+	}
+	out.BootstrapRan = true
+	return out, nil
 }
 
 func (s ApplyService) applySource(ctx context.Context, root string, source domain.SourceSpec, opts ApplyOptions) (SourceApplyResult, error) {

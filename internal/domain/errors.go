@@ -239,3 +239,66 @@ type LocalSourceNotFoundError struct {
 func (e LocalSourceNotFoundError) Error() string {
 	return fmt.Sprintf("local source path %q does not exist", e.Path)
 }
+
+// EmptyBootstrapFieldError is returned when a required bootstrap step field
+// (name or run) is empty.
+type EmptyBootstrapFieldError struct {
+	Index int
+	Field string
+}
+
+func (e EmptyBootstrapFieldError) Error() string {
+	return fmt.Sprintf("bootstrap step #%d: %q must not be empty", e.Index+1, e.Field)
+}
+
+// DuplicateBootstrapNameError is returned when two bootstrap steps share the
+// same name.
+type DuplicateBootstrapNameError struct {
+	Name string
+}
+
+func (e DuplicateBootstrapNameError) Error() string {
+	return fmt.Sprintf("duplicate bootstrap step name %q", e.Name)
+}
+
+// WorkdirEscapesRootError is returned when a bootstrap step's workdir resolves
+// outside the workspace root.
+type WorkdirEscapesRootError struct {
+	Name    string
+	Workdir string
+}
+
+func (e WorkdirEscapesRootError) Error() string {
+	return fmt.Sprintf("bootstrap step %q: workdir %q escapes the workspace root", e.Name, e.Workdir)
+}
+
+// WorkdirNotFoundError is returned when a bootstrap step's workdir does not
+// exist (or is not a directory) at apply time.
+type WorkdirNotFoundError struct {
+	Name        string
+	Workdir     string
+	ResolvedDir string
+}
+
+func (e WorkdirNotFoundError) Error() string {
+	if e.Workdir == "" {
+		return fmt.Sprintf("bootstrap step %q: workspace root %q does not exist", e.Name, e.ResolvedDir)
+	}
+	return fmt.Sprintf("bootstrap step %q: workdir %q does not exist", e.Name, e.Workdir)
+}
+
+// StepFailedError is returned when a bootstrap step exits non-zero. The child
+// exit code is preserved for the engine to map to run failure.
+type StepFailedError struct {
+	Name     string
+	Workdir  string
+	ExitCode int
+}
+
+func (e StepFailedError) Error() string {
+	loc := "."
+	if e.Workdir != "" {
+		loc = e.Workdir
+	}
+	return fmt.Sprintf("bootstrap step %q failed (exit %d) in %s; apply aborted. Fix and re-run 'tasktree apply'.", e.Name, e.ExitCode, loc)
+}

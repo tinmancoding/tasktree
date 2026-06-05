@@ -287,9 +287,9 @@ What `add` does:
 - attempts to register derived aliases in `repos.yml`
 - prints what aliases were added, already existed, or were skipped due to conflicts
 
-### `tasktree apply [--dry-run]`
+### `tasktree apply [--dry-run] [--skip-bootstrap]`
 
-Materialize all sources declared in `Tasktree.yml` that are not yet present on disk.
+Materialize all sources declared in `Tasktree.yml` that are not yet present on disk, then run the workspace bootstrap steps.
 
 For each source in `spec.sources`:
 
@@ -297,21 +297,66 @@ For each source in `spec.sources`:
 - If the source type is `git` — populate the bare-clone cache and clone the repo, then apply the declared branch or ref
 - If the source type is not yet supported — skip with a warning
 
+After **all** sources are materialized, the steps in `spec.bootstrap` run sequentially (see [Bootstrap](#bootstrap)).
+
 Flags:
 
-- `--dry-run`: preview what would be done without creating any directories
+- `--dry-run`: preview what would be done without creating any directories or running any bootstrap step (prints the ordered bootstrap plan instead)
+- `--skip-bootstrap`: materialize sources only; do not run bootstrap steps
 
 Examples:
 
 ```bash
-# Reproduce a workspace from Tasktree.yml
+# Reproduce a workspace from Tasktree.yml (sources + bootstrap)
 tasktree apply
 
-# See what would be cloned without doing anything
+# See what would be cloned/run without doing anything
 tasktree apply --dry-run
+
+# Materialize sources only
+tasktree apply --skip-bootstrap
 ```
 
-`apply` is idempotent: running it when all sources are already present prints "All sources are already present." and exits cleanly.
+`apply` is idempotent: running it when all sources are already present prints "All sources are already present." and exits cleanly. Bootstrap steps, however, run on **every** apply (see below).
+
+### Bootstrap
+
+`spec.bootstrap` is an optional, ordered list of idempotent setup steps that run **after all sources are materialized**, on **every** `apply`. Use it for `npm ci`, `go mod download`, generating local config, etc.
+
+```yaml
+spec:
+  sources:
+    - name: api
+      type: git
+      git:
+        url: git@github.com:myorg/api.git
+        branch: feature/payments
+  bootstrap:
+    - name: install-api-deps
+      run: npm ci
+      workdir: api
+    - name: generate-config
+      run: ./scripts/gen-local-config.sh
+      workdir: api
+      env:
+        ENVIRONMENT: local
+```
+
+| Field | Description |
+|---|---|
+| `name` | Identifier for the step (used in logs/errors). Required, must be unique. |
+| `run` | Shell command, executed via `sh -c`. Required. |
+| `workdir` | Working directory relative to the workspace root. Must stay within the workspace. Defaults to the root. |
+| `env` | Extra environment variables for this step. Overrides inherited values on collision. |
+
+Behavior:
+
+- **Idempotent, no completion marker** — steps must be safe to re-run; they execute every `apply`.
+- **Sequential, fail-fast** — a non-zero exit aborts `apply` (its exit code is reported); later steps do not run and no rollback is performed. Fix the cause and re-run.
+- **Environment** — steps inherit tasktree's environment plus `TASKTREE_ROOT` (the absolute workspace root); step `env` is overlaid on top.
+- **Working directory** — independent of where you invoke `tasktree apply`; it is always resolved against the workspace root.
+- **Output** — step headers and live command output stream to stderr.
+- **Cancellation** — Ctrl-C (or an engine timeout) terminates the whole step process group.
 
 ### `tasktree repos`
 

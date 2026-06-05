@@ -39,3 +39,17 @@ template:
         git:
           url: "@shared"
           ref: main
+
+    bootstrap:
+      - name: install-api-deps
+        run: npm ci
+        workdir: api
+      - name: install-web-deps
+        run: npm ci
+        workdir: web
+      - name: generate-config
+        run: ./scripts/gen-local-config.sh
+        workdir: api
+        env:
+          ENVIRONMENT: local
+          FEATURE: "{{feature_name}}"

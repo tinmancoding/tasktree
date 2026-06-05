@@ -69,11 +69,45 @@
           "items": {
             "$ref": "#/$defs/SourceSpec"
           }
+        },
+        "bootstrap": {
+          "type": "array",
+          "description": "Ordered list of idempotent setup steps run after all sources are materialized, on every apply.",
+          "items": {
+            "$ref": "#/$defs/BootstrapStep"
+          }
         }
       }
     }
   },
   "$defs": {
+    "BootstrapStep": {
+      "type": "object",
+      "description": "A single idempotent setup step run after sources materialize. Steps run sequentially and fail-fast.",
+      "required": ["name", "run"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Identifier for the step, used in logs and errors. Must be unique within the list.",
+          "minLength": 1
+        },
+        "run": {
+          "type": "string",
+          "description": "Shell command to execute via 'sh -c'.",
+          "minLength": 1
+        },
+        "workdir": {
+          "type": "string",
+          "description": "Working directory relative to the workspace root. Must stay within the workspace. Defaults to the root."
+        },
+        "env": {
+          "type": "object",
+          "description": "Extra environment variables for this step. Overrides inherited values on key collisions.",
+          "additionalProperties": { "type": "string" }
+        }
+      }
+    },
     "SourceSpec": {
       "type": "object",
       "description": "A single source entry: describes one thing to materialize into the workspace.",
