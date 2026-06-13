@@ -42,6 +42,7 @@ nav:
     - Overview: concepts/overview.md
     - Workspace Spec: concepts/workspace-spec.md
     - Source Types: concepts/source-types.md
+    - Snapshots: concepts/snapshots.md
     - Repository Aliases: concepts/repo-aliases.md
     - Global Registry: concepts/registry.md
   - CLI Reference:
@@ -49,6 +50,8 @@ nav:
     - init: cli/init.md
     - add: cli/add.md
     - apply: cli/apply.md
+    - snapshot: cli/snapshot.md
+    - restore: cli/restore.md
     - remove: cli/remove.md
     - repos: cli/repos.md
     - status: cli/status.md
@@ -58,6 +61,7 @@ nav:
     - prune: cli/prune.md
     - migrate: cli/migrate.md
     - repo: cli/repo.md
+    - template: cli/template.md
   - Common Patterns:
     - Multi-Service Feature Branch: patterns/multi-service-feature.md
     - Hotfix Workflow: patterns/hotfix-workflow.md

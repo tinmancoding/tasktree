@@ -2,6 +2,9 @@
 
 `Tasktree.yml` is designed to be shared and reproduced with `tasktree apply`. This pattern covers the full lifecycle.
 
+!!! tip "Sharing the spec vs. the concrete state"
+    This pattern shares **desired state** — which repos and branches — reproduced with `apply`. To reproduce an **exact working tree** (precise commits plus uncommitted edits), capture a [snapshot](../concepts/snapshots.md) instead and reproduce it with [`tasktree restore`](../cli/restore.md).
+
 ## Important: don't mix the spec with the checkouts
 
 The workspace directory contains cloned git repositories as subdirectories. You cannot `git init` in that same directory and track `Tasktree.yml` there — the nested repo subdirectories won't be tracked by the outer repo.

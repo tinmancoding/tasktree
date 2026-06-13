@@ -8,7 +8,9 @@
 
 ## Context resolution
 
-Most commands that operate on a workspace (`add`, `remove`, `repos`, `status`, `apply`) resolve the tasktree root by walking up from the current working directory until a `Tasktree.yml` file is found. You do not need to `cd` to the root before running these commands.
+Most commands that operate on a workspace (`add`, `remove`, `repos`, `status`, `apply`, `snapshot`) resolve the tasktree root by walking up from the current working directory until a `Tasktree.yml` file is found. You do not need to `cd` to the root before running these commands.
+
+(`restore` is the exception: it creates a new workspace from a snapshot and takes a `--into` target instead of resolving an existing root.)
 
 If no `Tasktree.yml` is found, the command exits with:
 
@@ -35,7 +37,9 @@ Error: found legacy .tasktree.toml at <path> — run 'tasktree migrate' to conve
 |---|---|
 | [`init`](init.md) | Initialize a new tasktree workspace |
 | [`add`](add.md) | Add a repository to the current tasktree |
-| [`apply`](apply.md) | Materialize sources declared in Tasktree.yml |
+| [`apply`](apply.md) | Materialize sources declared in Tasktree.yml and run bootstrap |
+| [`snapshot`](snapshot.md) | Capture the workspace's concrete state into a portable `.tar.gz` |
+| [`restore`](restore.md) | Reproduce a workspace from a snapshot `.tar.gz` |
 | [`remove`](remove.md) | Remove a repository from the current tasktree |
 | [`repos`](repos.md) | List repositories declared in the current tasktree |
 | [`status`](status.md) | Show live git status for all repositories |

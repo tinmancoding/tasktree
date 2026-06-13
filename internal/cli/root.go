@@ -31,6 +31,8 @@ type dependencies struct {
 	addStaticService     app.AddStaticService
 	addLocalService      app.AddLocalService
 	applyService         app.ApplyService
+	snapshotService      app.SnapshotService
+	restoreService       app.RestoreService
 	removeService        app.RemoveService
 	statusService        app.StatusService
 	pruneService         app.PruneService
@@ -84,6 +86,8 @@ func defaultDependencies() dependencies {
 		addStaticService:     app.NewAddStaticService(store),
 		addLocalService:      app.NewAddLocalService(store),
 		applyService:         app.NewApplyService(store, cache.NewManager(cacheRoot, git), git),
+		snapshotService:      app.NewSnapshotService(store, git),
+		restoreService:       app.NewRestoreService(store, cache.NewManager(cacheRoot, git), git, reg),
 		removeService:        app.NewRemoveService(store),
 		statusService:        app.NewStatusService(store, git),
 		pruneService:         app.NewPruneService(reg),
@@ -170,6 +174,8 @@ func NewRootCmd(deps dependencies) *cobra.Command {
 		newInitCmd(deps),
 		newAddCmd(deps),
 		newApplyCmd(deps),
+		newSnapshotCmd(deps),
+		newRestoreCmd(deps),
 		newRemoveCmd(deps),
 		newRootSubcommand(deps),
 		newListCmd(deps),

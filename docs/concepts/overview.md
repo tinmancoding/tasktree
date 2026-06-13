@@ -31,7 +31,7 @@ tasktree apply            # materialize everything declared in the spec
 
 ## Key design decisions
 
-**`Tasktree.yml` is pure desired state.** It stores intent — which URL, which branch, which ref — not resolved state like commit SHAs. Live information (current HEAD, dirty status) is always read directly from the Git working copies by `tasktree status`.
+**`Tasktree.yml` is pure desired state.** It stores intent — which URL, which branch, which ref — not resolved state like commit SHAs. Live information (current HEAD, dirty status) is always read directly from the Git working copies by `tasktree status`. To capture the *concrete* working state (exact commits + uncommitted edits) for reproduction elsewhere, use a [snapshot](snapshots.md) — the complement to the spec.
 
 **Cloning is cached.** Each unique repository URL is cloned once into a bare-repo cache at `~/.cache/tasktree/repos/<sha256-of-url>`. Subsequent clones of the same URL (in any workspace) use the cache, making `add` and `apply` fast.
 

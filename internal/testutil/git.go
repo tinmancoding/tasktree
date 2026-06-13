@@ -127,6 +127,13 @@ func repoRoot(t *testing.T) string {
 }
 
 func tasktreeBinary(t *testing.T) string {
+	return BuildBinary(t)
+}
+
+// BuildBinary builds the tasktree CLI and returns the path to the binary.
+// Exposed for tests that need to drive the binary directly (e.g. stdin/stdout
+// piping).
+func BuildBinary(t *testing.T) string {
 	t.Helper()
 	root := repoRoot(t)
 	binDir := t.TempDir()

@@ -287,6 +287,70 @@ func (e WorkdirNotFoundError) Error() string {
 	return fmt.Sprintf("bootstrap step %q: workdir %q does not exist", e.Name, e.Workdir)
 }
 
+// UnsupportedSnapshotVersionError is returned when a snapshot manifest has a
+// version this build does not understand.
+type UnsupportedSnapshotVersionError struct {
+	Found int
+	Max   int
+}
+
+func (e UnsupportedSnapshotVersionError) Error() string {
+	return fmt.Sprintf("unsupported snapshot manifest version %d (this build supports up to %d); upgrade tasktree", e.Found, e.Max)
+}
+
+// IncompleteSnapshotManifestError is returned when a snapshot manifest fails
+// structural validation.
+type IncompleteSnapshotManifestError struct {
+	Reason string
+}
+
+func (e IncompleteSnapshotManifestError) Error() string {
+	return fmt.Sprintf("invalid snapshot manifest: %s", e.Reason)
+}
+
+// SourceNotMaterializedError is returned when `tasktree snapshot` finds a
+// declared source that is not present on disk.
+type SourceNotMaterializedError struct {
+	Name string
+	Path string
+}
+
+func (e SourceNotMaterializedError) Error() string {
+	return fmt.Sprintf("source %q is not materialized at %s; run 'tasktree apply' first", e.Name, e.Path)
+}
+
+// MissingOriginRemoteError is returned when a git source has no 'origin' remote
+// at snapshot time, so its base commit cannot be reconstructed on restore.
+type MissingOriginRemoteError struct {
+	Name string
+}
+
+func (e MissingOriginRemoteError) Error() string {
+	return fmt.Sprintf("git source %q has no 'origin' remote; cannot snapshot (base would be unrecoverable)", e.Name)
+}
+
+// HeadMismatchError is returned when, after restoring a git source, HEAD does
+// not match the SHA recorded in the snapshot manifest.
+type HeadMismatchError struct {
+	Name string
+	Want string
+	Got  string
+}
+
+func (e HeadMismatchError) Error() string {
+	return fmt.Sprintf("restore verification failed for source %q: expected HEAD %s, got %s", e.Name, e.Want, e.Got)
+}
+
+// NonEmptyRestoreTargetError is returned when the restore target directory
+// already exists and is not empty.
+type NonEmptyRestoreTargetError struct {
+	Path string
+}
+
+func (e NonEmptyRestoreTargetError) Error() string {
+	return fmt.Sprintf("restore target %q already exists and is not empty", e.Path)
+}
+
 // StepFailedError is returned when a bootstrap step exits non-zero. The child
 // exit code is preserved for the engine to map to run failure.
 type StepFailedError struct {

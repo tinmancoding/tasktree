@@ -1,6 +1,6 @@
 # Design: Bootstrap & Snapshot/Restore
 
-Status: **Bootstrap — Accepted** · **Snapshot/Restore — Proposed**
+Status: **Bootstrap — Accepted** · **Snapshot/Restore — Accepted**
 Layer: **tasktree core**
 
 This document specifies two new primitives in tasktree core:
@@ -155,66 +155,130 @@ tasktree apply [--skip-bootstrap] [--dry-run]
 
 ## 2. Snapshot / Restore
 
-A snapshot is a **lightweight, portable capture of a workspace's concrete state** that can be
-restored onto a fresh machine to reproduce the exact working tree.
+A snapshot is a **lightweight, portable, self-contained capture of a workspace's concrete state**
+that can be restored onto a fresh machine to reproduce the exact working tree. The implementation
+plan lives in [snapshot-implementation-plan.md](./snapshot-implementation-plan.md).
 
-### Data model
+### Artifact & format
+
+The snapshot is a **single portable `.tar.gz`**. It is built in a temp staging dir and packed,
+so the on-disk/transport surface is always one file. Internal layout:
+
+```
+snapshot.yaml            # manifest (yaml, consistent with Tasktree.yml)
+Tasktree.yml             # embedded copy of the (rendered) spec → self-contained restore
+bundles/<source>.bundle  # git: local commits base..HEAD (only if local commits exist)
+dirty/<source>.tar       # git: working-tree content of dirty paths (only if dirty)
+```
+
+- **Self-contained:** the snapshot embeds `Tasktree.yml`, so restore needs nothing but the tarball
+  (the whole point is reproduction on a *fresh* machine).
+- The dirty payload is a **tar** (not zip): we are already inside a `.tar.gz`, and tar preserves
+  unix file modes + symlinks (zip is lossy there).
+- The inner `git bundle` and dirty tar are incompressible, so the outer gzip is a near-no-op on
+  size; it is kept for a uniform single-file `.tar.gz` surface.
+
+### Snapshotter structure
 
 A snapshot is **workspace-level**, composed of one **sub-snapshot per source**. It is produced by
-a **pluggable, per-source-type `Snapshotter`** interface (mirroring the existing per-source-type
-materializer pattern). The **default implementation is a no-op** — such sources are reproduced
-purely by re-running `apply` from the spec.
+`internal/snapshot` **free functions** plus a `SnapshotService` **type-switch** in `internal/app`
+— mirroring the *actual* materializer code (`materialize.Git` + `ApplyService.applySource`
+switch), **not** a plugin interface or registry. Non-git source types produce **no sub-snapshot**
+(inventory-only in the manifest) and are reproduced by re-applying the embedded spec on restore.
 
+### Manifest (`snapshot.yaml`)
+
+The manifest is **the place resolved SHAs are allowed to live**. `version: 1`; restore rejects an
+unknown/newer major version.
+
+```yaml
+version: 1
+createdAt: 2026-06-05T12:00:00Z
+tasktree: feature-payments
+sources:
+  - name: api
+    type: git
+    git:
+      remoteURL: git@github.com:myorg/api.git   # read from the on-disk origin
+      branch: feature/payments
+      detached: false
+      baseSHA: <sha>          # always pinned for git sources
+      headSHA: <sha>          # restore verifies HEAD matches this
+      bundle: bundles/api.bundle   # omitted if no local commits
+      dirty: dirty/api.tar         # omitted if clean
+      includeIgnored: false
+  - name: docs                # non-git: inventory only, reproduced from spec
+    type: http
 ```
-snapshot/
-├── snapshot.yaml        # manifest: per-source base pins + which sources have sub-snapshots
-├── bundles/
-│   └── api.bundle       # git: local commits beyond base (git bundle)
-└── dirty/
-    └── api.zip          # git: staged + unstaged + untracked (gitignore-respected)
-```
 
-#### Manifest (`snapshot.yaml`)
-
-The manifest is **the place resolved SHAs are allowed to live**. For each source it records the
-concrete state needed to reconstruct it:
-
-- the resolved **base SHA** and remote URL (git sources),
-- which artifacts (bundle, dirty archive) are present.
-
-#### Git `Snapshotter`
+### Git `Snapshotter`
 
 | Part | Encoding | Notes |
 |---|---|---|
-| Base | resolved base SHA + remote URL in the manifest | re-materializable from spec at that pin |
-| Committed delta | **`git bundle`** of local commits beyond base | handles binaries, multiple branches, merge history in one file; can be fetched from on restore. Chosen over `format-patch`, which mangles binaries/merges. |
-| Dirty state | one **zip** of staged + unstaged + untracked | **`.gitignore` respected by default** (so `node_modules`/build dirs do not bloat the snapshot). `--include-ignored` opts into capturing ignored files. |
+| Base | `merge-base HEAD <remote-ref>` (`remote-ref` = upstream → `origin/<branch>` → `origin/HEAD`); `baseSHA` + `remoteURL` in the manifest | re-materializable from the remote at that pin. **Always pinned, even when clean** (base==head) so restore reproduces the exact commit even if `origin/<branch>` moved. Rely-on-remote model; restore **verifies `HEAD==headSHA`** and fails loudly on mismatch. |
+| Committed delta | **`git bundle`** of `base..HEAD` (HEAD-only in v0) | handles binaries + merge history in one file; fetched on restore. Chosen over `format-patch`, which mangles binaries/merges. Multi-branch capture is deferred. |
+| Dirty state | one **tar** of the **working-tree content** of changed + untracked paths (`git status --porcelain -z --untracked-files=all`) | Captures content, not diffs (diffs mangle binaries). Includes a `dirty.manifest` member: deletions list + staged-path re-stage hint. **Partial-staging collapses to worktree content** (index-vs-worktree divergence on the same path → worktree wins; documented limitation). `.gitignore` respected by default (so `node_modules`/build dirs do not bloat); `--include-ignored` opts in. |
 
-#### Other source types
+**Git edge cases:**
 
-Each source type may provide its own `Snapshotter`. It is acceptable to leave these as **no-op**
-and rely on the `apply` stage for reproduction:
+- **Detached HEAD:** record `detached: true`, empty `branch`, `headSHA`; base = `merge-base HEAD
+  origin/HEAD`. Restore checks out detached at `headSHA`.
+- **Local-only / never-pushed branch:** no upstream ⇒ base falls back to `merge-base HEAD
+  origin/HEAD`; the bundle carries everything from that fork point.
+- **No `origin` remote on disk:** **hard-fail at snapshot time** — the rely-on-remote model cannot
+  reconstruct base without it. A self-contained-bundle fallback is a future enhancement.
+- **Submodules — out of scope v0:** the gitlink pointer is part of the captured tree, but the
+  submodule's own working tree/dirty state is not captured or restored.
+
+### Other source types
+
+Non-git source types produce **no sub-snapshot** and are reproduced from the embedded spec on
+restore; they appear in the manifest as inventory-only entries (name + type) so restore can detect
+a spec/snapshot mismatch:
 
 - `http`, `archive`, `static` — reproducible from the spec; no-op.
-- `local` — points outside the workspace boundary; no-op by default.
+- `local` — points outside the workspace boundary; no-op.
 
 ### Restore
 
-Restore reproduces the exact working state, on a fresh machine or in place:
+Restore is **split by source type**, not a uniform "apply pinned" (apply has no pin capability):
 
-1. Re-apply the spec **pinned to the recorded base SHAs**.
-2. `git fetch` / replay the **bundle** to restore local commits.
-3. Unpack the **dirty archive** to restore staged/unstaged/untracked edits.
+- **Non-git sources:** plain `materialize` from the embedded spec.
+- **Git sources** (each carries a pin): a dedicated deterministic path —
+  1. clone via the existing **`cache.Manager`** (cache reuse, like apply); `origin` = `remoteURL`.
+  2. ensure `baseSHA` is present (fetch from remote if the cache lacks it).
+  3. if a bundle exists, `git fetch <bundle>` to bring `base..HEAD` objects in.
+  4. recreate branch identity: branch `<branch>` at `headSHA`, or **detached at `headSHA`**.
+  5. **verify `HEAD == headSHA`**; fail loudly on mismatch.
+  6. unpack `dirty/<source>.tar` over the working tree, apply the deletions list, `git add` the
+     staged-hint paths.
 
-This restore path is identical to the engine's startup path, so it is exercised by both
-local use and [tasktree-engine](./tasktree-engine.md).
+The materialize + git-restore + dirty-unpack phase restores into a **temp staging dir on the same
+filesystem**, then `os.Rename` to the final target on full success (all-or-nothing). **Bootstrap
+then runs on the final dir** (default; `--skip-bootstrap` opts out), **fail-fast / no rollback** —
+identical to the apply contract — because bootstrap outputs (`node_modules`, generated config) are
+normally `.gitignore`d and thus excluded from the snapshot, so a usable restore needs setup. On
+success, restore **registers** the workspace in the global registry (like `init`).
 
-### CLI (proposed)
+This restore path is the same one the engine uses at startup, so it is exercised by both local use
+and [tasktree-engine](./tasktree-engine.md).
+
+### CLI
 
 ```
 tasktree snapshot [--output <path>] [--include-ignored]
-tasktree restore <snapshot> [--into <dir>]
+tasktree restore <snapshot> [--into <dir>] [--skip-bootstrap]
 ```
+
+- **`tasktree snapshot`** resolves the workspace root from any subdirectory (like `apply`).
+  Default output `./<metadata.name>-<UTC-timestamp>.tar.gz` (timestamp avoids clobber);
+  `--output/-o <path>` overrides, and **`-o -` streams the tar.gz to stdout** (the engine's
+  "return the canonical artifact" path). Output is written atomically (temp + rename). It
+  **hard-fails if any declared source is not materialized** (no silent partial snapshot); a fully
+  clean workspace yields a valid snapshot (pins only). No `--dry-run` in v0.
+- **`tasktree restore`** accepts a tarball path or **`-` to read the tar.gz from stdin**. Default
+  target `./<metadata.name>` from the embedded spec; **refuses a non-empty target** (no `--force`
+  in v0).
 
 ---
 

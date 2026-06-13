@@ -141,6 +141,38 @@ The fields are written by `tasktree add` based on what you passed:
 - Both together: `ref: main`, `branch: feature/x`
 - Neither (default branch): both fields omitted, the default branch is resolved at apply time
 
+## spec.bootstrap
+
+An optional, ordered list of idempotent setup steps run **after all sources are materialized**, on **every** `apply`. Use it for dependency installs and local config generation.
+
+```yaml
+spec:
+  sources:
+    - name: api
+      type: git
+      git:
+        url: git@github.com:myorg/api.git
+        branch: feature/payments
+  bootstrap:
+    - name: install-api-deps
+      run: npm ci
+      workdir: api
+    - name: generate-config
+      run: ./scripts/gen-local-config.sh
+      workdir: api
+      env:
+        ENVIRONMENT: local
+```
+
+| Field | Required | Description |
+|---|---|---|
+| `name` | yes | Identifier for the step (used in logs/errors). Must be unique within `spec.bootstrap`. |
+| `run` | yes | Shell command, executed via `sh -c`. |
+| `workdir` | no | Working directory relative to the workspace root. Must stay within the workspace. Defaults to the root. |
+| `env` | no | Extra environment variables for this step. Overrides inherited values on collision. |
+
+Bootstrap steps must be **idempotent** — they re-run on every `apply` with no completion marker. They run sequentially and **fail-fast** (a non-zero exit aborts `apply`). See [`tasktree apply` › Bootstrap](../cli/apply.md#bootstrap) for the full execution model.
+
 ## JSON Schema
 
 A JSON Schema for editor validation and linting is at `schema/tasktree.schema.json`. Configure your editor to use it for `Tasktree.yml` files.

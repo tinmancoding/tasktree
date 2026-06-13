@@ -358,6 +358,68 @@ Behavior:
 - **Output** — step headers and live command output stream to stderr.
 - **Cancellation** — Ctrl-C (or an engine timeout) terminates the whole step process group.
 
+### `tasktree snapshot [-o <path>] [--include-ignored]`
+
+Capture the workspace's **concrete** state into a single, portable, self-contained `.tar.gz`.
+While `Tasktree.yml` is pure *desired* state (no resolved SHAs), a snapshot is the complement: the
+exact commits and uncommitted edits as they are *right now*, so the working tree can be reproduced
+on another machine or at a later time.
+
+The archive contains a manifest (`snapshot.yaml`), an embedded copy of `Tasktree.yml`, and per-git-source payloads:
+
+- **Base pin** — the resolved base commit (`merge-base` against the remote) plus the remote URL,
+  recorded in the manifest. Always pinned, even for a clean source.
+- **Committed delta** — a `git bundle` of local commits beyond the base (only when present).
+- **Dirty state** — a tar of the working-tree content of changed + untracked files (only when
+  dirty). `.gitignore` is respected by default; `--include-ignored` captures ignored files too.
+
+Non-git sources (`http`, `archive`, `static`, `local`) carry no payload — they are reproduced from
+the embedded spec on restore.
+
+Flags:
+
+- `-o, --output <path>`: where to write the snapshot. Defaults to `./<name>-<UTC-timestamp>.tar.gz`.
+  Use `-o -` to stream the archive to **stdout**.
+- `--include-ignored`: also capture `.gitignore`d files in the dirty archive.
+
+`snapshot` fails if a declared source is not yet materialized (run `tasktree apply` first). A fully
+clean workspace produces a valid snapshot (pins only).
+
+```bash
+# Capture the current workspace
+tasktree snapshot
+
+# Write to a specific file
+tasktree snapshot -o /tmp/feature.tar.gz
+
+# Stream to stdout (e.g. to pipe into restore on another host)
+tasktree snapshot -o -
+```
+
+### `tasktree restore <snapshot> [--into <dir>] [--skip-bootstrap]`
+
+Reproduce the exact working state captured by `snapshot` into a fresh directory: re-materialize
+sources pinned to the recorded commits, replay local commits from the bundle, and restore dirty
+edits. After the working tree is reconstructed, bootstrap steps run (use `--skip-bootstrap` to skip).
+
+Pass `-` to read the snapshot from **stdin**. The target defaults to `./<name>` from the embedded
+spec; use `--into` to choose a directory. The target must be empty or not yet exist.
+
+Restore reconstructs each git source deterministically (clone → ensure base → replay bundle →
+recreate branch/detached HEAD at the recorded SHA → verify → unpack dirty edits), then registers the
+workspace in the global registry.
+
+```bash
+# Restore into ./<name>
+tasktree restore feature.tar.gz
+
+# Restore into a chosen directory
+tasktree restore feature.tar.gz --into ./reproduced
+
+# Pipe straight from another host
+tasktree snapshot -o - | ssh host 'tasktree restore - --into work'
+```
+
 ### `tasktree repos`
 
 List repositories configured in the current tasktree.
