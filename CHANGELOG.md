@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.4.0](https://github.com/tinmancoding/tasktree/compare/v1.3.0...v1.4.0) (2026-06-13)
+
+
+### Features
+
+* add bootstrap steps to apply ([9dcc1d6](https://github.com/tinmancoding/tasktree/commit/9dcc1d610d0de2eb3b31c9fb1c55dc534ff5a06b))
+* snapshot and restore ([4760126](https://github.com/tinmancoding/tasktree/commit/4760126f56e40a9d030f809f3cfcb7bcc808407c))
+
 ## [1.3.0](https://github.com/tinmancoding/tasktree/compare/v1.2.0...v1.3.0) (2026-05-15)
 
 
