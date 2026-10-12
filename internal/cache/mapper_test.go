@@ -4,7 +4,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/tinmancoding/tasktree/internal/cache"
+	"github.com/tinmancoding/tasktree/v2/internal/cache"
 )
 
 func TestPathForURLIsDeterministic(t *testing.T) {

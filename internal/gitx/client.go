@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -67,12 +68,21 @@ func (c Client) WithDefaults() Client {
 	return c
 }
 
-func (c Client) run(ctx context.Context, args ...string) (string, string, error) {
+// Run executes git with an optional working directory and per-invocation
+// environment. Inherited GIT_* variables are always removed before env is
+// applied, so repository context never leaks into child git processes.
+func (c Client) Run(ctx context.Context, dir string, env map[string]string, args ...string) (string, string, error) {
 	cfg := c.withConfig()
 	if cfg.verboseWriter != nil {
-		_, _ = fmt.Fprintf(cfg.verboseWriter, "git %s\n", formatArgs(args))
+		prefix := "git"
+		if dir != "" {
+			prefix = "git -C " + quoteArg(dir)
+		}
+		_, _ = fmt.Fprintf(cfg.verboseWriter, "%s %s\n", prefix, formatArgs(args))
 	}
 	cmd := exec.CommandContext(ctx, cfg.binary, args...)
+	cmd.Dir = dir
+	cmd.Env = cleanEnv(env)
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -93,6 +103,28 @@ func (c Client) run(ctx context.Context, args ...string) (string, string, error)
 		}
 	}
 	return stdout.String(), stderr.String(), nil
+}
+
+func (c Client) run(ctx context.Context, args ...string) (string, string, error) {
+	return c.Run(ctx, "", nil, args...)
+}
+
+func cleanEnv(extra map[string]string) []string {
+	env := make([]string, 0, len(os.Environ())+len(extra))
+	for _, item := range os.Environ() {
+		name, _, _ := strings.Cut(item, "=")
+		if strings.HasPrefix(name, "GIT_") {
+			continue
+		}
+		if _, replaced := extra[name]; replaced {
+			continue
+		}
+		env = append(env, item)
+	}
+	for name, value := range extra {
+		env = append(env, name+"="+value)
+	}
+	return env
 }
 
 func trimOutput(stdout string) string {

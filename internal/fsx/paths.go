@@ -2,45 +2,36 @@ package fsx
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
-
-	"github.com/tinmancoding/tasktree/internal/domain"
 )
 
+type NotInTasktreeError struct{ Start string }
+
+func (e NotInTasktreeError) Error() string { return fmt.Sprintf("not in a tasktree from %s", e.Start) }
 func ResolveTasktreeRoot(start string) (string, error) {
 	current, err := filepath.Abs(start)
 	if err != nil {
 		return "", err
 	}
-
 	for {
-		// Check for new Tasktree.yml first.
-		specPath := filepath.Join(current, domain.SpecFileName)
-		info, statErr := os.Stat(specPath)
+		marker := filepath.Join(current, ".tasktree", "config.yml")
+		info, statErr := os.Stat(marker)
 		if statErr == nil && !info.IsDir() {
 			return current, nil
 		}
 		if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
 			return "", statErr
 		}
-
-		// Check for legacy .tasktree.toml and surface a migration error.
-		legacyPath := filepath.Join(current, domain.LegacyFileName)
-		legacyInfo, legacyStatErr := os.Stat(legacyPath)
-		if legacyStatErr == nil && !legacyInfo.IsDir() {
-			return "", domain.LegacyMetadataError{Path: legacyPath}
-		}
-
 		parent := filepath.Dir(current)
 		if parent == current {
-			return "", domain.NotInTasktreeError{Start: start}
+			return "", NotInTasktreeError{start}
 		}
 		current = parent
 	}
 }
-
 func Exists(path string) (bool, error) {
 	_, err := os.Stat(path)
 	if err == nil {
@@ -51,7 +42,6 @@ func Exists(path string) (bool, error) {
 	}
 	return false, err
 }
-
 func IsWithin(root, target string) (bool, error) {
 	absRoot, err := filepath.Abs(root)
 	if err != nil {

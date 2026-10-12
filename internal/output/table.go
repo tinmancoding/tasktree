@@ -3,252 +3,27 @@ package output
 import (
 	"fmt"
 	"io"
-	"strings"
 	"text/tabwriter"
-
-	"github.com/tinmancoding/tasktree/internal/domain"
 )
 
-// TasktreeRow is a single row in the tasktree list table.
-// The CLI layer is responsible for mapping app.TasktreeListEntry into this type.
-type TasktreeRow struct {
-	Name   string
-	Path   string
-	Status string // empty string means OK
+// TaskRow is one task in the human-readable list output.
+type TaskRow struct {
+	Handle string
+	Status string
+	Title  string
+	ID     string
+	Parent string
 }
 
-// WriteTasktreeTable renders the list of known tasktrees as a table.
-// Rows with a non-empty Status are annotated in a STATUS column.
-func WriteTasktreeTable(w io.Writer, rows []TasktreeRow) error {
-	if len(rows) == 0 {
-		_, err := fmt.Fprintln(w, "No tasktrees registered.")
-		return err
-	}
+func WriteTaskTable(w io.Writer, rows []TaskRow) error {
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	if _, err := fmt.Fprintln(tw, "NAME\tPATH\tSTATUS"); err != nil {
+	if _, err := fmt.Fprintln(tw, "HANDLE\tSTATUS\tTITLE\tID\tPARENT"); err != nil {
 		return err
 	}
 	for _, r := range rows {
-		status := r.Status
-		if status != "" {
-			status = "(" + status + ")"
-		}
-		if _, err := fmt.Fprintf(tw, "%s\t%s\t%s\n", r.Name, r.Path, status); err != nil {
+		if _, err := fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", r.Handle, r.Status, r.Title, r.ID, r.Parent); err != nil {
 			return err
 		}
 	}
 	return tw.Flush()
-}
-
-func WriteRepoTable(w io.Writer, sources []domain.SourceSpec) error {
-	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	if _, err := fmt.Fprintln(tw, "NAME\tPATH\tREF\tBRANCH"); err != nil {
-		return err
-	}
-	for _, source := range sources {
-		sourcePath := source.Path
-		if sourcePath == "" {
-			sourcePath = source.Name
-		}
-		var ref, branch string
-		if source.Git != nil {
-			ref = source.Git.Ref
-			branch = source.Git.Branch
-		}
-		if branch == "" {
-			branch = "-"
-		}
-		if _, err := fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", source.Name, sourcePath, ref, branch); err != nil {
-			return err
-		}
-	}
-	return tw.Flush()
-}
-
-func WriteStatusTable(w io.Writer, tasktreeName, root string, annotations []struct {
-	Key   string
-	Value string
-}, repos []struct {
-	Name  string
-	Path  string
-	Head  string
-	State string
-}) error {
-	if _, err := fmt.Fprintf(w, "Tasktree: %s\n", tasktreeName); err != nil {
-		return err
-	}
-	if _, err := fmt.Fprintf(w, "Root:     %s\n", root); err != nil {
-		return err
-	}
-	if len(annotations) > 0 {
-		if _, err := fmt.Fprintln(w); err != nil {
-			return err
-		}
-		tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-		for _, a := range annotations {
-			if _, err := fmt.Fprintf(tw, "  %s\t%s\n", a.Key, a.Value); err != nil {
-				return err
-			}
-		}
-		if err := tw.Flush(); err != nil {
-			return err
-		}
-	}
-	if _, err := fmt.Fprintln(w); err != nil {
-		return err
-	}
-	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	if _, err := fmt.Fprintln(tw, "REPO\tPATH\tHEAD\tSTATE"); err != nil {
-		return err
-	}
-	for _, repo := range repos {
-		if _, err := fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", repo.Name, repo.Path, repo.Head, repo.State); err != nil {
-			return err
-		}
-	}
-	return tw.Flush()
-}
-
-// AnnotationRow is a single row in the annotations table.
-type AnnotationRow struct {
-	Key   string
-	Value string
-}
-
-// WriteAnnotationsTable renders the annotations as a two-column table.
-// Prints "No annotations set." when rows is empty.
-func WriteAnnotationsTable(w io.Writer, rows []AnnotationRow) error {
-	if len(rows) == 0 {
-		_, err := fmt.Fprintln(w, "No annotations set.")
-		return err
-	}
-	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	if _, err := fmt.Fprintln(tw, "KEY\tVALUE"); err != nil {
-		return err
-	}
-	for _, r := range rows {
-		if _, err := fmt.Fprintf(tw, "%s\t%s\n", r.Key, r.Value); err != nil {
-			return err
-		}
-	}
-	return tw.Flush()
-}
-
-func WriteRepoAliasTable(w io.Writer, aliases []struct {
-	Alias string
-	URL   string
-}) error {
-	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	if _, err := fmt.Fprintln(tw, "ALIAS\tURL"); err != nil {
-		return err
-	}
-	for _, alias := range aliases {
-		if _, err := fmt.Fprintf(tw, "%s\t%s\n", alias.Alias, alias.URL); err != nil {
-			return err
-		}
-	}
-	return tw.Flush()
-}
-
-// TemplateRow is a single row in the template list table.
-type TemplateRow struct {
-	Name        string
-	Description string
-	Parameters  string // comma-separated parameter names
-}
-
-// WriteTemplateTable renders the list of templates as a table.
-func WriteTemplateTable(w io.Writer, rows []TemplateRow) error {
-	if len(rows) == 0 {
-		_, err := fmt.Fprintln(w, "No templates found.")
-		return err
-	}
-	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	if _, err := fmt.Fprintln(tw, "NAME\tDESCRIPTION\tPARAMETERS"); err != nil {
-		return err
-	}
-	for _, r := range rows {
-		if _, err := fmt.Fprintf(tw, "%s\t%s\t%s\n", r.Name, r.Description, r.Parameters); err != nil {
-			return err
-		}
-	}
-	return tw.Flush()
-}
-
-// WriteTemplateDetail renders full details for a single template.
-func WriteTemplateDetail(w io.Writer, spec domain.TemplateSpec, location string) error {
-	if _, err := fmt.Fprintf(w, "Name:        %s\n", spec.Metadata.Name); err != nil {
-		return err
-	}
-	if spec.Metadata.Description != "" {
-		if _, err := fmt.Fprintf(w, "Description: %s\n", spec.Metadata.Description); err != nil {
-			return err
-		}
-	}
-	if location != "" {
-		if _, err := fmt.Fprintf(w, "Location:    %s\n", location); err != nil {
-			return err
-		}
-	}
-
-	if len(spec.Parameters) > 0 {
-		if _, err := fmt.Fprintln(w, "\nParameters:"); err != nil {
-			return err
-		}
-		tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-		for _, p := range spec.Parameters {
-			req := "(optional)"
-			if p.Required {
-				req = "(required)"
-			}
-			desc := p.Description
-			if p.Default != "" {
-				desc += " [default: " + p.Default + "]"
-			}
-			if _, err := fmt.Fprintf(tw, "  %s\t%s\t%s\n", p.Name, req, desc); err != nil {
-				return err
-			}
-		}
-		if err := tw.Flush(); err != nil {
-			return err
-		}
-	}
-
-	if _, err := fmt.Fprintln(w, "\nTemplate Preview:"); err != nil {
-		return err
-	}
-	if spec.Template.Metadata.Name != "" {
-		if _, err := fmt.Fprintf(w, "  metadata.name: %s\n", spec.Template.Metadata.Name); err != nil {
-			return err
-		}
-	}
-	if len(spec.Template.Spec.Sources) > 0 {
-		if _, err := fmt.Fprintln(w, "  sources:"); err != nil {
-			return err
-		}
-		for _, src := range spec.Template.Spec.Sources {
-			srcType := string(src.Type)
-			if srcType == "" {
-				srcType = "git"
-			}
-			if _, err := fmt.Fprintf(w, "    - %s (%s)", src.Name, srcType); err != nil {
-				return err
-			}
-			if src.Git != nil {
-				parts := []string{src.Git.URL}
-				if src.Git.Branch != "" {
-					parts = append(parts, "branch: "+src.Git.Branch)
-				} else if src.Git.Ref != "" {
-					parts = append(parts, "ref: "+src.Git.Ref)
-				}
-				if _, err := fmt.Fprintf(w, ": %s", strings.Join(parts, ", ")); err != nil {
-					return err
-				}
-			}
-			if _, err := fmt.Fprintln(w); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
 }

@@ -4,8 +4,6 @@ import (
 	"context"
 	"fmt"
 	"strings"
-
-	"github.com/tinmancoding/tasktree/internal/domain"
 )
 
 func (c Client) CloneBare(ctx context.Context, repoURL, destPath string) error {
@@ -59,7 +57,7 @@ func (c Client) ValidateBranchName(ctx context.Context, branch string) error {
 		return nil
 	}
 	if cmdErr, ok := err.(CommandError); ok && cmdErr.ExitCode != 0 {
-		return domain.InvalidBranchNameError{Name: branch}
+		return fmt.Errorf("invalid branch name %q", branch)
 	}
 	return err
 }

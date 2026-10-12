@@ -6,9 +6,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/tinmancoding/tasktree/internal/cache"
-	"github.com/tinmancoding/tasktree/internal/gitx"
-	"github.com/tinmancoding/tasktree/internal/testutil"
+	"github.com/tinmancoding/tasktree/v2/internal/cache"
+	"github.com/tinmancoding/tasktree/v2/internal/gitx"
+	"github.com/tinmancoding/tasktree/v2/internal/testutil"
 )
 
 func TestManagerEnsureCreatesAndRefreshesBareCache(t *testing.T) {

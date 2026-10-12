@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/tinmancoding/tasktree/internal/fsx"
+	"github.com/tinmancoding/tasktree/v2/internal/fsx"
 )
 
 func TestAtomicWriteFileReplacesContents(t *testing.T) {

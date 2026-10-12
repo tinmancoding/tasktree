@@ -4,13 +4,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"sort"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/tinmancoding/tasktree/internal/domain"
-	"github.com/tinmancoding/tasktree/internal/fsx"
+	"github.com/tinmancoding/tasktree/v2/internal/fsx"
+	"github.com/tinmancoding/tasktree/v2/internal/home"
 )
 
 type File struct {
@@ -27,21 +27,11 @@ type Store struct {
 }
 
 func DefaultPath() (string, error) {
-	if xdgConfigHome := os.Getenv("XDG_CONFIG_HOME"); xdgConfigHome != "" {
-		return filepath.Join(xdgConfigHome, "tasktree", "repos.yml"), nil
-	}
-	if runtime.GOOS == "darwin" {
-		homeDir, err := os.UserHomeDir()
-		if err != nil {
-			return "", fmt.Errorf("resolve user home dir: %w", err)
-		}
-		return filepath.Join(homeDir, ".config", "tasktree", "repos.yml"), nil
-	}
-	userConfigDir, err := os.UserConfigDir()
+	h, err := home.Resolve()
 	if err != nil {
-		return "", fmt.Errorf("resolve user config dir: %w", err)
+		return "", err
 	}
-	return filepath.Join(userConfigDir, "tasktree", "repos.yml"), nil
+	return filepath.Join(h.Root, "aliases.yml"), nil
 }
 
 func NewStore(path string) Store {
@@ -124,7 +114,7 @@ func (f *File) normalize() {
 			if alias == "" {
 				continue
 			}
-			if err := domain.ValidateRepoName(alias); err != nil {
+			if strings.ContainsAny(alias, "/\\") || alias == "." || alias == ".." {
 				continue
 			}
 			if _, ok := unique[alias]; ok {

@@ -1,4 +1,4 @@
-module github.com/tinmancoding/tasktree
+module github.com/tinmancoding/tasktree/v2
 
 go 1.25.0
 

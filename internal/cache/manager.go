@@ -6,8 +6,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/tinmancoding/tasktree/internal/fsx"
-	"github.com/tinmancoding/tasktree/internal/gitx"
+	"github.com/tinmancoding/tasktree/v2/internal/fsx"
+	"github.com/tinmancoding/tasktree/v2/internal/gitx"
 )
 
 type Manager struct {
