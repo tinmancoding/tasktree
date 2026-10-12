@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"github.com/pelletier/go-toml/v2"
+	"github.com/tinmancoding/tasktree/v2/internal/fsx"
 	"github.com/tinmancoding/tasktree/v2/internal/home"
 	"github.com/tinmancoding/tasktree/v2/internal/record"
 	"gopkg.in/yaml.v3"
@@ -90,6 +92,31 @@ type importState struct {
 	generatedOriginals map[string][]byte
 	absorbed           []ImportSourcePlan
 	starter            bool
+	journalDir         string
+}
+
+type importJournalRepo struct {
+	Name, Path, State string
+	Before            repoSnapshotJSON
+}
+type repoSnapshotJSON struct {
+	Head, Symbolic, Status, Stashes, Refs, Config string
+	ConfigBytes                                   []byte
+}
+type importJournal struct {
+	ID, Root, Handle   string
+	Step               int
+	Repos              []importJournalRepo
+	RootBefore         map[string]rootEntry
+	GeneratedOriginals map[string][]byte
+	Starter            bool
+}
+
+func snapshotJSON(s repoSnapshot) repoSnapshotJSON {
+	return repoSnapshotJSON{s.Head, s.Symbolic, s.Status, s.Stashes, s.Refs, s.Config, s.configBytes}
+}
+func (s repoSnapshotJSON) snapshot() repoSnapshot {
+	return repoSnapshot{s.Head, s.Symbolic, s.Status, s.Stashes, s.Refs, s.Config, s.ConfigBytes}
 }
 
 func readV1(root string) (v1Spec, []byte, error) {
@@ -135,13 +162,24 @@ func (a App) PlanImport(ctx context.Context, root string, o ImportOptions) (Impo
 		return ImportPlan{}, err
 	}
 	p := ImportPlan{Path: abs}
-	if _, err := os.Stat(filepath.Join(abs, ".tasktree", "config.yml")); err == nil {
+	if _, err := os.Lstat(filepath.Join(abs, ".tasktree", "config.yml")); err == nil {
+		var marker TasktreeConfig
+		b, readErr := os.ReadFile(filepath.Join(abs, ".tasktree", "config.yml"))
+		if readErr != nil || yaml.Unmarshal(b, &marker) != nil || marker.TaskID == "" {
+			return p, GateError{"incomplete import: invalid .tasktree/config.yml; run tt2 import --recover " + abs}
+		}
+		_, hubErr := a.Hub.Read(marker.TaskID)
+		local, localErr := a.Home.LoadLocal()
+		_, localOK := local.Checkouts[marker.TaskID]
+		if hubErr != nil || localErr != nil || !localOK {
+			return p, GateError{"incomplete import: marker exists without both hub record and local checkout; run tt2 import --recover " + abs}
+		}
 		p.AlreadyImported = true
 		p.Handle = filepath.Base(abs)
 		p.Target = abs
 		return p, nil
 	}
-	if _, err := os.Stat(filepath.Join(abs, "Tasktree.yml")); os.IsNotExist(err) {
+	if _, err := os.Lstat(filepath.Join(abs, "Tasktree.yml")); os.IsNotExist(err) {
 		if _, legacy := os.Stat(filepath.Join(abs, ".tasktree.toml")); legacy == nil {
 			p.Refusals = append(p.Refusals, "legacy .tasktree.toml found; run V1 `tasktree migrate` first")
 			return p, nil
@@ -157,8 +195,8 @@ func (a App) PlanImport(ctx context.Context, root string, o ImportOptions) (Impo
 	if p.Handle == "" {
 		p.Handle = filepath.Base(abs)
 	}
-	if p.Handle == "" {
-		p.Refusals = append(p.Refusals, "could not derive handle; pass --handle")
+	if !handlePattern.MatchString(p.Handle) {
+		p.Refusals = append(p.Refusals, fmt.Sprintf("invalid handle %q (expected [A-Za-z0-9._-], max 64 characters)", p.Handle))
 	}
 	if a.Hub.IsSetup() {
 		docs, e := a.Hub.ReadAll()
@@ -184,14 +222,24 @@ func (a App) PlanImport(ctx context.Context, root string, o ImportOptions) (Impo
 		}
 	}
 	declared := map[string]bool{}
+	declaredSources := map[string]string{}
 	g := a.Git.WithDefaults()
 	for _, src := range s.Spec.Sources {
 		sp := ImportSourcePlan{Name: src.Name, Path: filepath.Clean(src.Path), Type: src.Type}
 		if src.Type == "git" {
 			declared[sp.Path] = true
+			if filepath.IsAbs(src.Name) || src.Name == ".." || strings.Contains(src.Name, "..") || !regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`).MatchString(src.Name) {
+				p.Refusals = append(p.Refusals, fmt.Sprintf("git source %s has invalid submodule name", src.Name))
+			}
 		}
 		full := filepath.Join(abs, sp.Path)
-		_, statErr := os.Lstat(full)
+		fullClean, _ := filepath.Abs(full)
+		if previous, duplicate := declaredSources[fullClean]; src.Type == "git" && duplicate {
+			p.Refusals = append(p.Refusals, fmt.Sprintf("git sources %s and %s use the same path", previous, src.Name))
+		} else if src.Type == "git" {
+			declaredSources[fullClean] = src.Name
+		}
+		info, statErr := os.Lstat(full)
 		sp.Present = statErr == nil
 		if statErr != nil && !os.IsNotExist(statErr) {
 			return p, statErr
@@ -200,7 +248,32 @@ func (a App) PlanImport(ctx context.Context, root string, o ImportOptions) (Impo
 			p.Warnings = append(p.Warnings, fmt.Sprintf("git source %s is missing and will not be added", src.Name))
 		}
 		if src.Type == "git" && sp.Present {
-			dot, e := os.Stat(filepath.Join(full, ".git"))
+			if info.Mode()&os.ModeSymlink != 0 {
+				p.Refusals = append(p.Refusals, fmt.Sprintf("git source %s is a symlink", src.Name))
+				p.Sources = append(p.Sources, sp)
+				continue
+			}
+			dot, e := os.Lstat(filepath.Join(full, ".git"))
+			if e != nil || !dot.IsDir() || dot.Mode()&os.ModeSymlink != 0 {
+				p.Refusals = append(p.Refusals, fmt.Sprintf("git source %s is not a standalone repository with a non-symlink .git directory", src.Name))
+				p.Sources = append(p.Sources, sp)
+				continue
+			}
+			if _, e := os.Stat(filepath.Join(full, ".gitmodules")); e == nil {
+				p.Refusals = append(p.Refusals, fmt.Sprintf("git source %s has submodules", src.Name))
+			}
+			if entries, e := os.ReadDir(filepath.Join(full, ".git", "modules")); e == nil && len(entries) > 0 {
+				p.Refusals = append(p.Refusals, fmt.Sprintf("git source %s has absorbed submodules", src.Name))
+			}
+			if entries, e := os.ReadDir(filepath.Join(full, ".git", "worktrees")); e == nil && len(entries) > 0 {
+				p.Refusals = append(p.Refusals, fmt.Sprintf("git source %s has linked worktrees", src.Name))
+			}
+			if _, e := os.Stat(filepath.Join(full, ".git", "sequencer")); e == nil {
+				p.Refusals = append(p.Refusals, fmt.Sprintf("git source %s has operation in progress (sequencer)", src.Name))
+			}
+			if _, _, e := git(ctx, g, full, "rev-parse", "--verify", "HEAD^{commit}"); e != nil {
+				p.Refusals = append(p.Refusals, fmt.Sprintf("git source %s has no commits", src.Name))
+			}
 			if e != nil || !dot.IsDir() {
 				p.Refusals = append(p.Refusals, fmt.Sprintf("git source %s is not a standalone repository with a .git directory", src.Name))
 				p.Sources = append(p.Sources, sp)
@@ -216,14 +289,20 @@ func (a App) PlanImport(ctx context.Context, root string, o ImportOptions) (Impo
 				p.Refusals = append(p.Refusals, fmt.Sprintf("git source %s has no origin remote", src.Name))
 			} else {
 				sp.URL = strings.TrimSpace(url)
+				if !filepath.IsAbs(sp.URL) && !strings.Contains(sp.URL, "://") && !regexp.MustCompile(`^[^/]+@[^:]+:`).MatchString(sp.URL) {
+					sp.URL = filepath.Clean(filepath.Join(full, sp.URL))
+				}
 			}
 			branch, _ := g.CurrentBranch(ctx, full)
 			sp.Branch = branch
 			if branch == "" {
 				sp.Mode = "pin"
 			} else {
-				def, _ := g.DefaultBranch(ctx, full)
-				if branch == def {
+				def, defErr := g.DefaultBranch(ctx, full)
+				if defErr != nil {
+					sp.Mode = "work"
+					p.Warnings = append(p.Warnings, fmt.Sprintf("git source %s has no origin default branch; using work mode", src.Name))
+				} else if branch == def {
 					sp.Mode = "follow"
 				} else {
 					sp.Mode = "work"
@@ -248,13 +327,16 @@ func (a App) PlanImport(ctx context.Context, root string, o ImportOptions) (Impo
 		rel, _ := filepath.Rel(abs, path)
 		rel = filepath.Clean(rel)
 		for x := range declared {
-			if rel == x {
+			if rel == x && d.IsDir() {
 				return filepath.SkipDir
 			}
 		}
-		if d.IsDir() && d.Name() == ".git" {
+		if d.Name() == ".git" {
 			p.Refusals = append(p.Refusals, fmt.Sprintf("undeclared nested git repository at %s", filepath.Dir(rel)))
-			return filepath.SkipDir
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
 		}
 		if d.Type()&os.ModeSymlink != 0 {
 			p.Symlinks = append(p.Symlinks, rel)
@@ -275,8 +357,44 @@ func (a App) PlanImport(ctx context.Context, root string, o ImportOptions) (Impo
 	}); err != nil {
 		return p, err
 	}
+	if p.RootBytes > 200*1024*1024 && !o.AllowLarge {
+		p.Refusals = append(p.Refusals, "root files total more than 200 MB; pass --allow-large")
+	}
+	// Absorption and the journal's Tasktree.yml rename must be atomic.
+	if err := requireSameFilesystem(abs, a.Home.Root); err != nil {
+		p.Refusals = append(p.Refusals, err.Error())
+	}
 	sort.Strings(p.Symlinks)
 	return p, nil
+}
+
+func requireSameFilesystem(a, b string) error {
+	findExisting := func(path string) (os.FileInfo, error) {
+		for {
+			info, err := os.Stat(path)
+			if err == nil {
+				return info, nil
+			}
+			if !os.IsNotExist(err) || filepath.Dir(path) == path {
+				return nil, err
+			}
+			path = filepath.Dir(path)
+		}
+	}
+	ai, err := findExisting(a)
+	if err != nil {
+		return err
+	}
+	bi, err := findExisting(b)
+	if err != nil {
+		return err
+	}
+	as, aok := ai.Sys().(*syscall.Stat_t)
+	bs, bok := bi.Sys().(*syscall.Stat_t)
+	if !aok || !bok || as.Dev != bs.Dev {
+		return fmt.Errorf("workspace and tasktree home are on different filesystems; atomic rename required")
+	}
+	return nil
 }
 
 func preflightMove(root, target string) error {
@@ -399,7 +517,7 @@ func rootSnapshot(root string, sources []ImportSourcePlan) (map[string]rootEntry
 		rel, _ := filepath.Rel(root, path)
 		rel = filepath.Clean(rel)
 		for x := range skip {
-			if rel == x {
+			if rel == x && d.IsDir() {
 				return filepath.SkipDir
 			}
 		}
@@ -462,6 +580,37 @@ func snapshotsEqual(a, b repoSnapshot, allowWorktree bool) error {
 	return nil
 }
 
+func writeImportJournal(dir string, j importJournal) error {
+	j.Step++
+	b, err := json.MarshalIndent(j, "", "  ")
+	if err != nil {
+		return err
+	}
+	return fsx.AtomicWriteFile(filepath.Join(dir, "journal.json"), append(b, '\n'), 0o600)
+}
+
+func journalFromState(st *importState, step int) importJournal {
+	j := importJournal{ID: st.id, Root: st.plan.Path, Handle: st.plan.Handle, Step: step, RootBefore: st.rootBefore, GeneratedOriginals: st.generatedOriginals, Starter: st.starter}
+	absorbed := map[string]bool{}
+	for _, s := range st.absorbed {
+		absorbed[s.Name] = true
+	}
+	for _, s := range st.plan.Sources {
+		if s.Type == "git" && s.Present {
+			state := "pending"
+			if absorbed[s.Name] {
+				state = "absorbed"
+			}
+			j.Repos = append(j.Repos, importJournalRepo{Name: s.Name, Path: s.Path, State: state, Before: snapshotJSON(st.before[s.Name])})
+		}
+	}
+	return j
+}
+
+func (st *importState) saveJournal(step int) error {
+	return writeImportJournal(st.journalDir, journalFromState(st, step))
+}
+
 func testImportFail(step int) error {
 	v := os.Getenv("TASKTREE_TEST_IMPORT_FAIL")
 	if v == strconv.Itoa(step) || v == fmt.Sprintf("step-%d", step) {
@@ -471,6 +620,11 @@ func testImportFail(step int) error {
 }
 
 func (a App) Import(ctx context.Context, root string, o ImportOptions) (res ImportResult, err error) {
+	unlock, err := lockImport(ctx, a.Home)
+	if err != nil {
+		return res, err
+	}
+	defer unlock()
 	p, err := a.PlanImport(ctx, root, o)
 	res.Plan = p
 	if err != nil {
@@ -501,6 +655,10 @@ func (a App) Import(ctx context.Context, root string, o ImportOptions) (res Impo
 	if err != nil {
 		return res, err
 	}
+	task, doc, name, machine, err := a.buildImportRecord(p, o, id)
+	if err != nil {
+		return res, err
+	}
 	st := &importState{plan: p, id: id, before: map[string]repoSnapshot{}, generatedOriginals: map[string][]byte{}}
 	for _, rel := range []string{".gitmodules", filepath.Join(".tasktree", ".gitignore")} {
 		if b, e := os.ReadFile(filepath.Join(p.Path, rel)); e == nil {
@@ -522,6 +680,17 @@ func (a App) Import(ctx context.Context, root string, o ImportOptions) (res Impo
 	if err = testImportFail(1); err != nil {
 		return res, err
 	}
+	st.journalDir = filepath.Join(a.Home.Root, "imports", id)
+	if err = os.MkdirAll(st.journalDir, 0o700); err != nil {
+		return res, err
+	}
+	if err = st.saveJournal(1); err != nil {
+		return res, err
+	}
+	// Preserve the exact V1 manifest by atomic rename; rollback/recovery moves it back.
+	if err = os.Rename(filepath.Join(p.Path, "Tasktree.yml"), filepath.Join(st.journalDir, "Tasktree.yml")); err != nil {
+		return res, err
+	}
 	started := true
 	defer func() {
 		if err != nil && started {
@@ -536,10 +705,11 @@ func (a App) Import(ctx context.Context, root string, o ImportOptions) (res Impo
 	if err = os.MkdirAll(a.Home.ClonesPath(), 0755); err != nil {
 		return
 	}
-	_, _, err = a.Git.Run(ctx, p.Path, rootEnv(a.Home, id, p.Path), "init")
+	_, _, err = a.Git.Run(ctx, p.Path, rootEnv(a.Home, id, p.Path), "init", "--template=")
 	if err != nil {
 		return
 	}
+	_, _, _ = a.Git.Run(ctx, "", nil, "config", "--file", filepath.Join(a.Home.ClonePath(id), "config"), "--unset-all", "core.worktree")
 	_, _, err = rootGitInit(ctx, a.Git, a.Home, id, p.Path, "checkout", "--orphan", "task/"+id)
 	if err != nil {
 		return
@@ -561,7 +731,10 @@ func (a App) Import(ctx context.Context, root string, o ImportOptions) (res Impo
 		if s.Type != "git" || !s.Present {
 			continue
 		}
-		_, _, err = rootGitInit(ctx, a.Git, a.Home, id, p.Path, "-c", "protocol.file.allow=always", "submodule", "add", "--force", s.URL, s.Path)
+		if err = recheckAbsorbPreflight(p.Path, s); err != nil {
+			return
+		}
+		_, _, err = rootGitInit(ctx, a.Git, a.Home, id, p.Path, "-c", "protocol.file.allow=always", "submodule", "add", "--name", s.Name, "--force", s.URL, s.Path)
 		if err != nil {
 			return
 		}
@@ -572,6 +745,9 @@ func (a App) Import(ctx context.Context, root string, o ImportOptions) (res Impo
 			return
 		}
 		if err = rewriteSubmodule(a.Home, id, p.Path, module{Name: s.Name, Path: s.Path}); err != nil {
+			return
+		}
+		if err = st.saveJournal(3); err != nil {
 			return
 		}
 		gm := filepath.Join(p.Path, ".gitmodules")
@@ -589,7 +765,7 @@ func (a App) Import(ctx context.Context, root string, o ImportOptions) (res Impo
 	if err = testImportFail(3); err != nil {
 		return
 	}
-	if _, e := os.Stat(filepath.Join(p.Path, "AGENTS.md")); os.IsNotExist(e) {
+	if _, e := os.Lstat(filepath.Join(p.Path, "AGENTS.md")); os.IsNotExist(e) {
 		t := record.Task{ID: id, Handle: p.Handle, Title: p.spec.Metadata.Name}
 		if t.Title == "" {
 			t.Title = filepath.Base(p.Path)
@@ -600,10 +776,10 @@ func (a App) Import(ctx context.Context, root string, o ImportOptions) (res Impo
 			return
 		}
 	}
-	if err = testImportFail(4); err != nil {
+	if err = st.saveJournal(4); err != nil {
 		return
 	}
-	if err = os.Remove(filepath.Join(p.Path, "Tasktree.yml")); err != nil {
+	if err = testImportFail(4); err != nil {
 		return
 	}
 	if err = os.MkdirAll(filepath.Join(p.Path, ".tasktree"), 0755); err != nil {
@@ -620,19 +796,10 @@ func (a App) Import(ctx context.Context, root string, o ImportOptions) (res Impo
 	if err != nil {
 		return
 	}
-	cfg, _ := a.Home.LoadConfig()
-	name := cfg.Author
-	if name == "" {
-		name = "tasktree"
-	}
-	machine := cfg.Machine
-	if machine == "" {
-		machine = "localhost"
-	}
 	env := rootEnv(a.Home, id, p.Path)
 	env["GIT_AUTHOR_NAME"], env["GIT_COMMITTER_NAME"] = name, name
 	env["GIT_AUTHOR_EMAIL"], env["GIT_COMMITTER_EMAIL"] = name+"@"+machine, name+"@"+machine
-	_, _, err = a.Git.Run(ctx, p.Path, env, "commit", "-m", fmt.Sprintf("tasktree(%s): import from V1", id))
+	_, _, err = a.Git.Run(ctx, p.Path, env, "-c", "commit.gpgsign=false", "commit", "--no-verify", "-m", fmt.Sprintf("tasktree(%s): import from V1", id))
 	if err != nil {
 		return
 	}
@@ -655,48 +822,22 @@ func (a App) Import(ctx context.Context, root string, o ImportOptions) (res Impo
 	if err != nil {
 		return
 	}
-	title := p.spec.Metadata.Name
-	if title == "" {
-		title = filepath.Base(p.Path)
-	}
-	created := p.spec.Metadata.CreatedAt
-	if created.IsZero() {
-		created = a.Now().UTC()
-	}
-	labels := make([]string, 0, len(p.spec.Metadata.Labels))
-	for k := range p.spec.Metadata.Labels {
-		labels = append(labels, k)
-	}
-	sort.Strings(labels)
-	refs := importRefs(p.spec.Metadata.Annotations)
-	task := record.Task{ID: id, Handle: p.Handle, Title: title, Status: o.Status, Labels: labels, Refs: refs, CreatedAt: created, UpdatedAt: a.Now().UTC(), Description: p.spec.Metadata.Description}
-	doc, e := record.New(task)
-	if e != nil {
-		err = e
-		return
-	}
-	entryID, e := record.NewID()
-	if e != nil {
-		err = e
-		return
-	}
-	body := "Imported from V1\n\n```yaml\n" + strings.TrimRight(string(p.specBytes), "\n") + "\n```"
-	if len(p.Warnings) > 0 {
-		body += "\n\nWarnings:\n- " + strings.Join(p.Warnings, "\n- ")
-	}
-	if e = doc.Append(record.Entry{ID: entryID, Timestamp: a.Now().UTC(), Kind: "note", Author: name, Machine: machine, Body: body}); e != nil {
-		err = e
-		return
-	}
 	if err = a.Hub.Create(ctx, doc, "import from V1", name, machine); err != nil {
 		return
 	}
+	// Hub.Create is authoritative. From here recovery completes local state; never
+	// roll the live workspace back underneath the committed record.
+	started = false
 	finalPath := p.Path
 	if err = a.Home.UpdateLocal(func(s *home.LocalState) error { s.Checkouts[id] = home.Checkout{Path: finalPath}; return nil }); err != nil {
+		err = fmt.Errorf("record created but local.yml update failed: %w; run tt2 import --recover %s", err, p.Path)
 		return
 	}
-	started = false
+	if err = st.saveJournal(9); err != nil {
+		return
+	}
 	if o.Move && p.Target != p.Path {
+		var e error
 		if err = testImportFail(9); err != nil {
 			return
 		}
@@ -717,29 +858,137 @@ func (a App) Import(ctx context.Context, root string, o ImportOptions) (res Impo
 		moved := true
 		for _, s := range st.absorbed {
 			if e = rewriteSubmodule(a.Home, id, p.Target, module{Name: s.Name, Path: s.Path}); e != nil {
-				_ = os.Rename(p.Target, p.Path)
+				renameErr := os.Rename(p.Target, p.Path)
 				for _, x := range st.absorbed {
 					_ = rewriteSubmodule(a.Home, id, p.Path, module{Name: x.Name, Path: x.Path})
 				}
-				err = e
+				if renameErr != nil {
+					err = fmt.Errorf("rewrite after move: %v; rename back %s to %s: %w", e, p.Target, p.Path, renameErr)
+				} else {
+					err = e
+				}
 				return
 			}
 		}
+		_, _, _ = a.Git.Run(ctx, "", nil, "config", "--file", filepath.Join(a.Home.ClonePath(id), "config"), "--unset-all", "core.worktree")
+		oldPath := st.plan.Path
+		st.plan.Path = p.Target
+		if e = a.verifyImport(ctx, st); e != nil {
+			renameErr := os.Rename(p.Target, p.Path)
+			st.plan.Path = oldPath
+			for _, x := range st.absorbed {
+				_ = rewriteSubmodule(a.Home, id, p.Path, module{Name: x.Name, Path: x.Path})
+			}
+			if renameErr != nil {
+				err = fmt.Errorf("verify after move: %v; rename back %s to %s: %w", e, p.Target, p.Path, renameErr)
+			} else {
+				err = fmt.Errorf("verify after move: %w", e)
+			}
+			return
+		}
 		if e = a.Home.UpdateLocal(func(ls *home.LocalState) error { ls.Checkouts[id] = home.Checkout{Path: p.Target}; return nil }); e != nil {
+			var renameErr error
 			if moved {
-				_ = os.Rename(p.Target, p.Path)
+				renameErr = os.Rename(p.Target, p.Path)
 			}
 			for _, x := range st.absorbed {
 				_ = rewriteSubmodule(a.Home, id, p.Path, module{Name: x.Name, Path: x.Path})
 			}
-			err = e
+			if renameErr != nil {
+				err = fmt.Errorf("update local.yml: %v; rename back %s to %s: %w", e, p.Target, p.Path, renameErr)
+			} else {
+				err = e
+			}
 			return
 		}
 		finalPath = p.Target
 	}
+	if err = os.RemoveAll(st.journalDir); err != nil {
+		return
+	}
 	res.Task = task
 	res.Path = finalPath
 	return res, nil
+}
+
+func (a App) buildImportRecord(p ImportPlan, o ImportOptions, id string) (record.Task, *record.Document, string, string, error) {
+	cfg, err := a.Home.LoadConfig()
+	if err != nil {
+		return record.Task{}, nil, "", "", err
+	}
+	name, machine := cfg.Author, cfg.Machine
+	if name == "" {
+		name = "tasktree"
+	}
+	if machine == "" {
+		machine = "localhost"
+	}
+	title := p.spec.Metadata.Name
+	if title == "" {
+		title = filepath.Base(p.Path)
+	}
+	created := p.spec.Metadata.CreatedAt
+	if created.IsZero() {
+		created = a.Now().UTC()
+	}
+	labels := make([]string, 0, len(p.spec.Metadata.Labels))
+	for k := range p.spec.Metadata.Labels {
+		labels = append(labels, k)
+	}
+	sort.Strings(labels)
+	task := record.Task{ID: id, Handle: p.Handle, Title: title, Status: o.Status, Labels: labels, Refs: importRefs(p.spec.Metadata.Annotations), CreatedAt: created, UpdatedAt: a.Now().UTC(), Description: p.spec.Metadata.Description}
+	doc, err := record.New(task)
+	if err != nil {
+		return task, nil, name, machine, err
+	}
+	entryID, err := record.NewID()
+	if err != nil {
+		return task, nil, name, machine, err
+	}
+	body := "Imported from V1\n\n```yaml\n" + strings.TrimRight(string(p.specBytes), "\n") + "\n```"
+	if len(p.Warnings) > 0 {
+		body += "\n\nWarnings:\n- " + strings.Join(p.Warnings, "\n- ")
+	}
+	if err = doc.Append(record.Entry{ID: entryID, Timestamp: a.Now().UTC(), Kind: "note", Author: name, Machine: machine, Body: body}); err != nil {
+		return task, nil, name, machine, err
+	}
+	return task, doc, name, machine, nil
+}
+
+func lockImport(ctx context.Context, h home.Home) (func(), error) {
+	if err := os.MkdirAll(h.Root, 0o755); err != nil {
+		return nil, err
+	}
+	f, err := os.OpenFile(filepath.Join(h.Root, "imports.lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	for {
+		err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		if err == nil {
+			return func() { _ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN); _ = f.Close() }, nil
+		}
+		if err != syscall.EWOULDBLOCK && err != syscall.EAGAIN {
+			_ = f.Close()
+			return nil, err
+		}
+		select {
+		case <-ctx.Done():
+			_ = f.Close()
+			return nil, ctx.Err()
+		case <-time.After(25 * time.Millisecond):
+		}
+	}
+}
+
+func recheckAbsorbPreflight(root string, s ImportSourcePlan) error {
+	gitDir := filepath.Join(root, s.Path, ".git")
+	for _, marker := range []string{"rebase-merge", "rebase-apply", "MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "BISECT_LOG", "index.lock", "sequencer"} {
+		if _, err := os.Lstat(filepath.Join(gitDir, marker)); err == nil {
+			return fmt.Errorf("git source %s has operation in progress (%s)", s.Name, marker)
+		}
+	}
+	return nil
 }
 
 func importRefs(a map[string]string) []record.Ref {
@@ -762,7 +1011,26 @@ func importRefs(a map[string]string) []record.Ref {
 }
 
 func (a App) verifyImport(ctx context.Context, st *importState) error {
+	mods, err := modules(st.plan.Path)
+	if err != nil {
+		return err
+	}
+	if len(mods) != len(st.absorbed) {
+		return fmt.Errorf(".gitmodules has %d sections, expected %d", len(mods), len(st.absorbed))
+	}
+	byName := map[string]module{}
+	for _, m := range mods {
+		byName[m.Name] = m
+	}
 	for _, s := range st.absorbed {
+		m, ok := byName[s.Name]
+		if !ok || m.Path != s.Path || m.URL != s.URL || m.Mode != s.Mode {
+			return fmt.Errorf(".gitmodules entry %s does not match import plan", s.Name)
+		}
+		entry, _, e := rootGit(ctx, a.Git, a.Home, st.id, st.plan.Path, "ls-files", "--stage", "--", s.Path)
+		if e != nil || !strings.HasPrefix(strings.TrimSpace(entry), "160000 "+strings.TrimSpace(st.before[s.Name].Head)+" ") {
+			return fmt.Errorf("gitlink %s does not match before HEAD", s.Name)
+		}
 		after, e := snapshotRepo(ctx, a, filepath.Join(st.plan.Path, s.Path))
 		if e != nil {
 			return e
@@ -785,11 +1053,26 @@ func (a App) verifyImport(ctx context.Context, st *importState) error {
 			return fmt.Errorf("root path %s changed during import", path)
 		}
 	}
+	for path := range after {
+		if _, existed := st.rootBefore[path]; existed {
+			continue
+		}
+		if path == ".gitmodules" || path == ".tasktree" || strings.HasPrefix(path, ".tasktree"+string(filepath.Separator)) || (path == "AGENTS.md" && st.starter) {
+			continue
+		}
+		return fmt.Errorf("unexpected new root path %s during import", path)
+	}
 	return nil
 }
 
 func (a App) rollbackImport(ctx context.Context, st *importState) error {
+	ctx = context.WithoutCancel(ctx)
 	var problems []string
+	// The orphan branch may already have reached the hub even when a later step
+	// failed before record creation.
+	if a.Hub.IsSetup() {
+		_, _, _ = a.Git.Run(ctx, a.Home.GitPath(), nil, "update-ref", "-d", "refs/heads/task/"+st.id)
+	}
 	for i := len(st.absorbed) - 1; i >= 0; i-- {
 		s := st.absorbed[i]
 		src := filepath.Join(a.Home.ClonePath(st.id), "modules", s.Name)
@@ -828,15 +1111,29 @@ func (a App) rollbackImport(ctx context.Context, st *importState) error {
 		_ = os.Remove(filepath.Join(st.plan.Path, "AGENTS.md"))
 	}
 	tasktreePath := filepath.Join(st.plan.Path, "Tasktree.yml")
-	if e := os.WriteFile(tasktreePath, st.plan.specBytes, 0644); e != nil {
-		problems = append(problems, e.Error())
-	} else if original, ok := st.rootBefore["Tasktree.yml"]; ok {
-		_ = os.Chmod(tasktreePath, original.Mode.Perm())
-		when := time.Unix(0, original.Mtime)
-		_ = os.Chtimes(tasktreePath, when, when)
+	journalManifest := filepath.Join(st.journalDir, "Tasktree.yml")
+	if _, statErr := os.Lstat(journalManifest); statErr == nil {
+		_ = os.Remove(tasktreePath)
+		if e := os.Rename(journalManifest, tasktreePath); e != nil {
+			problems = append(problems, "restore Tasktree.yml: "+e.Error())
+		}
+	} else if _, existingErr := os.Lstat(tasktreePath); existingErr != nil {
+		problems = append(problems, fmt.Sprintf("cannot locate preserved Tasktree.yml at %s", journalManifest))
 	}
-	if e := os.RemoveAll(a.Home.ClonePath(st.id)); e != nil {
-		problems = append(problems, e.Error())
+	clone := a.Home.ClonePath(st.id)
+	if len(problems) == 0 {
+		if e := os.RemoveAll(clone); e != nil {
+			problems = append(problems, e.Error())
+		}
+	} else if _, e := os.Lstat(clone); e == nil {
+		quarantine := filepath.Join(a.Home.Root, "imports", st.id, "quarantine-clone")
+		if mkErr := os.MkdirAll(filepath.Dir(quarantine), 0o755); mkErr != nil {
+			problems = append(problems, "create quarantine: "+mkErr.Error())
+		} else if renameErr := os.Rename(clone, quarantine); renameErr != nil {
+			problems = append(problems, "quarantine clone: "+renameErr.Error())
+		} else {
+			problems = append(problems, fmt.Sprintf("clone quarantined at %s; recover each repository by moving %s/modules/<name> to %s/<repo-path>/.git", quarantine, quarantine, st.plan.Path))
+		}
 	}
 	for _, s := range st.plan.Sources {
 		if s.Type != "git" || !s.Present {
@@ -869,7 +1166,72 @@ func (a App) rollbackImport(ctx context.Context, st *importState) error {
 	if len(problems) > 0 {
 		return fmt.Errorf("%s; preserve the workspace and manually move any remaining %s/modules/<name> directories back to each source's .git directory", strings.Join(problems, "; "), a.Home.ClonePath(st.id))
 	}
+	if st.journalDir != "" {
+		if e := os.RemoveAll(st.journalDir); e != nil {
+			return e
+		}
+	}
 	return nil
+}
+
+// RecoverImport completes local state after record creation, or restores the
+// exact V1 workspace described by its durable journal.
+func (a App) RecoverImport(ctx context.Context, root string) (string, error) {
+	unlock, err := lockImport(ctx, a.Home)
+	if err != nil {
+		return "", err
+	}
+	defer unlock()
+	abs, err := filepath.Abs(root)
+	if err != nil {
+		return "", err
+	}
+	base := filepath.Join(a.Home.Root, "imports")
+	entries, err := os.ReadDir(base)
+	if err != nil {
+		return "", fmt.Errorf("no import journal for %s", abs)
+	}
+	var j importJournal
+	var dir string
+	for _, entry := range entries {
+		b, e := os.ReadFile(filepath.Join(base, entry.Name(), "journal.json"))
+		if e != nil {
+			continue
+		}
+		var candidate importJournal
+		if json.Unmarshal(b, &candidate) == nil && candidate.Root == abs {
+			j, dir = candidate, filepath.Join(base, entry.Name())
+			break
+		}
+	}
+	if dir == "" {
+		return "", fmt.Errorf("no import journal for %s", abs)
+	}
+	if _, e := a.Hub.Read(j.ID); e == nil {
+		if e = a.Home.UpdateLocal(func(s *home.LocalState) error { s.Checkouts[j.ID] = home.Checkout{Path: abs}; return nil }); e != nil {
+			return "", e
+		}
+		if e = os.RemoveAll(dir); e != nil {
+			return "", e
+		}
+		return fmt.Sprintf("repaired local.yml for %s (%s)", j.Handle, j.ID), nil
+	}
+	st := &importState{id: j.ID, journalDir: dir, rootBefore: j.RootBefore, generatedOriginals: j.GeneratedOriginals, before: map[string]repoSnapshot{}}
+	st.plan = ImportPlan{Path: j.Root, Handle: j.Handle}
+	for _, r := range j.Repos {
+		s := ImportSourcePlan{Name: r.Name, Path: r.Path, Type: "git", Present: true}
+		st.plan.Sources = append(st.plan.Sources, s)
+		st.before[r.Name] = r.Before.snapshot()
+		moduleDir := filepath.Join(a.Home.ClonePath(j.ID), "modules", r.Name)
+		if _, e := os.Lstat(moduleDir); e == nil || r.State == "absorbed" {
+			st.absorbed = append(st.absorbed, s)
+		}
+	}
+	st.starter = j.Starter
+	if err = a.rollbackImport(context.WithoutCancel(ctx), st); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("restored V1 workspace exactly at %s", abs), nil
 }
 
 // ReadV1Registry reads only the ordered path entries needed by import --all.

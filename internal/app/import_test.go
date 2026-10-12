@@ -181,6 +181,80 @@ func TestImportDryRunRollbackAndSuccess(t *testing.T) {
 	}
 }
 
+func TestImportUsesDeclaredNameForNestedPath(t *testing.T) {
+	a, root := importFixture(t)
+	if err := os.MkdirAll(filepath.Join(root, "a"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(filepath.Join(root, "repo"), filepath.Join(root, "a", "b")); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(filepath.Join(root, "Tasktree.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec := strings.Replace(string(b), "- name: repo\n      type: git", "- name: logical-name\n      path: a/b\n      type: git", 1)
+	if err := os.WriteFile(filepath.Join(root, "Tasktree.yml"), []byte(spec), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r, err := a.Import(context.Background(), root, ImportOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	gm := filepath.Join(root, ".gitmodules")
+	if got := importGit(t, root, "config", "-f", gm, "--get", "submodule.logical-name.path"); got != "a/b" {
+		t.Fatalf("path = %q", got)
+	}
+	if _, err := os.Stat(filepath.Join(a.Home.ClonePath(r.Task.ID), "modules", "logical-name", "HEAD")); err != nil {
+		t.Fatalf("named module missing: %v", err)
+	}
+}
+
+func TestImportPreflightRefusesUnsafeRepositories(t *testing.T) {
+	t.Run("symlink source", func(t *testing.T) {
+		a, root := importFixture(t)
+		if err := os.Rename(filepath.Join(root, "repo"), filepath.Join(root, "actual")); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink("actual", filepath.Join(root, "repo")); err != nil {
+			t.Fatal(err)
+		}
+		p, err := a.PlanImport(context.Background(), root, ImportOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(strings.Join(p.Refusals, "\n"), "is a symlink") {
+			t.Fatalf("refusals = %v", p.Refusals)
+		}
+	})
+	t.Run("submodules", func(t *testing.T) {
+		a, root := importFixture(t)
+		if err := os.WriteFile(filepath.Join(root, "repo", ".gitmodules"), []byte("[submodule \\\"x\\\"]\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		p, err := a.PlanImport(context.Background(), root, ImportOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(strings.Join(p.Refusals, "\n"), "has submodules") {
+			t.Fatalf("refusals = %v", p.Refusals)
+		}
+	})
+	t.Run("linked worktrees", func(t *testing.T) {
+		a, root := importFixture(t)
+		if err := os.MkdirAll(filepath.Join(root, "repo", ".git", "worktrees", "other"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		p, err := a.PlanImport(context.Background(), root, ImportOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(strings.Join(p.Refusals, "\n"), "linked worktrees") {
+			t.Fatalf("refusals = %v", p.Refusals)
+		}
+	})
+}
+
 func TestReadV1RegistryOrder(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "registry.toml")
 	if err := os.WriteFile(p, []byte("version = 1\n[[tasktrees]]\npath = '/one'\nname = 'one'\nadded_at = '2025-01-02T03:04:05Z'\n[[tasktrees]]\npath = '/two'\n"), 0o644); err != nil {

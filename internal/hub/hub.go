@@ -51,7 +51,7 @@ func (h Hub) Init(ctx context.Context, author, machine string) error {
 	if err := os.MkdirAll(h.Path, 0o755); err != nil {
 		return err
 	}
-	if _, _, err := h.Git.Run(ctx, "", nil, "init", "-b", "main", h.Path); err != nil {
+	if _, _, err := h.Git.Run(ctx, "", nil, "init", "--template=", "-b", "main", h.Path); err != nil {
 		return fmt.Errorf("initialize hub: %w", err)
 	}
 	if err := os.MkdirAll(filepath.Join(h.Path, "tasks"), 0o755); err != nil {
@@ -325,7 +325,7 @@ func (h Hub) commit(ctx context.Context, message, author, machine string) error 
 		env["GIT_AUTHOR_EMAIL"] = author + "@" + machine
 		env["GIT_COMMITTER_EMAIL"] = author + "@" + machine
 	}
-	_, _, err := h.Git.Run(ctx, h.Path, env, "commit", "-m", message)
+	_, _, err := h.Git.Run(ctx, h.Path, env, "-c", "commit.gpgsign=false", "commit", "--no-verify", "-m", message)
 	return err
 }
 func (h Hub) withLock(ctx context.Context, fn func() error) error {

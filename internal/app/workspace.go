@@ -474,7 +474,7 @@ func (a App) Open(ctx context.Context, ref string, o OpenOptions, progress inter
 			_, _, err = rootGit(ctx, g, a.Home, t.ID, path, "add", "-A")
 		}
 		if err == nil {
-			_, _, err = rootGit(ctx, g, a.Home, t.ID, path, "commit", "-m", fmt.Sprintf("tasktree(%s): create", t.ID))
+			_, _, err = rootGit(ctx, g, a.Home, t.ID, path, "-c", "commit.gpgsign=false", "commit", "--no-verify", "-m", fmt.Sprintf("tasktree(%s): create", t.ID))
 		}
 		if err == nil {
 			_, _, err = rootGit(ctx, g, a.Home, t.ID, path, "push", "-u", "origin", branch)
@@ -655,7 +655,7 @@ func rewriteSubmodule(h home.Home, id, root string, m module) error {
 		return err
 	}
 	g := gitx.NewClient()
-	_, _, err := g.Run(context.Background(), "", nil, "--git-dir", gitdir, "config", "core.worktree", filepath.Join(root, m.Path))
+	_, _, err := g.Run(context.Background(), "", nil, "config", "--file", filepath.Join(gitdir, "config"), "core.worktree", filepath.Join(root, m.Path))
 	return err
 }
 
@@ -885,7 +885,7 @@ func (a App) commitRoot(ctx context.Context, id, root, msg string) error {
 	if _, _, e := rootGit(ctx, g, a.Home, id, root, "add", "-A"); e != nil {
 		return e
 	}
-	if _, _, e := rootGit(ctx, g, a.Home, id, root, "commit", "-m", msg); e != nil {
+	if _, _, e := rootGit(ctx, g, a.Home, id, root, "-c", "commit.gpgsign=false", "commit", "--no-verify", "-m", msg); e != nil {
 		return e
 	}
 	_, _, e := rootGit(ctx, g, a.Home, id, root, "push", "origin", "task/"+id)
@@ -919,7 +919,7 @@ func (a App) Commit(ctx context.Context, id, root, msg string) (bool, []string, 
 	if msg == "" {
 		msg = fmt.Sprintf("tasktree(%s): checkpoint", id)
 	}
-	if _, _, e = rootGit(ctx, g, a.Home, id, root, "commit", "-m", msg); e != nil {
+	if _, _, e = rootGit(ctx, g, a.Home, id, root, "-c", "commit.gpgsign=false", "commit", "--no-verify", "-m", msg); e != nil {
 		return false, warnings, e
 	}
 	_, _, e = rootGit(ctx, g, a.Home, id, root, "push", "origin", "task/"+id)
@@ -1595,7 +1595,7 @@ func (a App) openIsolated(ctx context.Context, t record.Task, o OpenOptions, pro
 	if _, _, err = rootGit(ctx, g, a.Home, t.ID, path, "add", "-A"); err != nil {
 		return "", err
 	}
-	if _, _, err = rootGit(ctx, g, a.Home, t.ID, path, "commit", "-m", fmt.Sprintf("tasktree(%s): fork from %s", t.ID, parent.Handle)); err != nil {
+	if _, _, err = rootGit(ctx, g, a.Home, t.ID, path, "-c", "commit.gpgsign=false", "commit", "--no-verify", "-m", fmt.Sprintf("tasktree(%s): fork from %s", t.ID, parent.Handle)); err != nil {
 		return "", err
 	}
 	if _, _, err = rootGit(ctx, g, a.Home, t.ID, path, "push", "-u", "origin", taskBranch); err != nil {

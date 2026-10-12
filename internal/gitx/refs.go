@@ -28,12 +28,15 @@ func (c Client) RemoteSetURL(ctx context.Context, repoPath, remoteName, repoURL 
 
 func (c Client) DefaultBranch(ctx context.Context, repoPath string) (string, error) {
 	stdout, _, err := c.run(ctx, "-C", repoPath, "symbolic-ref", "--short", "refs/remotes/origin/HEAD")
-	if err != nil {
-		return "", err
+	if err == nil {
+		return strings.TrimPrefix(trimOutput(stdout), "origin/"), nil
 	}
-	branch := trimOutput(stdout)
-	branch = strings.TrimPrefix(branch, "origin/")
-	return branch, nil
+	for _, branch := range []string{"main", "master"} {
+		if _, _, e := c.run(ctx, "-C", repoPath, "show-ref", "--verify", "--quiet", "refs/remotes/origin/"+branch); e == nil {
+			return branch, nil
+		}
+	}
+	return "", fmt.Errorf("origin default branch is unknown")
 }
 
 func (c Client) Checkout(ctx context.Context, repoPath, ref string) error {

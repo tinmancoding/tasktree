@@ -1002,8 +1002,11 @@ func pushCmd(o *options) *cobra.Command {
 
 func importCmd(o *options) *cobra.Command {
 	var x app.ImportOptions
-	var all bool
+	var all, recoverImport bool
 	c := &cobra.Command{Use: "import <v1-path>", Short: "Import V1 workspaces without recloning repositories", Args: func(cmd *cobra.Command, args []string) error {
+		if recoverImport && (all || len(args) != 1) {
+			return usageError{"tt2 import --recover accepts exactly one path and cannot be combined with --all"}
+		}
 		if all && len(args) != 0 {
 			return usageError{"tt2 import --all accepts no path"}
 		}
@@ -1018,6 +1021,13 @@ func importCmd(o *options) *cobra.Command {
 		a, err := o.application()
 		if err != nil {
 			return err
+		}
+		if recoverImport {
+			message, e := a.RecoverImport(cmd.Context(), args[0])
+			if e == nil {
+				fmt.Fprintln(o.out, message)
+			}
+			return e
 		}
 		paths := args
 		if all {
@@ -1050,6 +1060,12 @@ func importCmd(o *options) *cobra.Command {
 				if !all {
 					return e
 				}
+				// Refusals are safe to skip; an operational failure may have left a
+				// journal and must stop the batch immediately.
+				if !errors.As(e, &gate) {
+					fmt.Fprintf(o.out, "summary: imported=%d refused=%d failed=%d skipped=%d\n", imported, refused, failed, skipped)
+					return fmt.Errorf("import stopped after failure: %w", e)
+				}
 				continue
 			}
 			if result.Skipped {
@@ -1060,6 +1076,9 @@ func importCmd(o *options) *cobra.Command {
 			} else {
 				imported++
 				fmt.Fprintf(o.out, "imported %s as %s (%s)\n", path, result.Task.Handle, result.Task.ID)
+				if x.Move {
+					fmt.Fprintln(o.out, "workspace moved; existing shells keep their old $PWD — cd to", result.Path)
+				}
 				fmt.Fprintln(o.out, "V1 registry unchanged; run `tasktree prune` to drop its entry")
 			}
 		}
@@ -1075,6 +1094,7 @@ func importCmd(o *options) *cobra.Command {
 		return nil
 	}}
 	c.Flags().BoolVar(&all, "all", false, "import all entries from the V1 registry")
+	c.Flags().BoolVar(&recoverImport, "recover", false, "recover an interrupted import from its journal")
 	c.Flags().StringVar(&x.Handle, "handle", "", "V2 task handle")
 	c.Flags().StringVar(&x.Status, "status", "", "V2 task status (default active)")
 	c.Flags().BoolVar(&x.Move, "move", false, "atomically move under tasksRoot after import")
