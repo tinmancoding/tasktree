@@ -27,6 +27,11 @@ type Ref struct {
 	Value string `json:"value"`
 }
 
+type Progress struct {
+	Closed int `json:"closed"`
+	Total  int `json:"total"`
+}
+
 func (r Ref) MarshalYAML() (any, error) { return map[string]string{r.Type: r.Value}, nil }
 
 type Entry struct {
@@ -49,6 +54,8 @@ type Task struct {
 	UpdatedAt   time.Time `json:"updatedAt"`
 	Description string    `json:"description"`
 	Log         []Entry   `json:"log"`
+	// Progress is a derived display field and is never persisted in frontmatter.
+	Progress *Progress `json:"progress,omitempty"`
 }
 type Document struct {
 	Task     Task
@@ -265,6 +272,143 @@ func New(t Task) (*Document, error) {
 	return parsed, nil
 }
 func (d *Document) Render() []byte { return append([]byte(nil), d.raw...) }
+func (d *Document) SetDescription(description string, at time.Time) error {
+	if err := ValidateDescription(description); err != nil {
+		return err
+	}
+	crlf := bytes.Contains(d.raw, []byte("\r\n"))
+	raw := bytes.ReplaceAll(d.raw, []byte("\r\n"), []byte("\n"))
+	body := raw[d.frontEnd:]
+	desc := descriptionH2.FindIndex(body)
+	log := logH2.FindIndex(body)
+	if desc == nil || log == nil || log[0] < desc[0] {
+		return fmt.Errorf("record must contain Description then Log")
+	}
+	value := strings.ReplaceAll(description, "\r\n", "\n")
+	candidate := append([]byte(nil), raw[:d.frontEnd+desc[1]]...)
+	candidate = append(candidate, []byte("\n\n"+value)...)
+	if value != "" {
+		candidate = append(candidate, '\n')
+	}
+	candidate = append(candidate, '\n')
+	candidate = append(candidate, raw[d.frontEnd+log[0]:]...)
+	candidate = replaceFront(candidate, "updatedAt", at.UTC().Format(time.RFC3339))
+	if crlf {
+		candidate = bytes.ReplaceAll(candidate, []byte("\n"), []byte("\r\n"))
+	}
+	parsed, err := Parse(candidate)
+	if err != nil {
+		return fmt.Errorf("rendered record is invalid: %w", err)
+	}
+	d.raw, d.Task = candidate, parsed.Task
+	return nil
+}
+
+// SetFrontString updates one typed frontmatter scalar while preserving unknown
+// frontmatter and all non-frontmatter content.
+func (d *Document) SetFrontString(key, value string, at time.Time) error {
+	encoded, err := yaml.Marshal(value)
+	if err != nil {
+		return err
+	}
+	candidate := replaceFront(d.raw, key, strings.TrimSpace(string(encoded)))
+	candidate = replaceFront(candidate, "updatedAt", at.UTC().Format(time.RFC3339))
+	parsed, err := Parse(candidate)
+	if err != nil {
+		return fmt.Errorf("rendered record is invalid: %w", err)
+	}
+	d.raw, d.Task = candidate, parsed.Task
+	return nil
+}
+
+func (d *Document) SetParent(parent *string, at time.Time) error {
+	value := "null"
+	if parent != nil {
+		encoded, err := yaml.Marshal(*parent)
+		if err != nil {
+			return err
+		}
+		value = strings.TrimSpace(string(encoded))
+	}
+	candidate := replaceFront(d.raw, "parent", value)
+	candidate = replaceFront(candidate, "updatedAt", at.UTC().Format(time.RFC3339))
+	parsed, err := Parse(candidate)
+	if err != nil {
+		return fmt.Errorf("rendered record is invalid: %w", err)
+	}
+	d.raw, d.Task = candidate, parsed.Task
+	return nil
+}
+
+func (d *Document) SetRefs(refs []Ref, at time.Time) error {
+	t := d.Task
+	t.Refs, t.UpdatedAt = refs, at.UTC()
+	return d.rewriteFront(t)
+}
+
+func (d *Document) SetLabels(labels []string, at time.Time) error {
+	t := d.Task
+	t.Labels, t.UpdatedAt = labels, at.UTC()
+	return d.rewriteFront(t)
+}
+
+func (d *Document) rewriteFront(t Task) error {
+	// Re-rendering the complete record would discard hand-edited sections. Only
+	// replace the two collection fields and updatedAt in the original frontmatter.
+	refs, err := yaml.Marshal(t.Refs)
+	if err != nil {
+		return err
+	}
+	candidate := replaceFrontBlock(d.raw, "refs", strings.TrimRight(string(refs), "\n"))
+	candidate = replaceFrontBlock(candidate, "labels", "["+strings.Join(t.Labels, ", ")+"]")
+	candidate = replaceFront(candidate, "updatedAt", t.UpdatedAt.Format(time.RFC3339))
+	parsed, err := Parse(candidate)
+	if err != nil {
+		return fmt.Errorf("rendered record is invalid: %w", err)
+	}
+	d.raw, d.Task = candidate, parsed.Task
+	return nil
+}
+
+func replaceFrontBlock(raw []byte, key, value string) []byte {
+	eol := "\n"
+	if bytes.Contains(raw, []byte("\r\n")) {
+		eol = "\r\n"
+	}
+	lines := strings.Split(string(raw), eol)
+	end := len(lines)
+	for i := 1; i < len(lines); i++ {
+		if lines[i] == "---" {
+			end = i
+			break
+		}
+	}
+	start := -1
+	for i := 1; i < end; i++ {
+		if strings.HasPrefix(lines[i], key+":") {
+			start = i
+			break
+		}
+	}
+	if start < 0 {
+		return replaceFront(raw, key, value)
+	}
+	stop := start + 1
+	for stop < end && (strings.HasPrefix(lines[stop], " ") || strings.HasPrefix(lines[stop], "\t") || strings.HasPrefix(lines[stop], "-")) {
+		stop++
+	}
+	text := key + ": " + value
+	if strings.Contains(value, "\n") || strings.HasPrefix(value, "- ") {
+		text = key + ":\n  " + strings.Join(strings.Split(value, "\n"), "\n  ")
+	}
+	replacement := strings.Split(text, "\n")
+	result := make([]string, 0, len(lines)-stop+start+len(replacement))
+	result = append(result, lines[:start]...)
+	result = append(result, replacement...)
+	result = append(result, lines[stop:]...)
+	return []byte(strings.Join(result, eol))
+}
+
 func (d *Document) SetStatus(status string, at time.Time) error {
 	if err := ValidateStatus(status); err != nil {
 		return err

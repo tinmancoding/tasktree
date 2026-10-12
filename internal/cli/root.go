@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/tinmancoding/tasktree/v2/internal/app"
@@ -81,7 +83,7 @@ func NewRoot(out, errOut io.Writer) *cobra.Command {
 	root.PersistentFlags().StringVarP(&o.chdir, "chdir", "C", "", "run as if started in this directory")
 	root.PersistentFlags().BoolVarP(&o.verbose, "verbose", "v", false, "print git commands")
 	root.PersistentFlags().StringVar(&o.author, "author", "", "author for log entries")
-	root.AddCommand(setupCmd(o), configCmd(o), newCmd(o), listCmd(o), infoCmd(o), noteCmd(o), markCmd(o), openCmd(o), addCmd(o), removeCmd(o), commitCmd(o), rootCmd(o))
+	root.AddCommand(setupCmd(o), configCmd(o), newCmd(o), listCmd(o), infoCmd(o), noteCmd(o), markCmd(o), refCmd(o), labelCmd(o), historyCmd(o), openCmd(o), addCmd(o), removeCmd(o), commitCmd(o), rootCmd(o))
 	return root
 }
 func (o *options) application() (app.App, error) {
@@ -196,36 +198,64 @@ func newCmd(o *options) *cobra.Command {
 }
 func listCmd(o *options) *cobra.Command {
 	var all, j bool
-	var statuses []string
+	var statuses, labels []string
 	c := &cobra.Command{Use: "list", Short: "List tasks (open tasks by default)", Args: exact(0), RunE: func(cmd *cobra.Command, args []string) error {
 		a, e := o.application()
 		if e != nil {
 			return e
 		}
-		tasks, e := a.List(all, statuses)
+		tasks, e := a.ListFiltered(all, statuses, labels)
 		if e != nil {
 			return e
 		}
 		if j {
 			return json.NewEncoder(o.out).Encode(tasks)
 		}
-		parent := map[string]string{}
-		allTasks, _ := a.List(true, nil)
-		for _, t := range allTasks {
-			parent[t.ID] = t.Handle
+		allTasks, e := a.List(true, nil)
+		if e != nil {
+			return e
 		}
-		rows := make([]output.TaskRow, 0, len(tasks))
-		for _, t := range tasks {
-			p := ""
+		byID := map[string]record.Task{}
+		children := map[string][]record.Task{}
+		for _, t := range allTasks {
+			byID[t.ID] = t
 			if t.Parent != nil {
-				p = parent[*t.Parent]
+				children[*t.Parent] = append(children[*t.Parent], t)
 			}
-			rows = append(rows, output.TaskRow{Handle: t.Handle, Status: t.Status, Title: t.Title, ID: t.ID, Parent: p})
+		}
+		visible := map[string]bool{}
+		for _, t := range tasks {
+			visible[t.ID] = true
+		}
+		rows := []output.TaskRow{}
+		var visit func(record.Task, int)
+		visit = func(t record.Task, depth int) {
+			if !visible[t.ID] {
+				return
+			}
+			parent := ""
+			if t.Parent != nil {
+				parent = byID[*t.Parent].Handle
+			}
+			progress := ""
+			if t.Progress != nil {
+				progress = fmt.Sprintf("%d/%d", t.Progress.Closed, t.Progress.Total)
+			}
+			rows = append(rows, output.TaskRow{Handle: strings.Repeat("  ", depth) + t.Handle, Status: t.Status, Title: t.Title, ID: t.ID, Parent: parent, Progress: progress})
+			for _, child := range children[t.ID] {
+				visit(child, depth+1)
+			}
+		}
+		for _, t := range tasks {
+			if t.Parent == nil || !visible[*t.Parent] {
+				visit(t, 0)
+			}
 		}
 		return output.WriteTaskTable(o.out, rows)
 	}}
 	c.Flags().BoolVar(&all, "all", false, "include closed tasks")
 	c.Flags().StringSliceVar(&statuses, "status", nil, "filter by status (repeatable)")
+	c.Flags().StringSliceVar(&labels, "label", nil, "filter by label (repeatable, AND)")
 	c.Flags().BoolVar(&j, "json", false, "emit JSON")
 	return c
 }
@@ -263,6 +293,10 @@ func infoCmd(o *options) *cobra.Command {
 			}
 			tree = &x
 		}
+		allTasks, listErr := a.List(true, nil)
+		if listErr != nil {
+			return listErr
+		}
 		if j {
 			b, marshalErr := json.Marshal(t)
 			if marshalErr != nil {
@@ -272,6 +306,19 @@ func infoCmd(o *options) *cobra.Command {
 			if unmarshalErr := json.Unmarshal(b, &payload); unmarshalErr != nil {
 				return unmarshalErr
 			}
+			cfg, configErr := a.Home.LoadConfig()
+			if configErr != nil {
+				return configErr
+			}
+			refs := make([]map[string]any, 0, len(t.Refs))
+			for _, r := range t.Refs {
+				x := map[string]any{"type": r.Type, "value": r.Value}
+				if u := app.RefURL(r, cfg.Jira.BaseURL); u != "" {
+					x["url"] = u
+				}
+				refs = append(refs, x)
+			}
+			payload["refs"] = refs
 			if tree != nil {
 				payload["tasktree"] = tree
 			}
@@ -280,16 +327,24 @@ func infoCmd(o *options) *cobra.Command {
 		parent := "-"
 		if t.Parent != nil {
 			parent = *t.Parent
-			if tasks, listErr := a.List(true, nil); listErr == nil {
-				for _, candidate := range tasks {
-					if candidate.ID == *t.Parent {
-						parent = candidate.Handle
-						break
-					}
+			for _, candidate := range allTasks {
+				if candidate.ID == *t.Parent {
+					parent = candidate.Handle
+					break
 				}
 			}
 		}
-		writeInfo(o.out, t, parent)
+		children := []record.Task{}
+		for _, candidate := range allTasks {
+			if candidate.Parent != nil && *candidate.Parent == t.ID {
+				children = append(children, candidate)
+			}
+		}
+		cfg, configErr := a.Home.LoadConfig()
+		if configErr != nil {
+			return configErr
+		}
+		writeInfo(o.out, t, parent, children, cfg.Jira.BaseURL)
 		if tree != nil {
 			return writeRepoInfo(o.out, *tree)
 		}
@@ -297,6 +352,142 @@ func infoCmd(o *options) *cobra.Command {
 	}}
 	c.Flags().StringVarP(&ref, "task", "t", "", "task handle or id")
 	c.Flags().BoolVar(&j, "json", false, "emit JSON")
+	c.AddCommand(infoEditCmd(o), infoSetCmd(o))
+	return c
+}
+
+func infoEditCmd(o *options) *cobra.Command {
+	var ref, file string
+	var stdin bool
+	c := &cobra.Command{Use: "edit", Short: "Replace a task description", Args: exact(0), RunE: func(cmd *cobra.Command, args []string) error {
+		if file != "" && stdin {
+			return usageError{"--file and --stdin are mutually exclusive"}
+		}
+		a, e := o.application()
+		if e != nil {
+			return e
+		}
+		resolved, _, e := resolveTarget(a, ref)
+		if e != nil {
+			return e
+		}
+		current, e := a.Info(resolved)
+		if e != nil {
+			return e
+		}
+		var text string
+		switch {
+		case file != "":
+			b, readErr := os.ReadFile(file)
+			if readErr != nil {
+				return readErr
+			}
+			text = string(b)
+		case stdin:
+			b, readErr := io.ReadAll(os.Stdin)
+			if readErr != nil {
+				return readErr
+			}
+			text = string(b)
+		default:
+			f, createErr := os.CreateTemp("", "tt2-description-*")
+			if createErr != nil {
+				return createErr
+			}
+			name := f.Name()
+			defer os.Remove(name)
+			if _, writeErr := f.WriteString(current.Description); writeErr != nil {
+				f.Close()
+				return writeErr
+			}
+			if closeErr := f.Close(); closeErr != nil {
+				return closeErr
+			}
+			editor := os.Getenv("VISUAL")
+			if editor == "" {
+				editor = os.Getenv("EDITOR")
+			}
+			if editor == "" {
+				editor = "vi"
+			}
+			command := exec.Command("sh", "-c", "exec \"$1\" \"$2\"", "tt2 editor", editor, name)
+			command.Stdin, command.Stdout, command.Stderr = os.Stdin, o.out, o.err
+			if runErr := command.Run(); runErr != nil {
+				return fmt.Errorf("run editor: %w", runErr)
+			}
+			b, readErr := os.ReadFile(name)
+			if readErr != nil {
+				return readErr
+			}
+			text = string(b)
+		}
+		if e := record.ValidateDescription(text); e != nil {
+			return usageError{e.Error()}
+		}
+		t, changed, e := a.EditDescription(cmd.Context(), resolved, text)
+		if e != nil {
+			return e
+		}
+		if changed {
+			fmt.Fprintf(o.out, "description updated for %s\n", t.Handle)
+		} else {
+			fmt.Fprintln(o.out, "description unchanged; no commit made")
+		}
+		return nil
+	}}
+	c.Flags().StringVarP(&ref, "task", "t", "", "task handle or id")
+	c.Flags().StringVar(&file, "file", "", "read description from file")
+	c.Flags().BoolVar(&stdin, "stdin", false, "read description from standard input")
+	return c
+}
+func infoSetCmd(o *options) *cobra.Command {
+	var ref string
+	var clear bool
+	c := &cobra.Command{Use: "set <field> [value]", Short: "Set a task title, handle, or parent", Args: func(cmd *cobra.Command, args []string) error {
+		if len(args) < 1 || len(args) > 2 {
+			return usageError{"info set accepts a field and optional value"}
+		}
+		return nil
+	}, RunE: func(cmd *cobra.Command, args []string) error {
+		if clear && args[0] != "parent" {
+			return usageError{"--clear is only valid for parent"}
+		}
+		if clear && len(args) != 1 {
+			return usageError{"--clear does not accept a value"}
+		}
+		if !clear && len(args) != 2 {
+			return usageError{"info set requires a value"}
+		}
+		a, e := o.application()
+		if e != nil {
+			return e
+		}
+		resolved, _, e := resolveTarget(a, ref)
+		if e != nil {
+			return e
+		}
+		value := ""
+		if len(args) == 2 {
+			value = args[1]
+		}
+		t, changed, e := a.SetInfo(cmd.Context(), resolved, args[0], value, clear)
+		if e != nil {
+			var conflict hub.ConflictError
+			var missing hub.NotFoundError
+			if errors.As(e, &conflict) || errors.As(e, &missing) {
+				return e
+			}
+			return usageError{e.Error()}
+		}
+		if changed {
+			fmt.Fprintf(o.out, "%s updated\n", t.Handle)
+		} else {
+			fmt.Fprintln(o.out, "unchanged; no commit made")
+		}
+		return nil
+	}}
+	c.Flags().StringVarP(&ref, "task", "t", "", "task handle or id")
+	c.Flags().BoolVar(&clear, "clear", false, "clear the parent")
 	return c
 }
 func noteCmd(o *options) *cobra.Command {
@@ -356,6 +547,110 @@ func markCmd(o *options) *cobra.Command {
 	c.Flags().StringVarP(&ref, "task", "t", "", "task handle or id")
 	c.Flags().BoolVar(&markOptions.Keep, "keep", false, "change status without tearing down the tasktree")
 	c.Flags().BoolVar(&markOptions.Force, "force", false, "close despite work that will be lost")
+	c.Flags().BoolVar(&markOptions.Cascade, "cascade", false, "close all open descendants first")
+	return c
+}
+
+func refCmd(o *options) *cobra.Command {
+	root := &cobra.Command{Use: "ref", Short: "Manage typed task references"}
+	for _, action := range []string{"add", "rm"} {
+		action := action
+		root.AddCommand(&cobra.Command{Use: action + " <type> <value>", Short: map[string]string{"add": "Add a task reference", "rm": "Remove a task reference"}[action], Args: exact(2), RunE: func(cmd *cobra.Command, args []string) error {
+			if args[0] != "jira" && args[0] != "pr" && args[0] != "url" {
+				return usageError{fmt.Sprintf("invalid ref type %q", args[0])}
+			}
+			ref, _ := cmd.Flags().GetString("task")
+			a, e := o.application()
+			if e != nil {
+				return e
+			}
+			resolved, _, e := resolveTarget(a, ref)
+			if e != nil {
+				return e
+			}
+			t, changed, e := a.Ref(cmd.Context(), resolved, action, args[0], args[1])
+			if e != nil {
+				var missing hub.NotFoundError
+				if errors.As(e, &missing) {
+					return e
+				}
+				return usageError{e.Error()}
+			}
+			if changed {
+				fmt.Fprintf(o.out, "ref %s for %s\n", map[string]string{"add": "added", "rm": "removed"}[action], t.Handle)
+			} else {
+				fmt.Fprintln(o.out, "ref unchanged; no commit made")
+			}
+			return nil
+		}})
+	}
+	for _, c := range root.Commands() {
+		c.Flags().StringP("task", "t", "", "task handle or id")
+	}
+	return root
+}
+func labelCmd(o *options) *cobra.Command {
+	root := &cobra.Command{Use: "label", Short: "Manage task labels"}
+	for _, action := range []string{"add", "rm"} {
+		action := action
+		root.AddCommand(&cobra.Command{Use: action + " <label>...", Short: map[string]string{"add": "Add task labels", "rm": "Remove task labels"}[action], Args: func(cmd *cobra.Command, args []string) error {
+			if len(args) == 0 {
+				return usageError{"label " + action + " requires at least one label"}
+			}
+			return nil
+		}, RunE: func(cmd *cobra.Command, args []string) error {
+			ref, _ := cmd.Flags().GetString("task")
+			a, e := o.application()
+			if e != nil {
+				return e
+			}
+			resolved, _, e := resolveTarget(a, ref)
+			if e != nil {
+				return e
+			}
+			t, changed, e := a.Labels(cmd.Context(), resolved, action, args)
+			if e != nil {
+				return usageError{e.Error()}
+			}
+			if changed {
+				fmt.Fprintf(o.out, "labels %s for %s\n", map[string]string{"add": "updated", "rm": "updated"}[action], t.Handle)
+			} else {
+				fmt.Fprintln(o.out, "labels unchanged; no commit made")
+			}
+			return nil
+		}})
+	}
+	for _, c := range root.Commands() {
+		c.Flags().StringP("task", "t", "", "task handle or id")
+	}
+	return root
+}
+func historyCmd(o *options) *cobra.Command {
+	var ref string
+	var asJSON bool
+	c := &cobra.Command{Use: "history", Short: "Show a task record's git history", Args: exact(0), RunE: func(cmd *cobra.Command, args []string) error {
+		a, e := o.application()
+		if e != nil {
+			return e
+		}
+		resolved, _, e := resolveTarget(a, ref)
+		if e != nil {
+			return e
+		}
+		entries, e := a.History(cmd.Context(), resolved)
+		if e != nil {
+			return e
+		}
+		if asJSON {
+			return json.NewEncoder(o.out).Encode(entries)
+		}
+		for _, entry := range entries {
+			fmt.Fprintf(o.out, "%s\t%s\t%s\n", entry.Timestamp.Format(time.RFC3339), entry.Author, entry.Subject)
+		}
+		return nil
+	}}
+	c.Flags().StringVarP(&ref, "task", "t", "", "task handle or id")
+	c.Flags().BoolVar(&asJSON, "json", false, "emit JSON")
 	return c
 }
 
@@ -369,13 +664,26 @@ func pathWithin(path, root string) bool {
 	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
-func writeInfo(w io.Writer, t record.Task, parent string) {
+func writeInfo(w io.Writer, t record.Task, parent string, children []record.Task, jiraBase string) {
 	fmt.Fprintf(w, "ID: %s\nHandle: %s\nTitle: %s\nStatus: %s\n", t.ID, t.Handle, t.Title, t.Status)
 	fmt.Fprintf(w, "Parent: %s\n", parent)
+	if t.Progress != nil {
+		fmt.Fprintf(w, "Progress: %d/%d\n", t.Progress.Closed, t.Progress.Total)
+	}
 	fmt.Fprintf(w, "Labels: %s\nCreated: %s\nUpdated: %s\n", strings.Join(t.Labels, ", "), t.CreatedAt.Format("2006-01-02T15:04:05Z"), t.UpdatedAt.Format("2006-01-02T15:04:05Z"))
 	fmt.Fprintln(w, "Refs:")
 	for _, r := range t.Refs {
-		fmt.Fprintf(w, "  %s: %s\n", r.Type, r.Value)
+		if u := app.RefURL(r, jiraBase); u != "" && r.Type != "url" {
+			fmt.Fprintf(w, "  %s: %s (%s)\n", r.Type, r.Value, u)
+		} else {
+			fmt.Fprintf(w, "  %s: %s\n", r.Type, r.Value)
+		}
+	}
+	if len(children) > 0 {
+		fmt.Fprintln(w, "Subtasks:")
+		for _, child := range children {
+			fmt.Fprintf(w, "  %s: %s\n", child.Handle, child.Status)
+		}
 	}
 	fmt.Fprintf(w, "Description:\n%s\nLog:\n", t.Description)
 	for _, e := range t.Log {

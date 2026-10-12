@@ -226,6 +226,12 @@ func nextHandle(base string, docs []*record.Document) string {
 	}
 }
 func (a App) List(all bool, statuses []string) ([]record.Task, error) {
+	return a.ListFiltered(all, statuses, nil)
+}
+
+// ListFiltered returns matching tasks with direct-subtask progress derived from
+// all records, rather than just the filtered result set.
+func (a App) ListFiltered(all bool, statuses, labels []string) ([]record.Task, error) {
 	docs, err := a.Hub.ReadAll()
 	if err != nil {
 		return nil, err
@@ -237,22 +243,318 @@ func (a App) List(all bool, statuses []string) ([]record.Task, error) {
 		}
 		wanted[s] = true
 	}
+	progress := progressFor(docs)
 	out := []record.Task{}
 	for _, d := range docs {
 		include := all || len(wanted) > 0 && wanted[d.Task.Status] || len(wanted) == 0 && record.IsOpen(d.Task.Status)
+		for _, label := range labels {
+			found := false
+			for _, have := range d.Task.Labels {
+				if have == label {
+					found = true
+					break
+				}
+			}
+			if !found {
+				include = false
+				break
+			}
+		}
 		if include {
-			out = append(out, d.Task)
+			t := d.Task
+			t.Progress = progress[t.ID]
+			out = append(out, t)
 		}
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
 	return out, nil
+}
+func progressFor(docs []*record.Document) map[string]*record.Progress {
+	result := map[string]*record.Progress{}
+	for _, d := range docs {
+		if d.Task.Parent == nil {
+			continue
+		}
+		p := result[*d.Task.Parent]
+		if p == nil {
+			p = &record.Progress{}
+			result[*d.Task.Parent] = p
+		}
+		p.Total++
+		if !record.IsOpen(d.Task.Status) {
+			p.Closed++
+		}
+	}
+	return result
 }
 func (a App) Info(ref string) (record.Task, error) {
 	d, err := a.Hub.Read(ref)
 	if err != nil {
 		return record.Task{}, err
 	}
+	docs, err := a.Hub.ReadAll()
+	if err != nil {
+		return record.Task{}, err
+	}
+	d.Task.Progress = progressFor(docs)[d.Task.ID]
 	return d.Task, nil
+}
+
+var handlePattern = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
+var labelPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
+var prPattern = regexp.MustCompile(`^[^/[:space:]]+/[^/#[:space:]]+#[1-9][0-9]*$`)
+
+func (a App) EditDescription(ctx context.Context, ref, text string) (record.Task, bool, error) {
+	if err := record.ValidateDescription(text); err != nil {
+		return record.Task{}, false, err
+	}
+	current, err := a.Info(ref)
+	if err != nil {
+		return record.Task{}, false, err
+	}
+	if current.Description == text {
+		return current, false, nil
+	}
+	author, machine, err := a.author()
+	if err != nil {
+		return record.Task{}, false, err
+	}
+	t, err := a.Hub.UpdateWithPostCommit(ctx, current.ID, "description updated", author, machine, func(d *record.Document) error { return d.SetDescription(text, a.Now().UTC()) }, func(task record.Task, raw []byte) { a.writeGeneratedTaskRecord(task.ID, raw) })
+	return t, err == nil, err
+}
+
+func (a App) SetInfo(ctx context.Context, ref, field, value string, clear bool) (record.Task, bool, error) {
+	current, err := a.Info(ref)
+	if err != nil {
+		return record.Task{}, false, err
+	}
+	docs, err := a.Hub.ReadAll()
+	if err != nil {
+		return record.Task{}, false, err
+	}
+	var summary string
+	switch field {
+	case "title":
+		if value == "" {
+			return record.Task{}, false, fmt.Errorf("title must not be empty")
+		}
+		if current.Title == value {
+			return current, false, nil
+		}
+		summary = "title updated"
+	case "handle":
+		if !handlePattern.MatchString(value) {
+			return record.Task{}, false, fmt.Errorf("invalid handle %q (expected [A-Za-z0-9._-], max 64 characters)", value)
+		}
+		if current.Handle == value {
+			return current, false, nil
+		}
+		for _, d := range docs {
+			if d.Task.ID != current.ID && d.Task.Handle == value {
+				return record.Task{}, false, hub.ConflictError{Message: fmt.Sprintf("handle %q already exists", value)}
+			}
+		}
+		summary = "handle updated"
+	case "parent":
+		var parent *string
+		if !clear {
+			if value == "" {
+				return record.Task{}, false, fmt.Errorf("parent requires a handle or id, or --clear")
+			}
+			p, e := hub.Resolve(docs, value)
+			if e != nil {
+				return record.Task{}, false, e
+			}
+			if p.Task.ID == current.ID {
+				return record.Task{}, false, fmt.Errorf("a task cannot be its own parent")
+			}
+			parentID := p.Task.ID
+			for parentID != "" {
+				if parentID == current.ID {
+					return record.Task{}, false, fmt.Errorf("parent would create a cycle")
+				}
+				var next *string
+				for _, d := range docs {
+					if d.Task.ID == parentID {
+						next = d.Task.Parent
+						break
+					}
+				}
+				if next == nil {
+					break
+				}
+				parentID = *next
+			}
+			parent = &p.Task.ID
+		}
+		if (current.Parent == nil && parent == nil) || (current.Parent != nil && parent != nil && *current.Parent == *parent) {
+			return current, false, nil
+		}
+		if parent == nil {
+			summary = "parent cleared"
+		} else {
+			summary = "parent set to " + *parent
+		}
+	default:
+		return record.Task{}, false, fmt.Errorf("unknown info field %q (expected title, handle, or parent)", field)
+	}
+	author, machine, err := a.author()
+	if err != nil {
+		return record.Task{}, false, err
+	}
+	t, err := a.Hub.UpdateWithPostCommit(ctx, current.ID, summary, author, machine, func(d *record.Document) error {
+		switch field {
+		case "title", "handle":
+			return d.SetFrontString(field, value, a.Now().UTC())
+		default:
+			if clear {
+				return d.SetParent(nil, a.Now().UTC())
+			}
+			p, _ := hub.Resolve(docs, value)
+			id := p.Task.ID
+			return d.SetParent(&id, a.Now().UTC())
+		}
+	}, func(task record.Task, raw []byte) { a.writeGeneratedTaskRecord(task.ID, raw) })
+	return t, err == nil, err
+}
+
+func (a App) Ref(ctx context.Context, ref, action, typ, value string) (record.Task, bool, error) {
+	if typ != "jira" && typ != "pr" && typ != "url" {
+		return record.Task{}, false, fmt.Errorf("invalid ref type %q", typ)
+	}
+	if typ == "pr" && !prPattern.MatchString(value) {
+		return record.Task{}, false, fmt.Errorf("invalid GitHub PR reference %q (expected owner/repo#N)", value)
+	}
+	current, err := a.Info(ref)
+	if err != nil {
+		return record.Task{}, false, err
+	}
+	refs := append([]record.Ref(nil), current.Refs...)
+	found := -1
+	for i, r := range refs {
+		if r.Type == typ && r.Value == value {
+			found = i
+			break
+		}
+	}
+	if action == "add" && found >= 0 {
+		return current, false, nil
+	}
+	if action == "rm" && found < 0 {
+		return record.Task{}, false, hub.NotFoundError{Ref: typ + ": " + value}
+	}
+	if action == "add" {
+		refs = append(refs, record.Ref{Type: typ, Value: value})
+	} else {
+		refs = append(refs[:found], refs[found+1:]...)
+	}
+	author, machine, err := a.author()
+	if err != nil {
+		return record.Task{}, false, err
+	}
+	summary := "ref added"
+	if action == "rm" {
+		summary = "ref removed"
+	}
+	t, err := a.Hub.UpdateWithPostCommit(ctx, current.ID, summary, author, machine, func(d *record.Document) error { return d.SetRefs(refs, a.Now().UTC()) }, func(task record.Task, raw []byte) { a.writeGeneratedTaskRecord(task.ID, raw) })
+	return t, err == nil, err
+}
+
+func (a App) Labels(ctx context.Context, ref, action string, values []string) (record.Task, bool, error) {
+	for _, v := range values {
+		if !labelPattern.MatchString(v) {
+			return record.Task{}, false, fmt.Errorf("invalid label %q", v)
+		}
+	}
+	current, err := a.Info(ref)
+	if err != nil {
+		return record.Task{}, false, err
+	}
+	set := map[string]bool{}
+	for _, v := range current.Labels {
+		set[v] = true
+	}
+	changed := false
+	if action == "add" {
+		for _, v := range values {
+			if !set[v] {
+				set[v] = true
+				changed = true
+			}
+		}
+	} else {
+		for _, v := range values {
+			if set[v] {
+				delete(set, v)
+				changed = true
+			}
+		}
+	}
+	if !changed {
+		return current, false, nil
+	}
+	labels := make([]string, 0, len(set))
+	for v := range set {
+		labels = append(labels, v)
+	}
+	sort.Strings(labels)
+	author, machine, err := a.author()
+	if err != nil {
+		return record.Task{}, false, err
+	}
+	summary := "labels added"
+	if action == "rm" {
+		summary = "labels removed"
+	}
+	t, err := a.Hub.UpdateWithPostCommit(ctx, current.ID, summary, author, machine, func(d *record.Document) error { return d.SetLabels(labels, a.Now().UTC()) }, func(task record.Task, raw []byte) { a.writeGeneratedTaskRecord(task.ID, raw) })
+	return t, err == nil, err
+}
+
+func RefURL(r record.Ref, jiraBase string) string {
+	switch r.Type {
+	case "jira":
+		if jiraBase != "" {
+			return strings.TrimRight(jiraBase, "/") + "/browse/" + r.Value
+		}
+	case "pr":
+		if prPattern.MatchString(r.Value) {
+			p := strings.SplitN(r.Value, "#", 2)
+			return "https://github.com/" + p[0] + "/pull/" + p[1]
+		}
+	case "url":
+		return r.Value
+	}
+	return ""
+}
+
+type HistoryEntry struct {
+	Timestamp time.Time `json:"timestamp"`
+	Author    string    `json:"author"`
+	Subject   string    `json:"subject"`
+}
+
+func (a App) History(ctx context.Context, ref string) ([]HistoryEntry, error) {
+	t, err := a.Info(ref)
+	if err != nil {
+		return nil, err
+	}
+	out, _, err := a.Git.Run(ctx, a.Home.GitPath(), nil, "log", "--format=%aI%x00%an%x00%s", "--", "tasks/"+t.ID+".md")
+	if err != nil {
+		return nil, err
+	}
+	var history []HistoryEntry
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		p := strings.Split(line, "\x00")
+		if len(p) != 3 {
+			continue
+		}
+		ts, e := time.Parse(time.RFC3339, p[0])
+		if e != nil {
+			return nil, e
+		}
+		history = append(history, HistoryEntry{Timestamp: ts.UTC(), Author: p[1], Subject: p[2]})
+	}
+	return history, nil
 }
 
 func (a App) warnf(format string, args ...any) {
@@ -355,8 +657,9 @@ func (a App) Note(ctx context.Context, ref, text, kind string) (record.Task, err
 }
 
 type MarkOptions struct {
-	Keep  bool
-	Force bool
+	Keep    bool
+	Force   bool
+	Cascade bool
 }
 
 type MarkResult struct {
@@ -384,6 +687,9 @@ func (a App) Mark(ctx context.Context, ref, status string, o MarkOptions) (MarkR
 	result := MarkResult{}
 	if err := record.ValidateStatus(status); err != nil {
 		return result, err
+	}
+	if o.Cascade && !record.IsOpen(status) {
+		return a.markCascade(ctx, ref, status, o)
 	}
 	task, err := a.Info(ref)
 	if err != nil {
@@ -458,6 +764,79 @@ func (a App) Mark(ctx context.Context, ref, status string, o MarkOptions) (MarkR
 	result.Remaining = a.teardownTasktree(task.ID, checkout.Path, local)
 	if len(result.Remaining) > 0 {
 		return result, fmt.Errorf("task closed, but teardown incomplete; remains: %s", strings.Join(result.Remaining, ", "))
+	}
+	return result, nil
+}
+
+// markCascade does every destructive-work preflight before changing any record.
+// Descendants are closed depth-first so each parent passes the ordinary ST1 gate.
+func (a App) markCascade(ctx context.Context, ref, status string, o MarkOptions) (MarkResult, error) {
+	target, err := a.Info(ref)
+	if err != nil {
+		return MarkResult{}, err
+	}
+	docs, err := a.Hub.ReadAll()
+	if err != nil {
+		return MarkResult{}, err
+	}
+	children := map[string][]record.Task{}
+	for _, d := range docs {
+		if d.Task.Parent != nil {
+			children[*d.Task.Parent] = append(children[*d.Task.Parent], d.Task)
+		}
+	}
+	for id := range children {
+		sort.SliceStable(children[id], func(i, j int) bool { return children[id][i].CreatedAt.Before(children[id][j].CreatedAt) })
+	}
+	ordered := []record.Task{}
+	var visit func(record.Task)
+	visit = func(t record.Task) {
+		for _, c := range children[t.ID] {
+			visit(c)
+		}
+		if record.IsOpen(t.Status) {
+			ordered = append(ordered, t)
+		}
+	}
+	visit(target)
+	local, err := a.Home.LoadLocal()
+	if err != nil {
+		return MarkResult{}, err
+	}
+	refusals := []string{}
+	for _, t := range ordered {
+		if o.Keep {
+			continue
+		}
+		checkout, ok := local.Checkouts[t.ID]
+		if !ok {
+			continue
+		}
+		if st, statErr := os.Stat(checkout.Path); statErr != nil || !st.IsDir() {
+			continue
+		}
+		loss, lossErr := a.tasktreeLoss(ctx, t.ID, checkout.Path)
+		if lossErr != nil {
+			refusals = append(refusals, fmt.Sprintf("%s: %v", t.Handle, lossErr))
+			continue
+		}
+		if len(loss) > 0 && !o.Force {
+			for _, v := range loss {
+				refusals = append(refusals, t.Handle+": "+v)
+			}
+		}
+	}
+	if len(refusals) > 0 {
+		return MarkResult{}, GateError{strings.Join(refusals, "\n")}
+	}
+	var result MarkResult
+	one := o
+	one.Cascade = false
+	for _, t := range ordered {
+		result, err = a.Mark(ctx, t.ID, status, one)
+		if err != nil {
+			return result, err
+		}
 	}
 	return result, nil
 }

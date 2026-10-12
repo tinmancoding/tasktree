@@ -8,20 +8,21 @@ import (
 
 // TaskRow is one task in the human-readable list output.
 type TaskRow struct {
-	Handle string
-	Status string
-	Title  string
-	ID     string
-	Parent string
+	Handle   string
+	Status   string
+	Title    string
+	ID       string
+	Parent   string
+	Progress string
 }
 
 func WriteTaskTable(w io.Writer, rows []TaskRow) error {
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	if _, err := fmt.Fprintln(tw, "HANDLE\tSTATUS\tTITLE\tID\tPARENT"); err != nil {
+	if _, err := fmt.Fprintln(tw, "HANDLE\tSTATUS\tTITLE\tID\tPARENT\tPROGRESS"); err != nil {
 		return err
 	}
 	for _, r := range rows {
-		if _, err := fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", r.Handle, r.Status, r.Title, r.ID, r.Parent); err != nil {
+		if _, err := fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", r.Handle, r.Status, r.Title, r.ID, r.Parent, r.Progress); err != nil {
 			return err
 		}
 	}
