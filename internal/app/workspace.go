@@ -124,6 +124,12 @@ func modules(root string) ([]module, error) {
 	g := gitx.NewClient()
 	out, _, err := g.Run(context.Background(), "", nil, "config", "-f", p, "--get-regexp", `^submodule\..*\.(path|url|branch|tasktree-mode)$`)
 	if err != nil {
+		// git config exits 1 when no key matches, e.g. an empty .gitmodules
+		// left behind after removing the last submodule.
+		var ce gitx.CommandError
+		if errors.As(err, &ce) && ce.ExitCode == 1 {
+			return []module{}, nil
+		}
 		return nil, err
 	}
 	by := map[string]*module{}
