@@ -68,6 +68,22 @@ func TestMutationsPreserveUnknownContent(t *testing.T) {
 		}
 	}
 }
+func TestTimestampCompatibilityAndNewFormatting(t *testing.T) {
+	quoted := strings.Replace(fixture, "createdAt: 2026-10-12T09:00:00Z", "createdAt: \"2026-10-12T09:00:00Z\"", 1)
+	d, err := record.Parse([]byte(quoted))
+	if err != nil || d.Task.CreatedAt.IsZero() {
+		t.Fatalf("quoted timestamp: %v %+v", err, d)
+	}
+	n, err := record.New(d.Task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(n.Render())
+	if strings.Contains(got, "createdAt: \"") || !strings.Contains(got, "refs:\n  - url:") {
+		t.Fatalf("unexpected new formatting:\n%s", got)
+	}
+}
+
 func TestDescriptionReservedHeadingRejected(t *testing.T) {
 	if err := record.ValidateDescription("text\n## Log\nno"); err == nil {
 		t.Fatal("expected error")

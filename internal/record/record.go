@@ -114,11 +114,15 @@ func Parse(data []byte) (*Document, error) {
 	}
 	fm := data[4 : 4+rel]
 	var aux struct {
-		ID, Handle, Title, Status string
-		Parent                    *string
-		Labels                    []string
-		Refs                      []map[string]string
-		CreatedAt, UpdatedAt      time.Time
+		ID        string              `yaml:"id"`
+		Handle    string              `yaml:"handle"`
+		Title     string              `yaml:"title"`
+		Status    string              `yaml:"status"`
+		Parent    *string             `yaml:"parent"`
+		Labels    []string            `yaml:"labels"`
+		Refs      []map[string]string `yaml:"refs"`
+		CreatedAt flexibleTime        `yaml:"createdAt"`
+		UpdatedAt flexibleTime        `yaml:"updatedAt"`
 	}
 	if err := yaml.Unmarshal(fm, &aux); err != nil {
 		return nil, fmt.Errorf("parse frontmatter: %w", err)
@@ -129,7 +133,7 @@ func Parse(data []byte) (*Document, error) {
 	if err := ValidateStatus(aux.Status); err != nil {
 		return nil, err
 	}
-	t := Task{ID: aux.ID, Handle: aux.Handle, Title: aux.Title, Status: aux.Status, Parent: aux.Parent, Labels: aux.Labels, CreatedAt: aux.CreatedAt.UTC(), UpdatedAt: aux.UpdatedAt.UTC()}
+	t := Task{ID: aux.ID, Handle: aux.Handle, Title: aux.Title, Status: aux.Status, Parent: aux.Parent, Labels: aux.Labels, CreatedAt: aux.CreatedAt.Time.UTC(), UpdatedAt: aux.UpdatedAt.Time.UTC()}
 	if t.Labels == nil {
 		t.Labels = []string{}
 	}
@@ -225,10 +229,18 @@ func New(t Task) (*Document, error) {
 		CreatedAt string   `yaml:"createdAt"`
 		UpdatedAt string   `yaml:"updatedAt"`
 	}
-	b, err := yaml.Marshal(front{t.ID, t.Handle, t.Title, t.Status, t.Parent, t.Labels, t.Refs, t.CreatedAt.Format(time.RFC3339), t.UpdatedAt.Format(time.RFC3339)})
-	if err != nil {
+	var encoded bytes.Buffer
+	enc := yaml.NewEncoder(&encoded)
+	enc.SetIndent(2)
+	if err := enc.Encode(front{t.ID, t.Handle, t.Title, t.Status, t.Parent, t.Labels, t.Refs, t.CreatedAt.Format(time.RFC3339), t.UpdatedAt.Format(time.RFC3339)}); err != nil {
 		return nil, err
 	}
+	_ = enc.Close()
+	b := encoded.Bytes()
+	// yaml.v3 quotes timestamp-looking strings. Record timestamps are deliberately
+	// emitted as plain RFC3339 scalars while the parser accepts both forms.
+	b = bytes.Replace(b, []byte("createdAt: \""+t.CreatedAt.Format(time.RFC3339)+"\""), []byte("createdAt: "+t.CreatedAt.Format(time.RFC3339)), 1)
+	b = bytes.Replace(b, []byte("updatedAt: \""+t.UpdatedAt.Format(time.RFC3339)+"\""), []byte("updatedAt: "+t.UpdatedAt.Format(time.RFC3339)), 1)
 	var out bytes.Buffer
 	out.WriteString("---\n")
 	out.Write(b)
@@ -292,4 +304,16 @@ func (d *Document) Append(e Entry) error {
 	d.raw = replaceFront(d.raw, "updatedAt", e.Timestamp.Format(time.RFC3339))
 	return nil
 }
+
+type flexibleTime struct{ time.Time }
+
+func (t *flexibleTime) UnmarshalYAML(node *yaml.Node) error {
+	parsed, err := time.Parse(time.RFC3339, node.Value)
+	if err != nil {
+		return fmt.Errorf("invalid RFC3339 timestamp %q: %w", node.Value, err)
+	}
+	t.Time = parsed
+	return nil
+}
+
 func (t Task) MarshalJSON() ([]byte, error) { type plain Task; return json.Marshal(plain(t)) }

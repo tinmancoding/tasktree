@@ -224,7 +224,19 @@ func infoCmd(o *options) *cobra.Command {
 		if j {
 			return json.NewEncoder(o.out).Encode(t)
 		}
-		writeInfo(o.out, t)
+		parent := "-"
+		if t.Parent != nil {
+			parent = *t.Parent
+			if tasks, listErr := a.List(true, nil); listErr == nil {
+				for _, candidate := range tasks {
+					if candidate.ID == *t.Parent {
+						parent = candidate.Handle
+						break
+					}
+				}
+			}
+		}
+		writeInfo(o.out, t, parent)
 		return nil
 	}}
 	c.Flags().StringVarP(&ref, "task", "t", "", "task handle or id")
@@ -257,6 +269,9 @@ func markCmd(o *options) *cobra.Command {
 		if e := target(cmd, ref); e != nil {
 			return e
 		}
+		if e := record.ValidateStatus(args[0]); e != nil {
+			return usageError{e.Error()}
+		}
 		a, e := o.application()
 		if e != nil {
 			return e
@@ -270,13 +285,9 @@ func markCmd(o *options) *cobra.Command {
 	c.Flags().StringVarP(&ref, "task", "t", "", "task handle or id")
 	return c
 }
-func writeInfo(w io.Writer, t record.Task) {
+func writeInfo(w io.Writer, t record.Task, parent string) {
 	fmt.Fprintf(w, "ID: %s\nHandle: %s\nTitle: %s\nStatus: %s\n", t.ID, t.Handle, t.Title, t.Status)
-	if t.Parent != nil {
-		fmt.Fprintf(w, "Parent: %s\n", *t.Parent)
-	} else {
-		fmt.Fprintln(w, "Parent: null")
-	}
+	fmt.Fprintf(w, "Parent: %s\n", parent)
 	fmt.Fprintf(w, "Labels: %s\nCreated: %s\nUpdated: %s\n", strings.Join(t.Labels, ", "), t.CreatedAt.Format("2006-01-02T15:04:05Z"), t.UpdatedAt.Format("2006-01-02T15:04:05Z"))
 	fmt.Fprintln(w, "Refs:")
 	for _, r := range t.Refs {
