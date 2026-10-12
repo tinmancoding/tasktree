@@ -454,20 +454,23 @@ func (a App) Add(ctx context.Context, id, root string, o AddOptions) (AddResult,
 	if e != nil {
 		return r, e
 	}
-	branch, pathKind := o.Branch, ""
+	branch, pathKind, effectiveFrom, ignoredFrom := o.Branch, "", "", ""
 	if branch != "" {
 		local, _ := g.BranchExists(ctx, dest, branch)
 		if local {
 			e = g.Checkout(ctx, dest, branch)
 			pathKind = "local"
+			ignoredFrom = o.From
 		} else if _, _, x := git(ctx, g, dest, "show-ref", "--verify", "--quiet", "refs/remotes/origin/"+branch); x == nil {
 			e = g.CreateTrackingBranch(ctx, dest, branch, "origin/"+branch)
 			pathKind = "remote"
+			ignoredFrom = o.From
 		} else {
 			base := o.From
 			if base == "" {
 				base = def
 			}
+			effectiveFrom = base
 			if _, x := g.ResolveCommit(ctx, dest, base); x != nil {
 				return r, x
 			}
@@ -533,7 +536,23 @@ func (a App) Add(ctx context.Context, id, root string, o AddOptions) (AddResult,
 	cleanup = false
 	r.Mode = mode
 	r.Branch = branch
-	r.Messages = append(r.Messages, "branch resolution: "+pathKind)
+	var resolution string
+	switch pathKind {
+	case "local", "default":
+		resolution = fmt.Sprintf("Using existing local branch %q", branch)
+	case "remote":
+		resolution = fmt.Sprintf("Using existing remote branch %q from origin", branch)
+	case "created":
+		resolution = fmt.Sprintf("Creating new branch %q from %q", branch, effectiveFrom)
+	case "headless":
+		resolution = fmt.Sprintf("Checking out %q without creating a branch", o.From)
+	}
+	if ignoredFrom != "" {
+		resolution += fmt.Sprintf("; ignoring --from %q", ignoredFrom)
+	}
+	if resolution != "" {
+		r.Messages = append(r.Messages, resolution+".")
+	}
 	return r, nil
 }
 func registerAliases(s repoalias.Store, url string, r *AddResult) {
