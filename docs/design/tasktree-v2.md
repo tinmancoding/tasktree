@@ -1,6 +1,6 @@
 # Design: tasktree V2
 
-Status: **Accepted** (design interview, decisions D1–D43)
+Status: **Accepted** (design interview, decisions D1–D45)
 Supersedes: the workspace-centric V1 model (`Tasktree.yml` + plain folders + registry)
 
 V2 turns tasktree into a single personal tool for **task management + multi-repo workspace
@@ -353,6 +353,8 @@ tasktree focus --clear
 
 **Target resolution inside a tasktree:** `-t <handle>` → `TASKTREE_TASK` env → focused
 subtask (per checkout, `local.yml`) → the tasktree's own task. Every write prints its target.
+This applies to record commands; structural commands (`add`, `remove`, `commit`, `mode`,
+`push`, `bootstrap`) always act on the tasktree root's own task (D45).
 Parallel agents in one folder set `TASKTREE_TASK` instead of sharing focus.
 
 ### Isolated subtask tasktrees (D31, D32)
@@ -577,3 +579,5 @@ Checked against git 2.53.0:
 | D41 | Walking-skeleton milestone S precedes M1; M1/M2 reduced accordingly |
 | D42 | Development binary is `tt2` (revises D37); `tt` stays the V1 alias |
 | D43 | `import` derives branch and mode from each checkout's current state, not the V1 spec; orphan cleanup moves from M2 to M4 (`doctor`); M3 rollout: dry-run → backup → one small workspace → `--all` |
+| D44 | `push` without arguments pushes only `work` repos and checks protected branches for all selected repos before pushing any; `follow`/`pin` repos are pushed only when named |
+| D45 | Structural commands (`add`, `remove`, `commit`, `mode`, `push`, `bootstrap`) always act on the tasktree root's own task; `focus`/`TASKTREE_TASK` retarget only record commands (refines D30) |
