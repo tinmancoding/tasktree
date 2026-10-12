@@ -1,6 +1,6 @@
 # Design: tasktree V2
 
-Status: **Accepted** (design interview, decisions D1–D42)
+Status: **Accepted** (design interview, decisions D1–D43)
 Supersedes: the workspace-centric V1 model (`Tasktree.yml` + plain folders + registry)
 
 V2 turns tasktree into a single personal tool for **task management + multi-repo workspace
@@ -471,8 +471,9 @@ Targeting: inside a tasktree, commands act on its task (see target resolution); 
 2. Create orphan `task/<id>`.
 3. Convert each existing clone to a submodule by moving its `.git` into
    `clones/<id>.git/modules/<name>` (atomic rename on the same APFS volume). No recloning;
-   branches, unpushed commits, dirty state, and stashes are preserved. Mode from the V1 spec
-   (K2 rules).
+   branches, unpushed commits, dirty state, and stashes are preserved. Branch and mode come from
+   the checkout's **current** state, not the V1 spec (D43): on the default branch → `follow`,
+   on another branch → `work`, detached → `pin`.
 4. Commit root artifacts; convert `local` sources to symlinks; remove `Tasktree.yml`.
 5. Verify `git status --porcelain` and `HEAD` per repo before/after; any difference rolls back.
 
@@ -485,9 +486,9 @@ The folder stays in place (path in `local.yml`) unless `--move` relocates it to
 |---|---|
 | **S — Walking skeleton** (D41) | Hub, `setup`, `new` (incl. `--parent` for shared subtasks), `list`, `info`, `note`, `mark` (incl. close flow), `open`, `add` (aliases, modes, K2), `remove`, `commit`, `root`, `-t` targeting, `--json` for `list`/`info`. Record syntax (D38), `open` branch rules (D39), git env/path rules (D40). Binary `tt2`. Backup of `~/.tasktree` in place (R4). |
 | **M1 — Records** | `info edit`, `info set` (incl. reparent), `ref`, `label`, `history`, `list` tree, `mark --cascade`, starter `AGENTS.md`. |
-| **M2 — Tasktrees + isolated subtasks** | `mode`, `bootstrap`, `focus` (D36), full target resolution (`TASKTREE_TASK`, focus), `.tasktree/task.md`, orphan cleanup, pi skill rewrite, `--isolated`, promotion, `parent` remote, `push` + fork-point check. |
+| **M2 — Tasktrees + isolated subtasks** | `mode`, `bootstrap`, `focus` (D36), full target resolution (`TASKTREE_TASK`, focus), `.tasktree/task.md`, pi skill rewrite, `--isolated`, promotion, `parent` remote, `push` + fork-point check. |
 | **M3 — Import** | `import` (D24); stop using V1 day to day. |
-| **M4 — Polish** | Retargeted templates, `doctor`, `move`. |
+| **M4 — Polish** | Retargeted templates, `doctor` (incl. orphan cleanup, moved from M2), `move`. |
 | **M5 — Remote** | `sync`, `sync --all`, `resolve`, semantic merge. |
 
 ## Deferred
@@ -575,3 +576,4 @@ Checked against git 2.53.0:
 | D40 | Never export `GIT_*`; strip inherited repository-context `GIT_*` (`git rev-parse --local-env-vars`) for child processes, keep auth/transport vars; rewrite submodule paths to absolute |
 | D41 | Walking-skeleton milestone S precedes M1; M1/M2 reduced accordingly |
 | D42 | Development binary is `tt2` (revises D37); `tt` stays the V1 alias |
+| D43 | `import` derives branch and mode from each checkout's current state, not the V1 spec; orphan cleanup moves from M2 to M4 (`doctor`); M3 rollout: dry-run → backup → one small workspace → `--all` |
