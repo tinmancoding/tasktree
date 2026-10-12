@@ -83,7 +83,7 @@ func NewRoot(out, errOut io.Writer) *cobra.Command {
 	root.PersistentFlags().StringVarP(&o.chdir, "chdir", "C", "", "run as if started in this directory")
 	root.PersistentFlags().BoolVarP(&o.verbose, "verbose", "v", false, "print git commands")
 	root.PersistentFlags().StringVar(&o.author, "author", "", "author for log entries")
-	root.AddCommand(setupCmd(o), configCmd(o), newCmd(o), listCmd(o), infoCmd(o), noteCmd(o), markCmd(o), refCmd(o), labelCmd(o), historyCmd(o), openCmd(o), addCmd(o), removeCmd(o), commitCmd(o), rootCmd(o))
+	root.AddCommand(setupCmd(o), configCmd(o), newCmd(o), listCmd(o), infoCmd(o), noteCmd(o), markCmd(o), refCmd(o), labelCmd(o), historyCmd(o), openCmd(o), addCmd(o), removeCmd(o), modeCmd(o), bootstrapCmd(o), focusCmd(o), pushCmd(o), commitCmd(o), rootCmd(o))
 	return root
 }
 func (o *options) application() (app.App, error) {
@@ -165,24 +165,36 @@ func configCmd(o *options) *cobra.Command {
 }
 func newCmd(o *options) *cobra.Command {
 	var x app.NewOptions
-	var open bool
-	var path string
+	var open, isolated bool
+	var path, branch string
+	var repos []string
 	c := &cobra.Command{Use: "new <title>", Short: "Create a task (optionally a subtask, optionally open its tasktree)", Args: exact(1), RunE: func(cmd *cobra.Command, args []string) error {
 		x.Title = args[0]
 		a, e := o.application()
 		if e != nil {
 			return e
 		}
+		if isolated && x.Parent == "" {
+			return usageError{"--isolated requires --parent"}
+		}
+		if open && isolated {
+			return usageError{"--open and --isolated are mutually exclusive"}
+		}
 		t, e := a.NewTask(cmd.Context(), x)
 		if e != nil {
 			return e
 		}
-		if !open {
+		if !open && !isolated {
 			fmt.Fprintf(o.out, "%s %s\n", t.Handle, t.ID)
 			return nil
 		}
-		fmt.Fprintf(o.err, "%s %s\n", t.Handle, t.ID)
-		p, e := a.Open(cmd.Context(), t.ID, path, false, o.err)
+		if !isolated {
+			fmt.Fprintf(o.err, "%s %s\n", t.Handle, t.ID)
+		}
+		p, e := a.Open(cmd.Context(), t.ID, app.OpenOptions{Path: path, Repos: repos, Branch: branch}, o.err)
+		if e != nil && strings.Contains(e.Error(), "does not exist in parent") {
+			return usageError{e.Error()}
+		}
 		if e == nil {
 			fmt.Fprintln(o.out, p)
 		}
@@ -193,7 +205,10 @@ func newCmd(o *options) *cobra.Command {
 	c.Flags().StringVar(&x.Status, "status", "incoming", "initial status")
 	c.Flags().StringVar(&x.Parent, "parent", "", "parent task")
 	c.Flags().BoolVar(&open, "open", false, "create and open a tasktree")
-	c.Flags().StringVar(&path, "path", "", "checkout path (with --open)")
+	c.Flags().BoolVar(&isolated, "isolated", false, "create an isolated subtask tasktree")
+	c.Flags().StringSliceVar(&repos, "repos", nil, "parent repositories to include")
+	c.Flags().StringVar(&branch, "branch", "", "work repository branch override")
+	c.Flags().StringVar(&path, "path", "", "checkout path")
 	return c
 }
 func listCmd(o *options) *cobra.Command {
@@ -287,7 +302,15 @@ func infoCmd(o *options) *cobra.Command {
 		}
 		var tree *app.TasktreeInfo
 		if root != "" {
-			x, inspectErr := a.InspectTasktree(cmd.Context(), t.ID, root)
+			_, rootCfg, discoverErr := app.DiscoverRoot(root)
+			if discoverErr != nil {
+				return discoverErr
+			}
+			rootID := t.ID
+			if _, statErr := os.Stat(a.Home.ClonePath(rootID)); statErr != nil {
+				rootID = rootCfg.TaskID
+			}
+			x, inspectErr := a.InspectTasktree(cmd.Context(), rootID, root)
 			if inspectErr != nil {
 				return inspectErr
 			}
@@ -344,7 +367,13 @@ func infoCmd(o *options) *cobra.Command {
 		if configErr != nil {
 			return configErr
 		}
-		writeInfo(o.out, t, parent, children, cfg.Jira.BaseURL)
+		focus := ""
+		if root != "" {
+			if ft, ok := a.FocusForRoot(root); ok {
+				focus = ft.Handle
+			}
+		}
+		writeInfo(o.out, t, parent, children, cfg.Jira.BaseURL, focus)
 		if tree != nil {
 			return writeRepoInfo(o.out, *tree)
 		}
@@ -664,8 +693,11 @@ func pathWithin(path, root string) bool {
 	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
-func writeInfo(w io.Writer, t record.Task, parent string, children []record.Task, jiraBase string) {
+func writeInfo(w io.Writer, t record.Task, parent string, children []record.Task, jiraBase, focus string) {
 	fmt.Fprintf(w, "ID: %s\nHandle: %s\nTitle: %s\nStatus: %s\n", t.ID, t.Handle, t.Title, t.Status)
+	if focus != "" {
+		fmt.Fprintf(w, "Focus: %s\n", focus)
+	}
 	fmt.Fprintf(w, "Parent: %s\n", parent)
 	if t.Progress != nil {
 		fmt.Fprintf(w, "Progress: %d/%d\n", t.Progress.Closed, t.Progress.Total)
@@ -706,21 +738,28 @@ func writeRepoInfo(w io.Writer, tree app.TasktreeInfo) error {
 }
 
 func openCmd(o *options) *cobra.Command {
-	var path string
-	var force bool
+	var x app.OpenOptions
+	var repos []string
 	c := &cobra.Command{Use: "open <handle|id>", Short: "Materialize or locate a task's tasktree; prints its path", Args: exact(1), RunE: func(cmd *cobra.Command, args []string) error {
 		a, e := o.application()
 		if e != nil {
 			return e
 		}
-		p, e := a.Open(cmd.Context(), args[0], path, force, o.err)
+		x.Repos = repos
+		p, e := a.Open(cmd.Context(), args[0], x, o.err)
+		if e != nil && strings.Contains(e.Error(), "does not exist in parent") {
+			return usageError{e.Error()}
+		}
 		if e == nil {
 			fmt.Fprintln(o.out, p)
 		}
 		return e
 	}}
-	c.Flags().StringVar(&path, "path", "", "checkout path")
-	c.Flags().BoolVar(&force, "force", false, "replace an orphaned hidden git directory after reporting loss")
+	c.Flags().StringVar(&x.Path, "path", "", "checkout path")
+	c.Flags().BoolVar(&x.Force, "force", false, "replace an orphaned hidden git directory after reporting loss")
+	c.Flags().BoolVar(&x.SkipBootstrap, "skip-bootstrap", false, "do not run bootstrap steps")
+	c.Flags().StringSliceVar(&repos, "repos", nil, "parent repositories to include when promoting a subtask")
+	c.Flags().StringVar(&x.Branch, "branch", "", "work repository branch override")
 	return c
 }
 func requireTree(a app.App, ref string) (string, string, error) {
@@ -831,6 +870,111 @@ func rootCmd(o *options) *cobra.Command {
 		}
 		fmt.Fprintln(o.out, root)
 		return nil
+	}}
+	c.Flags().StringVarP(&ref, "task", "t", "", "task handle or id")
+	return c
+}
+
+func modeCmd(o *options) *cobra.Command {
+	var ref string
+	c := &cobra.Command{Use: "mode <repo> <follow|work|pin>", Short: "Change a repository mode", Args: exact(2), RunE: func(cmd *cobra.Command, args []string) error {
+		if args[1] != "follow" && args[1] != "work" && args[1] != "pin" {
+			return usageError{"mode must be follow, work, or pin"}
+		}
+		a, e := o.application()
+		if e != nil {
+			return e
+		}
+		id, root, e := requireTree(a, ref)
+		if e != nil {
+			return e
+		}
+		e = a.Mode(cmd.Context(), id, root, args[0], args[1])
+		if e != nil && strings.Contains(e.Error(), "detached") {
+			return usageError{e.Error()}
+		}
+		if e == nil {
+			fmt.Fprintf(o.out, "%s mode set to %s\n", args[0], args[1])
+		}
+		return e
+	}}
+	c.Flags().StringVarP(&ref, "task", "t", "", "task handle or id")
+	return c
+}
+func bootstrapCmd(o *options) *cobra.Command {
+	var ref string
+	c := &cobra.Command{Use: "bootstrap", Short: "Run the tasktree bootstrap steps", Args: exact(0), RunE: func(cmd *cobra.Command, args []string) error {
+		a, e := o.application()
+		if e != nil {
+			return e
+		}
+		id, root, e := requireTree(a, ref)
+		if e != nil {
+			return e
+		}
+		return a.Bootstrap(cmd.Context(), id, root, o.err)
+	}}
+	c.Flags().StringVarP(&ref, "task", "t", "", "task handle or id")
+	return c
+}
+func focusCmd(o *options) *cobra.Command {
+	var clear bool
+	c := &cobra.Command{Use: "focus [handle|id]", Short: "Focus a shared descendant in this tasktree", Args: func(cmd *cobra.Command, args []string) error {
+		if clear && len(args) == 0 {
+			return nil
+		}
+		if !clear && len(args) == 1 {
+			return nil
+		}
+		return usageError{"focus requires one task, or --clear"}
+	}, RunE: func(cmd *cobra.Command, args []string) error {
+		a, e := o.application()
+		if e != nil {
+			return e
+		}
+		root, _, e := app.DiscoverRoot("")
+		if e != nil {
+			return notInTasktreeError{}
+		}
+		ref := ""
+		if len(args) > 0 {
+			ref = args[0]
+		}
+		t, e := a.Focus(root, ref, clear)
+		if e == nil {
+			if clear {
+				fmt.Fprintln(o.out, "focus cleared")
+			} else {
+				fmt.Fprintf(o.out, "focused %s\n", t.Handle)
+			}
+		}
+		return e
+	}}
+	c.Flags().BoolVar(&clear, "clear", false, "clear the checkout focus")
+	return c
+}
+func pushCmd(o *options) *cobra.Command {
+	var ref string
+	c := &cobra.Command{Use: "push [repo...]", Short: "Push repository branches and print PR hints", Args: cobra.ArbitraryArgs, RunE: func(cmd *cobra.Command, args []string) error {
+		a, e := o.application()
+		if e != nil {
+			return e
+		}
+		id, root, e := requireTree(a, ref)
+		if e != nil {
+			return e
+		}
+		r, e := a.Push(cmd.Context(), id, root, args)
+		if e != nil && strings.Contains(e.Error(), "detached") {
+			return usageError{e.Error()}
+		}
+		for _, x := range r {
+			fmt.Fprintf(o.err, "%s: %s\n", x.Name, x.Message)
+			if x.Hint != "" {
+				fmt.Fprintln(o.out, x.Hint)
+			}
+		}
+		return e
 	}}
 	c.Flags().StringVarP(&ref, "task", "t", "", "task handle or id")
 	return c

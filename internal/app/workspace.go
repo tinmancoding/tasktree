@@ -10,9 +10,11 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/tinmancoding/tasktree/v2/internal/bootstrap"
 	"github.com/tinmancoding/tasktree/v2/internal/cache"
 	"github.com/tinmancoding/tasktree/v2/internal/gitx"
 	"github.com/tinmancoding/tasktree/v2/internal/home"
+	"github.com/tinmancoding/tasktree/v2/internal/hub"
 	"github.com/tinmancoding/tasktree/v2/internal/record"
 	"github.com/tinmancoding/tasktree/v2/internal/repoalias"
 	"gopkg.in/yaml.v3"
@@ -23,9 +25,10 @@ type GateError struct{ Message string }
 func (e GateError) Error() string { return e.Message }
 
 type TasktreeConfig struct {
-	APIVersion string `yaml:"apiVersion"`
-	Kind       string `yaml:"kind"`
-	TaskID     string `yaml:"taskId"`
+	APIVersion string           `yaml:"apiVersion"`
+	Kind       string           `yaml:"kind"`
+	TaskID     string           `yaml:"taskId"`
+	Bootstrap  []bootstrap.Step `yaml:"bootstrap,omitempty"`
 }
 
 func DiscoverRoot(start string) (string, TasktreeConfig, error) {
@@ -105,6 +108,15 @@ func (a App) ResolveTarget(explicit, start string) (string, string, error) {
 	root, cfg, err := DiscoverRoot(start)
 	if err != nil {
 		return "", "", err
+	}
+	local, err := a.Home.LoadLocal()
+	if err != nil {
+		return "", "", err
+	}
+	if checkout, ok := local.Checkouts[cfg.TaskID]; ok && checkout.Focus != "" {
+		if _, err := a.Info(checkout.Focus); err == nil {
+			return checkout.Focus, root, nil
+		}
 	}
 	return cfg.TaskID, root, nil
 }
@@ -247,16 +259,20 @@ func ensureEmpty(path string) error {
 	return nil
 }
 
-func (a App) Open(ctx context.Context, ref, requested string, force bool, progress interface{ Write([]byte) (int, error) }) (string, error) {
+type OpenOptions struct {
+	Path                 string
+	Force, SkipBootstrap bool
+	Repos                []string
+	Branch               string
+}
+
+func (a App) Open(ctx context.Context, ref string, o OpenOptions, progress interface{ Write([]byte) (int, error) }) (string, error) {
 	t, err := a.Info(ref)
 	if err != nil {
 		return "", err
 	}
 	if !recordOpen(t.Status) {
 		return "", GateError{fmt.Sprintf("task %s is %s; mark active before opening", t.Handle, t.Status)}
-	}
-	if t.Parent != nil {
-		return "", GateError{"isolated subtasks arrive in M2"}
 	}
 	local, err := a.Home.LoadLocal()
 	if err != nil {
@@ -272,7 +288,14 @@ func (a App) Open(ctx context.Context, ref, requested string, force bool, progre
 	if err != nil {
 		return "", err
 	}
-	path := requested
+	// A subtask without a task branch is promoted to an isolated tasktree.
+	g := a.Git.WithDefaults()
+	branch := "task/" + t.ID
+	_, _, branchErr := git(ctx, g, a.Home.GitPath(), "show-ref", "--verify", "--quiet", "refs/heads/"+branch)
+	if t.Parent != nil && branchErr != nil {
+		return a.openIsolated(ctx, t, o, progress)
+	}
+	path := o.Path
 	if path == "" {
 		path = filepath.Join(cfg.TasksRoot, t.Handle)
 	}
@@ -289,7 +312,7 @@ func (a App) Open(ctx context.Context, ref, requested string, force bool, progre
 	clonePath := a.Home.ClonePath(t.ID)
 	if _, statErr := os.Stat(clonePath); statErr == nil {
 		msg := fmt.Sprintf("hidden git dir for %s already exists at %s; the checkout may have been moved or local.yml lost", t.Handle, clonePath)
-		if !force {
+		if !o.Force {
 			return "", GateError{msg}
 		}
 		loss, lossErr := lossInModules(ctx, a.Git.WithDefaults(), clonePath)
@@ -309,8 +332,6 @@ func (a App) Open(ctx context.Context, ref, requested string, force bool, progre
 	if err := os.MkdirAll(a.Home.ClonesPath(), 0o755); err != nil {
 		return "", err
 	}
-	g := a.Git.WithDefaults()
-	branch := "task/" + t.ID
 	_, _, existsErr := git(ctx, g, a.Home.GitPath(), "show-ref", "--verify", "--quiet", "refs/heads/"+branch)
 	configureIdentity := func() {
 		name := cfg.Author
@@ -386,6 +407,12 @@ func (a App) Open(ctx context.Context, ref, requested string, force bool, progre
 		return "", err
 	}
 	a.refreshTaskRecord(ctx, t.ID)
+	a.addParentRemotes(ctx, t, path)
+	if !o.SkipBootstrap {
+		if err := a.Bootstrap(ctx, t.ID, path, progress); err != nil {
+			return "", err
+		}
+	}
 	return path, nil
 }
 
@@ -965,3 +992,533 @@ func SortedRepos(in []RepoInfo) {
 }
 
 var _ = errors.Is
+
+// Bootstrap executes the committed bootstrap plan for a materialized checkout.
+func (a App) Bootstrap(ctx context.Context, id, root string, progress interface{ Write([]byte) (int, error) }) error {
+	b, err := os.ReadFile(filepath.Join(root, ".tasktree", "config.yml"))
+	if err != nil {
+		return err
+	}
+	var cfg TasktreeConfig
+	if err = yaml.Unmarshal(b, &cfg); err != nil {
+		return err
+	}
+	return bootstrap.Run(ctx, root, cfg.Bootstrap, progress)
+}
+
+// Mode changes repository update intent and records the structural change.
+func (a App) Mode(ctx context.Context, id, root, name, mode string) error {
+	if mode != "follow" && mode != "work" && mode != "pin" {
+		return fmt.Errorf("invalid mode %q", mode)
+	}
+	ms, err := modules(root)
+	if err != nil {
+		return err
+	}
+	var found *module
+	for i := range ms {
+		if ms[i].Name == name {
+			found = &ms[i]
+			break
+		}
+	}
+	if found == nil {
+		return fmt.Errorf("repository %q not found", name)
+	}
+	g := a.Git.WithDefaults()
+	gm := filepath.Join(root, ".gitmodules")
+	if mode == "pin" {
+		_, _, _ = git(ctx, g, "", "config", "-f", gm, "--unset", "submodule."+name+".branch")
+	} else {
+		branch, err := g.CurrentBranch(ctx, filepath.Join(root, found.Path))
+		if err != nil {
+			return err
+		}
+		if branch == "" {
+			return fmt.Errorf("repository %s is detached; follow and work require a branch", name)
+		}
+		if _, _, err = git(ctx, g, "", "config", "-f", gm, "submodule."+name+".branch", branch); err != nil {
+			return err
+		}
+	}
+	if _, _, err = git(ctx, g, "", "config", "-f", gm, "submodule."+name+".tasktree-mode", mode); err != nil {
+		return err
+	}
+	return a.commitRoot(ctx, id, root, fmt.Sprintf("tasktree(%s): mode %s %s", id, name, mode))
+}
+
+func (a App) Focus(root, ref string, clear bool) (record.Task, error) {
+	_, cfg, err := DiscoverRoot(root)
+	if err != nil {
+		return record.Task{}, err
+	}
+	base, err := a.Info(cfg.TaskID)
+	if err != nil {
+		return record.Task{}, err
+	}
+	if clear {
+		err = a.Home.UpdateLocal(func(s *home.LocalState) error {
+			c := s.Checkouts[base.ID]
+			c.Focus = ""
+			s.Checkouts[base.ID] = c
+			return nil
+		})
+		return base, err
+	}
+	t, err := a.Info(ref)
+	if err != nil {
+		return record.Task{}, err
+	}
+	docs, err := a.Hub.ReadAll()
+	if err != nil {
+		return record.Task{}, err
+	}
+	by := map[string]record.Task{}
+	for _, d := range docs {
+		by[d.Task.ID] = d.Task
+	}
+	p := t.Parent
+	descendant := false
+	for p != nil {
+		if *p == base.ID {
+			descendant = true
+			break
+		}
+		x, ok := by[*p]
+		if !ok {
+			break
+		}
+		p = x.Parent
+	}
+	if !descendant {
+		return record.Task{}, GateError{fmt.Sprintf("%s is not a descendant of %s", t.Handle, base.Handle)}
+	}
+	g := a.Git.WithDefaults()
+	_, _, e := git(context.Background(), g, a.Home.GitPath(), "show-ref", "--verify", "--quiet", "refs/heads/task/"+t.ID)
+	if e == nil {
+		return record.Task{}, GateError{fmt.Sprintf("%s has its own isolated tasktree", t.Handle)}
+	}
+	err = a.Home.UpdateLocal(func(s *home.LocalState) error {
+		c, ok := s.Checkouts[base.ID]
+		if !ok {
+			return fmt.Errorf("tasktree checkout is not recorded")
+		}
+		c.Focus = t.ID
+		s.Checkouts[base.ID] = c
+		return nil
+	})
+	return t, err
+}
+
+func (a App) FocusForRoot(root string) (record.Task, bool) {
+	_, cfg, err := DiscoverRoot(root)
+	if err != nil {
+		return record.Task{}, false
+	}
+	s, err := a.Home.LoadLocal()
+	if err != nil {
+		return record.Task{}, false
+	}
+	c := s.Checkouts[cfg.TaskID]
+	if c.Focus == "" {
+		return record.Task{}, false
+	}
+	t, err := a.Info(c.Focus)
+	return t, err == nil
+}
+
+func (a App) clearFocus(id string) {
+	_ = a.Home.UpdateLocal(func(s *home.LocalState) error {
+		for k, c := range s.Checkouts {
+			if c.Focus == id {
+				c.Focus = ""
+				s.Checkouts[k] = c
+			}
+		}
+		return nil
+	})
+}
+
+func (a App) openIsolated(ctx context.Context, t record.Task, o OpenOptions, progress interface{ Write([]byte) (int, error) }) (path string, err error) {
+	parent, err := a.Info(*t.Parent)
+	if err != nil {
+		return "", err
+	}
+	local, err := a.Home.LoadLocal()
+	if err != nil {
+		return "", err
+	}
+	pc, ok := local.Checkouts[parent.ID]
+	if !ok {
+		return "", GateError{"open " + parent.Handle + " first"}
+	}
+	if st, e := os.Stat(pc.Path); e != nil || !st.IsDir() {
+		return "", GateError{"open " + parent.Handle + " first"}
+	}
+	pmods, err := modules(pc.Path)
+	if err != nil {
+		return "", err
+	}
+	selected := map[string]bool{}
+	if len(o.Repos) > 0 {
+		for _, n := range o.Repos {
+			selected[n] = true
+		}
+	} else {
+		for _, m := range pmods {
+			if m.Mode == "work" {
+				selected[m.Name] = true
+			}
+		}
+	}
+	for n := range selected {
+		found := false
+		for _, m := range pmods {
+			found = found || m.Name == n
+		}
+		if !found {
+			return "", fmt.Errorf("repository %q does not exist in parent", n)
+		}
+	}
+	cfg, err := a.Home.LoadConfig()
+	if err != nil {
+		return "", err
+	}
+	path = o.Path
+	if path == "" {
+		path = filepath.Join(cfg.TasksRoot, t.Handle)
+	}
+	path, err = filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	if err = ensureEmpty(path); err != nil {
+		return "", err
+	}
+	if err = os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return "", err
+	}
+	_ = os.Remove(path)
+	if err = os.MkdirAll(a.Home.ClonesPath(), 0755); err != nil {
+		return "", err
+	}
+	g := a.Git.WithDefaults()
+	taskBranch := "task/" + t.ID
+	defer func() {
+		if err != nil {
+			_ = os.RemoveAll(path)
+			_ = os.RemoveAll(a.Home.ClonePath(t.ID))
+		}
+	}()
+	if _, _, err = git(ctx, g, "", "clone", "--no-checkout", "--separate-git-dir="+a.Home.ClonePath(t.ID), a.Home.GitPath(), path); err != nil {
+		return "", err
+	}
+	name := cfg.Author
+	if name == "" {
+		name = "tasktree"
+	}
+	machine := cfg.Machine
+	if machine == "" {
+		machine = "localhost"
+	}
+	_, _, _ = rootGit(ctx, g, a.Home, t.ID, path, "config", "user.name", name)
+	_, _, _ = rootGit(ctx, g, a.Home, t.ID, path, "config", "user.email", name+"@"+machine)
+	if _, _, err = rootGit(ctx, g, a.Home, t.ID, path, "checkout", "--orphan", taskBranch); err != nil {
+		return "", err
+	}
+	_, _, _ = rootGit(ctx, g, a.Home, t.ID, path, "rm", "-rf", "--ignore-unmatch", ".")
+	_, _, _ = rootGit(ctx, g, a.Home, t.ID, path, "clean", "-fdx")
+	if err = os.MkdirAll(filepath.Join(path, ".tasktree"), 0755); err != nil {
+		return "", err
+	}
+	b, _ := yaml.Marshal(TasktreeConfig{APIVersion: "tasktree.dev/v2", Kind: "TasktreeConfig", TaskID: t.ID})
+	if err = os.WriteFile(filepath.Join(path, ".tasktree", "config.yml"), b, 0644); err != nil {
+		return "", err
+	}
+	if err = os.WriteFile(filepath.Join(path, ".tasktree", ".gitignore"), []byte("task.md\n"), 0644); err != nil {
+		return "", err
+	}
+	agents := starterAgents(t)
+	intro := fmt.Sprintf("This folder is a tasktree for task `%s` (id `%s`), managed by `tt2`.\n", t.Handle, t.ID)
+	agents = strings.Replace(agents, intro, intro+fmt.Sprintf("\nParent task: `%s` — read it with `tt2 info -t %s`.\n", parent.Handle, parent.Handle), 1)
+	if err = os.WriteFile(filepath.Join(path, "AGENTS.md"), []byte(agents), 0644); err != nil {
+		return "", err
+	}
+	mgr, e := cacheManager(g)
+	if e != nil {
+		return "", e
+	}
+	for _, m := range pmods {
+		if !selected[m.Name] {
+			continue
+		}
+		pp := filepath.Join(pc.Path, m.Path)
+		head, _, e := git(ctx, g, pp, "rev-parse", "HEAD")
+		if e != nil {
+			return "", e
+		}
+		head = strings.TrimSpace(head)
+		dirty, _ := g.IsDirty(ctx, pp)
+		if dirty && progress != nil {
+			fmt.Fprintf(progress, "warning: %s: parent has uncommitted changes; forking from its last commit\n", m.Name)
+		}
+		actual, _ := g.CurrentBranch(ctx, pp)
+		if m.Branch != "" && actual != m.Branch && progress != nil {
+			fmt.Fprintf(progress, "warning: %s: parent HEAD is on %s, not .gitmodules branch %s; forking from HEAD\n", m.Name, actual, m.Branch)
+		}
+		cp, e := mgr.Ensure(ctx, m.URL)
+		if e != nil {
+			return "", e
+		}
+		dest := filepath.Join(path, m.Path)
+		if _, _, e = git(ctx, g, "", "clone", cp, dest); e != nil {
+			return "", e
+		}
+		if e = g.RemoteSetURL(ctx, dest, "origin", m.URL); e != nil {
+			return "", e
+		}
+		parentGit := filepath.Join(a.Home.ClonePath(parent.ID), "modules", m.Name)
+		_, _, _ = git(ctx, g, dest, "remote", "remove", "parent")
+		if _, _, e = git(ctx, g, dest, "remote", "add", "parent", parentGit); e != nil {
+			return "", e
+		}
+		if _, _, e = git(ctx, g, dest, "fetch", "parent"); e != nil {
+			return "", e
+		}
+		branch := m.Branch
+		switch m.Mode {
+		case "work":
+			if o.Branch != "" {
+				branch = o.Branch
+			} else {
+				branch = m.Branch + "-" + t.Handle
+			}
+			if e = g.ValidateBranchName(ctx, branch); e != nil {
+				return "", e
+			}
+			ref, _, x := git(ctx, g, cp, "rev-parse", "--verify", "refs/heads/"+branch)
+			if x == nil && strings.TrimSpace(ref) != head {
+				return "", hub.ConflictError{Message: fmt.Sprintf("branch %s already exists at a different commit", branch)}
+			}
+			if _, _, e = git(ctx, g, dest, "checkout", "-B", branch, head); e != nil {
+				return "", e
+			}
+		case "follow":
+			if _, _, e = git(ctx, g, dest, "checkout", "-B", branch, head); e != nil {
+				return "", e
+			}
+		case "pin":
+			branch = ""
+			if _, _, e = git(ctx, g, dest, "checkout", "--detach", head); e != nil {
+				return "", e
+			}
+		default:
+			return "", fmt.Errorf("invalid parent mode %q", m.Mode)
+		}
+		if _, _, e = rootGit(ctx, g, a.Home, t.ID, path, "-c", "protocol.file.allow=always", "submodule", "add", "--force", m.URL, m.Path); e != nil {
+			return "", e
+		}
+		if _, _, e = rootGit(ctx, g, a.Home, t.ID, path, "submodule", "absorbgitdirs", m.Path); e != nil {
+			return "", e
+		}
+		nm := module{Name: m.Name, Path: m.Path, URL: m.URL, Branch: branch, Mode: m.Mode}
+		if e = rewriteSubmodule(a.Home, t.ID, path, nm); e != nil {
+			return "", e
+		}
+		gm := filepath.Join(path, ".gitmodules")
+		if branch != "" {
+			_, _, _ = git(ctx, g, "", "config", "-f", gm, "submodule."+m.Name+".branch", branch)
+		}
+		_, _, _ = git(ctx, g, "", "config", "-f", gm, "submodule."+m.Name+".tasktree-mode", m.Mode)
+	}
+	if _, _, err = rootGit(ctx, g, a.Home, t.ID, path, "add", "-A"); err != nil {
+		return "", err
+	}
+	if _, _, err = rootGit(ctx, g, a.Home, t.ID, path, "commit", "-m", fmt.Sprintf("tasktree(%s): fork from %s", t.ID, parent.Handle)); err != nil {
+		return "", err
+	}
+	if _, _, err = rootGit(ctx, g, a.Home, t.ID, path, "push", "-u", "origin", taskBranch); err != nil {
+		return "", err
+	}
+	_ = os.Remove(filepath.Join(path, ".git"))
+	if err = a.Home.UpdateLocal(func(s *home.LocalState) error { s.Checkouts[t.ID] = home.Checkout{Path: path}; return nil }); err != nil {
+		return "", err
+	}
+	a.refreshTaskRecord(ctx, t.ID)
+	if !o.SkipBootstrap {
+		if err = a.Bootstrap(ctx, t.ID, path, progress); err != nil {
+			return "", err
+		}
+	}
+	return path, nil
+}
+
+func (a App) addParentRemotes(ctx context.Context, t record.Task, root string) {
+	if t.Parent == nil {
+		return
+	}
+	local, e := a.Home.LoadLocal()
+	if e != nil {
+		return
+	}
+	pc, ok := local.Checkouts[*t.Parent]
+	if !ok {
+		return
+	}
+	ms, e := modules(root)
+	if e != nil {
+		return
+	}
+	g := a.Git.WithDefaults()
+	for _, m := range ms {
+		p := filepath.Join(a.Home.ClonePath(*t.Parent), "modules", m.Name)
+		if _, e := os.Stat(p); e != nil {
+			continue
+		}
+		rp := filepath.Join(root, m.Path)
+		_, _, _ = git(ctx, g, rp, "remote", "remove", "parent")
+		_, _, _ = git(ctx, g, rp, "remote", "add", "parent", p)
+		_, _, _ = git(ctx, g, rp, "fetch", "parent")
+		_ = pc
+	}
+}
+
+type PushResult struct{ Name, Message, Hint string }
+
+func (a App) Push(ctx context.Context, id, root string, names []string) ([]PushResult, error) {
+	ms, e := modules(root)
+	if e != nil {
+		return nil, e
+	}
+	explicit := len(names) > 0
+	wanted := map[string]bool{}
+	for _, n := range names {
+		wanted[n] = true
+	}
+	if explicit {
+		for n := range wanted {
+			found := false
+			for _, m := range ms {
+				found = found || m.Name == n
+			}
+			if !found {
+				return nil, fmt.Errorf("repository %q not found", n)
+			}
+		}
+	}
+	t, e := a.Info(id)
+	if e != nil {
+		return nil, e
+	}
+	var parent record.Task
+	if t.Parent != nil {
+		parent, _ = a.Info(*t.Parent)
+	}
+	g := a.Git.WithDefaults()
+	results := []PushResult{}
+	for _, m := range ms {
+		if explicit && !wanted[m.Name] {
+			continue
+		}
+		p := filepath.Join(root, m.Path)
+		branch, e := g.CurrentBranch(ctx, p)
+		if e != nil {
+			return results, e
+		}
+		if branch == "" {
+			if explicit {
+				return results, fmt.Errorf("repository %s is detached", m.Name)
+			}
+			results = append(results, PushResult{Name: m.Name, Message: "skipped (detached)"})
+			continue
+		}
+		def, _ := g.DefaultBranch(ctx, p)
+		if branch == "main" || branch == "master" || strings.HasPrefix(branch, "release/") || branch == def {
+			return results, GateError{fmt.Sprintf("refusing to push protected branch %s in %s", branch, m.Name)}
+		}
+		if _, _, e = git(ctx, g, p, "push", "-u", "origin", branch); e != nil {
+			return results, e
+		}
+		r := PushResult{Name: m.Name, Message: "pushed " + branch}
+		owner := parseGitHubRepo(m.URL)
+		repoFlag := ""
+		if owner != "" {
+			repoFlag = " --repo " + owner
+		}
+		if t.Parent != nil && m.Mode == "work" {
+			pms := a.parentModules(ctx, parent.ID)
+			var pm *module
+			for i := range pms {
+				if pms[i].Name == m.Name {
+					pm = &pms[i]
+				}
+			}
+			if pm != nil && pm.Branch != "" {
+				_, _, _ = git(ctx, g, p, "fetch", "origin", pm.Branch)
+				if _, _, x := git(ctx, g, p, "remote", "get-url", "parent"); x != nil {
+					r.Message += "; fork-point check skipped (no parent remote)"
+				} else {
+					_, _, _ = git(ctx, g, p, "fetch", "parent")
+					fork, _, x := git(ctx, g, p, "merge-base", "HEAD", "refs/remotes/parent/"+pm.Branch)
+					if x == nil {
+						fork = strings.TrimSpace(fork)
+						_, _, parentRef := git(ctx, g, p, "show-ref", "--verify", "--quiet", "refs/remotes/origin/"+pm.Branch)
+						_, _, anc := git(ctx, g, p, "merge-base", "--is-ancestor", fork, "origin/"+pm.Branch)
+						if parentRef != nil || anc != nil {
+							countArgs := []string{"rev-list", "--count", fork, "--not", "origin/" + pm.Branch}
+							if parentRef != nil {
+								countArgs = []string{"rev-list", "--count", fork, "--not", "--remotes=origin"}
+							}
+							n, _, _ := git(ctx, g, p, countArgs...)
+							if strings.TrimSpace(n) == "" {
+								n = "1"
+							}
+							r.Message += fmt.Sprintf("; warning: push %s's %s first, or the PR will include %s parent commits", parent.Handle, m.Name, strings.TrimSpace(n))
+						}
+					}
+				}
+				r.Hint = "gh pr create" + repoFlag + " --base " + pm.Branch + " --head " + branch
+			}
+		}
+		results = append(results, r)
+	}
+	return results, nil
+}
+func (a App) parentModules(ctx context.Context, id string) []module {
+	if p := localCheckoutPath(a.Home, id); p != "" {
+		if ms, err := modules(p); err == nil {
+			return ms
+		}
+	}
+	out, _, err := git(ctx, a.Git.WithDefaults(), a.Home.GitPath(), "show", "task/"+id+":.gitmodules")
+	if err != nil {
+		return nil
+	}
+	dir, err := os.MkdirTemp("", "tt2-parent-modules-")
+	if err != nil {
+		return nil
+	}
+	defer os.RemoveAll(dir)
+	if os.WriteFile(filepath.Join(dir, ".gitmodules"), []byte(out), 0600) != nil {
+		return nil
+	}
+	ms, _ := modules(dir)
+	return ms
+}
+func localCheckoutPath(h home.Home, id string) string {
+	s, e := h.LoadLocal()
+	if e != nil {
+		return ""
+	}
+	return s.Checkouts[id].Path
+}
+func parseGitHubRepo(u string) string {
+	s := strings.TrimSuffix(strings.TrimSpace(u), ".git")
+	if i := strings.Index(s, "github.com:"); i >= 0 {
+		return strings.TrimPrefix(s[i+len("github.com:"):], "/")
+	}
+	if i := strings.Index(s, "github.com/"); i >= 0 {
+		return strings.TrimPrefix(s[i+len("github.com/"):], "/")
+	}
+	return ""
+}

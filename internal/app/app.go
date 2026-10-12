@@ -678,9 +678,13 @@ func (a App) updateStatus(ctx context.Context, ref, status string) (record.Task,
 	if err != nil {
 		return record.Task{}, err
 	}
-	return a.Hub.UpdateWithPostCommit(ctx, ref, fmt.Sprintf("status %s → %s", old.Status, status), c.Author, c.Machine, func(d *record.Document) error { return d.SetStatus(status, a.Now().UTC()) }, func(task record.Task, raw []byte) {
+	t, err := a.Hub.UpdateWithPostCommit(ctx, ref, fmt.Sprintf("status %s → %s", old.Status, status), c.Author, c.Machine, func(d *record.Document) error { return d.SetStatus(status, a.Now().UTC()) }, func(task record.Task, raw []byte) {
 		a.writeGeneratedTaskRecord(task.ID, raw)
 	})
+	if err == nil && !record.IsOpen(status) {
+		a.clearFocus(t.ID)
+	}
+	return t, err
 }
 
 func (a App) Mark(ctx context.Context, ref, status string, o MarkOptions) (MarkResult, error) {
