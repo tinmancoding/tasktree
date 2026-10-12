@@ -141,7 +141,11 @@ func (a App) ResolveTarget(explicit, start string) (string, string, error) {
 			byID[d.Task.ID] = d.Task
 		}
 		focused, exists := byID[checkout.Focus]
-		valid := exists && record.IsOpen(focused.Status) && isDescendant(byID, focused.ID, cfg.TaskID)
+		descendant, walkErr := isDescendant(byID, focused.ID, cfg.TaskID)
+		if walkErr != nil {
+			return "", "", walkErr
+		}
+		valid := exists && record.IsOpen(focused.Status) && descendant
 		if valid {
 			return checkout.Focus, root, nil
 		}
@@ -189,23 +193,23 @@ func (a App) ResolveTreeTarget(explicit, start string) (string, string, error) {
 	return t.ID, checkout.Path, nil
 }
 
-func isDescendant(byID map[string]record.Task, id, ancestor string) bool {
+func isDescendant(byID map[string]record.Task, id, ancestor string) (bool, error) {
 	seen := map[string]bool{}
 	for id != "" {
 		if seen[id] {
-			return false
+			return false, fmt.Errorf("task parent cycle detected at %s", id)
 		}
 		seen[id] = true
 		t, ok := byID[id]
 		if !ok || t.Parent == nil {
-			return false
+			return false, nil
 		}
 		if *t.Parent == ancestor {
-			return true
+			return true, nil
 		}
 		id = *t.Parent
 	}
-	return false
+	return false, nil
 }
 
 type RepoInfo struct {
