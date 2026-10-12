@@ -1300,6 +1300,12 @@ func (a App) openIsolated(ctx context.Context, t record.Task, o OpenOptions, pro
 			if x == nil && strings.TrimSpace(ref) != head {
 				return "", hub.ConflictError{Message: fmt.Sprintf("branch %s already exists at a different commit", branch)}
 			}
+			refs, _, _ := git(ctx, g, cp, "for-each-ref", "--format=%(refname:strip=2)", "refs/heads")
+			for _, existing := range strings.Fields(refs) {
+				if strings.HasPrefix(existing, branch+"/") || strings.HasPrefix(branch, existing+"/") {
+					return "", hub.ConflictError{Message: fmt.Sprintf("branch %s conflicts with existing branch %s", branch, existing)}
+				}
+			}
 			if _, _, e = git(ctx, g, dest, "checkout", "-B", branch, head); e != nil {
 				return "", e
 			}
