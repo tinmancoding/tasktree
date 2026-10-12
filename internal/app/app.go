@@ -243,6 +243,9 @@ func (a App) author() (string, string, error) {
 	return author, c.Machine, nil
 }
 func (a App) Note(ctx context.Context, ref, text, kind string) (record.Task, error) {
+	if !a.Hub.IsSetup() {
+		return record.Task{}, hub.NotSetupError{}
+	}
 	if kind == "" {
 		kind = "note"
 	}

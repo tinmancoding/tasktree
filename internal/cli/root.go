@@ -274,7 +274,10 @@ func writeInfo(w io.Writer, t record.Task) {
 	fmt.Fprintf(w, "ID: %s\nHandle: %s\nTitle: %s\nStatus: %s\n", t.ID, t.Handle, t.Title, t.Status)
 	if t.Parent != nil {
 		fmt.Fprintf(w, "Parent: %s\n", *t.Parent)
+	} else {
+		fmt.Fprintln(w, "Parent: null")
 	}
+	fmt.Fprintf(w, "Labels: %s\nCreated: %s\nUpdated: %s\n", strings.Join(t.Labels, ", "), t.CreatedAt.Format("2006-01-02T15:04:05Z"), t.UpdatedAt.Format("2006-01-02T15:04:05Z"))
 	fmt.Fprintln(w, "Refs:")
 	for _, r := range t.Refs {
 		fmt.Fprintf(w, "  %s: %s\n", r.Type, r.Value)
