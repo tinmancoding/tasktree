@@ -1436,10 +1436,10 @@ func (a App) openIsolated(ctx context.Context, t record.Task, o OpenOptions, pro
 			_ = os.RemoveAll(clonePath)
 		}
 	}()
+	created = true // the path and clone dir were confirmed absent (or removed with --force)
 	if _, _, err = git(ctx, g, "", "clone", "--no-checkout", "--separate-git-dir="+clonePath, a.Home.GitPath(), path); err != nil {
 		return "", err
 	}
-	created = true
 	name := cfg.Author
 	if name == "" {
 		name = "tasktree"
