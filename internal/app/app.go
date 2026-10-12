@@ -309,10 +309,20 @@ func (a App) Note(ctx context.Context, ref, text, kind string) (record.Task, err
 		}
 	})
 }
-func (a App) Mark(ctx context.Context, ref, status string) (record.Task, error) {
-	if err := record.ValidateStatus(status); err != nil {
-		return record.Task{}, err
-	}
+
+type MarkOptions struct {
+	Keep  bool
+	Force bool
+}
+
+type MarkResult struct {
+	Task      record.Task
+	Loss      []string
+	RemovedAt string
+	Remaining []string
+}
+
+func (a App) updateStatus(ctx context.Context, ref, status string) (record.Task, error) {
 	c, err := a.Home.LoadConfig()
 	if err != nil {
 		return record.Task{}, err
@@ -322,4 +332,69 @@ func (a App) Mark(ctx context.Context, ref, status string) (record.Task, error) 
 		return record.Task{}, err
 	}
 	return a.Hub.Update(ctx, ref, fmt.Sprintf("status %s → %s", old.Status, status), c.Author, c.Machine, func(d *record.Document) error { return d.SetStatus(status, a.Now().UTC()) })
+}
+
+func (a App) Mark(ctx context.Context, ref, status string, o MarkOptions) (MarkResult, error) {
+	result := MarkResult{}
+	if err := record.ValidateStatus(status); err != nil {
+		return result, err
+	}
+	task, err := a.Info(ref)
+	if err != nil {
+		return result, err
+	}
+	closing := !record.IsOpen(status)
+	if closing {
+		docs, readErr := a.Hub.ReadAll()
+		if readErr != nil {
+			return result, readErr
+		}
+		openChildren := []string{}
+		for _, d := range docs {
+			if d.Task.Parent != nil && *d.Task.Parent == task.ID && record.IsOpen(d.Task.Status) {
+				openChildren = append(openChildren, fmt.Sprintf("%s (%s)", d.Task.Handle, d.Task.Status))
+			}
+		}
+		if len(openChildren) > 0 {
+			sort.Strings(openChildren)
+			return result, GateError{"task has open subtasks:\n" + strings.Join(openChildren, "\n")}
+		}
+	}
+	if !closing || o.Keep {
+		result.Task, err = a.updateStatus(ctx, task.ID, status)
+		return result, err
+	}
+	local, err := a.Home.LoadLocal()
+	if err != nil {
+		return result, err
+	}
+	checkout, checkedOut := local.Checkouts[task.ID]
+	if !checkedOut {
+		result.Task, err = a.updateStatus(ctx, task.ID, status)
+		return result, err
+	}
+	if st, statErr := os.Stat(checkout.Path); statErr != nil || !st.IsDir() {
+		result.Task, err = a.updateStatus(ctx, task.ID, status)
+		return result, err
+	}
+	result.Loss, err = a.tasktreeLoss(ctx, checkout.Path)
+	if err != nil {
+		return result, err
+	}
+	if len(result.Loss) > 0 && !o.Force {
+		return result, GateError{strings.Join(result.Loss, "\n")}
+	}
+	if _, _, err = a.Commit(ctx, task.ID, checkout.Path, fmt.Sprintf("tasktree(%s): close: %s", task.ID, status)); err != nil {
+		return result, err
+	}
+	result.Task, err = a.updateStatus(ctx, task.ID, status)
+	if err != nil {
+		return result, err
+	}
+	result.RemovedAt = checkout.Path
+	result.Remaining = a.teardownTasktree(task.ID, checkout.Path, local)
+	if len(result.Remaining) > 0 {
+		return result, fmt.Errorf("task closed, but teardown incomplete; remains: %s", strings.Join(result.Remaining, ", "))
+	}
+	return result, nil
 }

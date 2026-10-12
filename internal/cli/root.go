@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -158,6 +159,8 @@ func configCmd(o *options) *cobra.Command {
 }
 func newCmd(o *options) *cobra.Command {
 	var x app.NewOptions
+	var open bool
+	var path string
 	c := &cobra.Command{Use: "new <title>", Args: exact(1), RunE: func(cmd *cobra.Command, args []string) error {
 		x.Title = args[0]
 		a, e := o.application()
@@ -165,8 +168,17 @@ func newCmd(o *options) *cobra.Command {
 			return e
 		}
 		t, e := a.NewTask(cmd.Context(), x)
-		if e == nil {
+		if e != nil {
+			return e
+		}
+		if !open {
 			fmt.Fprintf(o.out, "%s %s\n", t.Handle, t.ID)
+			return nil
+		}
+		fmt.Fprintf(o.err, "%s %s\n", t.Handle, t.ID)
+		p, e := a.Open(cmd.Context(), t.ID, path, o.err)
+		if e == nil {
+			fmt.Fprintln(o.out, p)
 		}
 		return e
 	}}
@@ -174,6 +186,8 @@ func newCmd(o *options) *cobra.Command {
 	c.Flags().StringVar(&x.Handle, "handle", "", "task handle")
 	c.Flags().StringVar(&x.Status, "status", "incoming", "initial status")
 	c.Flags().StringVar(&x.Parent, "parent", "", "parent task")
+	c.Flags().BoolVar(&open, "open", false, "create and open a tasktree")
+	c.Flags().StringVar(&path, "path", "", "checkout path (with --open)")
 	return c
 }
 func listCmd(o *options) *cobra.Command {
@@ -304,6 +318,7 @@ func noteCmd(o *options) *cobra.Command {
 }
 func markCmd(o *options) *cobra.Command {
 	var ref string
+	var markOptions app.MarkOptions
 	c := &cobra.Command{Use: "mark <status>", Args: exact(1), RunE: func(cmd *cobra.Command, args []string) error {
 		if e := record.ValidateStatus(args[0]); e != nil {
 			return usageError{e.Error()}
@@ -316,15 +331,37 @@ func markCmd(o *options) *cobra.Command {
 		if e != nil {
 			return e
 		}
-		t, e := a.Mark(cmd.Context(), resolved, args[0])
+		cwd, _ := os.Getwd()
+		result, e := a.Mark(cmd.Context(), resolved, args[0], markOptions)
+		if markOptions.Force {
+			for _, loss := range result.Loss {
+				fmt.Fprintln(o.err, loss)
+			}
+		}
+		if result.RemovedAt != "" && pathWithin(cwd, result.RemovedAt) {
+			fmt.Fprintln(o.err, "tasktree removed; run: cd ..")
+		}
 		if e == nil {
-			fmt.Fprintf(o.out, "%s marked %s\n", t.Handle, t.Status)
+			fmt.Fprintf(o.out, "%s marked %s\n", result.Task.Handle, result.Task.Status)
 		}
 		return e
 	}}
 	c.Flags().StringVarP(&ref, "task", "t", "", "task handle or id")
+	c.Flags().BoolVar(&markOptions.Keep, "keep", false, "change status without tearing down the tasktree")
+	c.Flags().BoolVar(&markOptions.Force, "force", false, "close despite work that will be lost")
 	return c
 }
+
+func pathWithin(path, root string) bool {
+	path, pathErr := filepath.Abs(path)
+	root, rootErr := filepath.Abs(root)
+	if pathErr != nil || rootErr != nil {
+		return false
+	}
+	rel, err := filepath.Rel(root, path)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
 func writeInfo(w io.Writer, t record.Task, parent string) {
 	fmt.Fprintf(w, "ID: %s\nHandle: %s\nTitle: %s\nStatus: %s\n", t.ID, t.Handle, t.Title, t.Status)
 	fmt.Fprintf(w, "Parent: %s\n", parent)

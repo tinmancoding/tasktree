@@ -227,6 +227,9 @@ func (a App) Open(ctx context.Context, ref, requested string, progress interface
 	if !recordOpen(t.Status) {
 		return "", GateError{fmt.Sprintf("task %s is %s; mark active before opening", t.Handle, t.Status)}
 	}
+	if t.Parent != nil {
+		return "", GateError{"isolated subtasks arrive in M2"}
+	}
 	local, err := a.Home.LoadLocal()
 	if err != nil {
 		return "", err
@@ -331,6 +334,40 @@ func (a App) Open(ctx context.Context, ref, requested string, progress interface
 	return path, nil
 }
 func recordOpen(s string) bool { return s != "done" && s != "dropped" }
+
+func markerTaskID(root string) (string, error) {
+	b, err := os.ReadFile(filepath.Join(root, ".tasktree", "config.yml"))
+	if err != nil {
+		return "", err
+	}
+	var cfg TasktreeConfig
+	if err := yaml.Unmarshal(b, &cfg); err != nil {
+		return "", err
+	}
+	return cfg.TaskID, nil
+}
+
+func (a App) teardownTasktree(id, root string, local home.LocalState) []string {
+	remaining := []string{}
+	if markerID, err := markerTaskID(root); err != nil || markerID != id {
+		remaining = append(remaining, root+" (task marker missing or mismatched)")
+	} else if err := os.RemoveAll(root); err != nil {
+		remaining = append(remaining, root+" ("+err.Error()+")")
+	} else if _, err := os.Stat(root); !os.IsNotExist(err) {
+		remaining = append(remaining, root)
+	}
+	clone := a.Home.ClonePath(id)
+	if err := os.RemoveAll(clone); err != nil {
+		remaining = append(remaining, clone+" ("+err.Error()+")")
+	} else if _, err := os.Stat(clone); !os.IsNotExist(err) {
+		remaining = append(remaining, clone)
+	}
+	delete(local.Checkouts, id)
+	if err := a.Home.SaveLocal(local); err != nil {
+		remaining = append(remaining, a.Home.LocalPath()+" entry ("+err.Error()+")")
+	}
+	return remaining
+}
 
 func cacheManager(g gitx.Client) (cache.Manager, error) {
 	root, err := cache.DefaultRoot()
@@ -649,6 +686,31 @@ func (a App) Commit(ctx context.Context, id, root, msg string) (bool, []string, 
 	return true, warnings, e
 }
 
+func repoLoss(ctx context.Context, g gitx.Client, name, path string) []string {
+	loss := []string{}
+	if dirty, _ := g.IsDirty(ctx, path); dirty {
+		loss = append(loss, name+" has uncommitted changes")
+	}
+	out, _, _ := git(ctx, g, path, "rev-list", "--oneline", "--branches", "--not", "--remotes=origin")
+	if strings.TrimSpace(out) != "" {
+		loss = append(loss, name+" has unpushed commits:\n"+strings.TrimSpace(out))
+	}
+	return loss
+}
+
+func (a App) tasktreeLoss(ctx context.Context, root string) ([]string, error) {
+	ms, err := modules(root)
+	if err != nil {
+		return nil, err
+	}
+	g := a.Git.WithDefaults()
+	loss := []string{}
+	for _, m := range ms {
+		loss = append(loss, repoLoss(ctx, g, m.Name, filepath.Join(root, m.Path))...)
+	}
+	return loss, nil
+}
+
 func (a App) Remove(ctx context.Context, id, root, name string, force bool) ([]string, error) {
 	ms, e := modules(root)
 	if e != nil {
@@ -665,14 +727,7 @@ func (a App) Remove(ctx context.Context, id, root, name string, force bool) ([]s
 	}
 	p := filepath.Join(root, m.Path)
 	g := a.Git.WithDefaults()
-	loss := []string{}
-	if dirty, _ := g.IsDirty(ctx, p); dirty {
-		loss = append(loss, name+" has uncommitted changes")
-	}
-	out, _, _ := git(ctx, g, p, "rev-list", "--oneline", "--branches", "--not", "--remotes=origin")
-	if strings.TrimSpace(out) != "" {
-		loss = append(loss, name+" has unpushed commits:\n"+strings.TrimSpace(out))
-	}
+	loss := repoLoss(ctx, g, name, p)
 	if len(loss) > 0 && !force {
 		return loss, GateError{strings.Join(loss, "\n")}
 	}
