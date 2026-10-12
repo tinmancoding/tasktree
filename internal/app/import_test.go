@@ -181,6 +181,39 @@ func TestImportDryRunRollbackAndSuccess(t *testing.T) {
 	}
 }
 
+func TestRollbackQuarantinesCloneWhenRepositoryCannotBeRestored(t *testing.T) {
+	base := t.TempDir()
+	a := New(home.Home{Root: filepath.Join(base, "home")}, nil)
+	root := filepath.Join(base, "workspace")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	id := "abc123"
+	clone := a.Home.ClonePath(id)
+	history := filepath.Join(clone, "modules", "repo", "objects", "only-history")
+	if err := os.MkdirAll(filepath.Dir(history), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(history, []byte("irreplaceable"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	journalDir := filepath.Join(a.Home.Root, "imports", id)
+	if err := os.MkdirAll(journalDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Force the move-back failure by making the destination parent absent while
+	// keeping another module-like directory as the clone's only history.
+	st := &importState{id: id, journalDir: journalDir, plan: ImportPlan{Path: root, Sources: []ImportSourcePlan{{Name: "missing", Path: "missing", Type: "git", Present: true}}}, absorbed: []ImportSourcePlan{{Name: "missing", Path: "missing", Type: "git", Present: true}}, before: map[string]repoSnapshot{"missing": {}}, rootBefore: map[string]rootEntry{}}
+	err := a.rollbackImport(context.Background(), st)
+	if err == nil || !strings.Contains(err.Error(), "quarantined") {
+		t.Fatalf("rollback error = %v", err)
+	}
+	quarantined := filepath.Join(journalDir, "quarantine-clone", "modules", "repo", "objects", "only-history")
+	if b, readErr := os.ReadFile(quarantined); readErr != nil || string(b) != "irreplaceable" {
+		t.Fatalf("history was not quarantined: %q %v", b, readErr)
+	}
+}
+
 func TestInterruptedImportRequiresRecoveryAndRestoresExactly(t *testing.T) {
 	a, root := importFixture(t)
 	before := treeDigest(t, root)

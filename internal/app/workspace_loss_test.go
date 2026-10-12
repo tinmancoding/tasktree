@@ -19,7 +19,45 @@ func runGitTest(t *testing.T, g gitx.Client, dir string, args ...string) string 
 	return strings.TrimSpace(out)
 }
 
-func TestRepoLossFindsDetachedCommitsTagsAndStashesAndReportsErrors(t *testing.T) {
+func TestRepoLossIgnoresOriginFetchedTagOnlyCommit(t *testing.T) {
+	ctx := context.Background()
+	g := gitx.NewClient()
+	remote := filepath.Join(t.TempDir(), "remote.git")
+	runGitTest(t, g, "", "init", "--bare", remote)
+	seed := filepath.Join(t.TempDir(), "seed")
+	runGitTest(t, g, "", "init", "-b", "main", seed)
+	runGitTest(t, g, seed, "config", "user.name", "test")
+	runGitTest(t, g, seed, "config", "user.email", "test@example.com")
+	if err := os.WriteFile(filepath.Join(seed, "main"), []byte("main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitTest(t, g, seed, "add", ".")
+	runGitTest(t, g, seed, "commit", "-m", "main")
+	runGitTest(t, g, seed, "remote", "add", "origin", remote)
+	runGitTest(t, g, seed, "push", "origin", "main")
+	runGitTest(t, g, seed, "checkout", "--orphan", "tag-only")
+	runGitTest(t, g, seed, "rm", "-rf", ".")
+	if err := os.WriteFile(filepath.Join(seed, "tagged"), []byte("tagged\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitTest(t, g, seed, "add", ".")
+	runGitTest(t, g, seed, "commit", "-m", "tag only")
+	runGitTest(t, g, seed, "tag", "stash/example")
+	runGitTest(t, g, seed, "push", "origin", "stash/example")
+	repo := filepath.Join(t.TempDir(), "repo")
+	runGitTest(t, g, "", "clone", remote, repo)
+	runGitTest(t, g, repo, "fetch", "origin", "--tags")
+	runGitTest(t, g, repo, "checkout", "main")
+	loss, err := repoLoss(ctx, g, "repo", repo, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loss) != 0 {
+		t.Fatalf("origin-fetched tag caused loss: %v", loss)
+	}
+}
+
+func TestRepoLossFindsDetachedCommitsAndStashesAndReportsErrors(t *testing.T) {
 	ctx := context.Background()
 	g := gitx.NewClient()
 	remote := filepath.Join(t.TempDir(), "remote.git")
