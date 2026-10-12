@@ -43,9 +43,17 @@ func ResolveWorkdir(root string, step Step) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	base, err = filepath.EvalSymlinks(base)
+	if err != nil {
+		return "", err
+	}
 	joined := filepath.Clean(filepath.Join(base, step.Workdir))
 	if filepath.IsAbs(step.Workdir) {
 		joined = filepath.Clean(step.Workdir)
+	}
+	joined, err = filepath.EvalSymlinks(joined)
+	if err != nil {
+		return joined, WorkdirError{step.Name, step.Workdir}
 	}
 	rel, err := filepath.Rel(base, joined)
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
@@ -64,8 +72,12 @@ func Run(ctx context.Context, root string, steps []Step, w io.Writer) error {
 	}
 	seen := map[string]bool{}
 	for _, step := range steps {
-		if step.Name == "" || step.Run == "" { return fmt.Errorf("bootstrap steps require name and run") }
-		if seen[step.Name] { return fmt.Errorf("bootstrap step names must be unique: %q", step.Name) }
+		if step.Name == "" || step.Run == "" {
+			return fmt.Errorf("bootstrap steps require name and run")
+		}
+		if seen[step.Name] {
+			return fmt.Errorf("bootstrap step names must be unique: %q", step.Name)
+		}
 		seen[step.Name] = true
 	}
 	for _, step := range steps {
