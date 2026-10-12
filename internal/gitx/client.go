@@ -83,7 +83,7 @@ func (c Client) Run(ctx context.Context, dir string, env map[string]string, args
 	}
 	cmd := exec.CommandContext(ctx, cfg.binary, args...)
 	cmd.Dir = dir
-	cmd.Env = cleanEnv(env)
+	cmd.Env = CleanEnv(env)
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -133,7 +133,9 @@ func repositoryEnvNames() map[string]bool {
 	return localEnvNames
 }
 
-func cleanEnv(extra map[string]string) []string {
+// CleanEnv returns the process environment with repository-context GIT_* variables
+// removed and the supplied overlay applied. Transport/authentication variables remain.
+func CleanEnv(extra map[string]string) []string {
 	env := make([]string, 0, len(os.Environ())+len(extra))
 	strip := repositoryEnvNames()
 	for _, item := range os.Environ() {
