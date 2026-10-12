@@ -1046,6 +1046,32 @@ func importCmd(o *options) *cobra.Command {
 		}
 		imported, refused, failed, skipped := 0, 0, 0, 0
 		for _, path := range paths {
+			if all {
+				info, statErr := os.Stat(path)
+				if os.IsNotExist(statErr) {
+					skipped++
+					fmt.Fprintf(o.out, "%s: skipped: path missing\n", path)
+					continue
+				}
+				if statErr != nil {
+					failed++
+					fmt.Fprintf(o.err, "%s: failed: %v\n", path, statErr)
+					fmt.Fprintf(o.out, "summary: imported=%d refused=%d failed=%d skipped=%d\n", imported, refused, failed, skipped)
+					return fmt.Errorf("import stopped after failure: %w", statErr)
+				}
+				if !info.IsDir() {
+					skipped++
+					fmt.Fprintf(o.out, "%s: skipped: not a V1 workspace\n", path)
+					continue
+				}
+				if _, legacyErr := os.Stat(filepath.Join(path, "Tasktree.yml")); os.IsNotExist(legacyErr) {
+					if _, markerErr := os.Stat(filepath.Join(path, ".tasktree", "config.yml")); os.IsNotExist(markerErr) {
+						skipped++
+						fmt.Fprintf(o.out, "%s: skipped: not a V1 workspace\n", path)
+						continue
+					}
+				}
+			}
 			result, e := a.Import(cmd.Context(), path, x)
 			app.PrintImportPlan(o.out, result.Plan)
 			if e != nil {

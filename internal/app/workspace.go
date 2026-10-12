@@ -424,28 +424,10 @@ func (a App) Open(ctx context.Context, ref string, o OpenOptions, progress inter
 		return "", err
 	}
 	_, _, existsErr := git(ctx, g, a.Home.GitPath(), "show-ref", "--verify", "--quiet", "refs/heads/"+branch)
-	configureIdentity := func() {
-		name := cfg.Author
-		if name == "" {
-			name = "tasktree"
-		}
-		machine := cfg.Machine
-		if machine == "" {
-			machine = "localhost"
-		}
-		_, _, _ = rootGitInit(ctx, g, a.Home, t.ID, path, "config", "user.name", name)
-		_, _, _ = rootGitInit(ctx, g, a.Home, t.ID, path, "config", "user.email", name+"@"+machine)
-	}
 	if existsErr == nil {
 		_, _, err = git(ctx, g, "", "clone", "--separate-git-dir="+a.Home.ClonePath(t.ID), "--branch", branch, a.Home.GitPath(), path)
-		if err == nil {
-			configureIdentity()
-		}
 	} else {
 		_, _, err = git(ctx, g, "", "clone", "--no-checkout", "--separate-git-dir="+a.Home.ClonePath(t.ID), a.Home.GitPath(), path)
-		if err == nil {
-			configureIdentity()
-		}
 		if err == nil {
 			_, _, err = rootGitInit(ctx, g, a.Home, t.ID, path, "checkout", "--orphan", branch)
 		}
@@ -474,7 +456,7 @@ func (a App) Open(ctx context.Context, ref string, o OpenOptions, progress inter
 			_, _, err = rootGit(ctx, g, a.Home, t.ID, path, "add", "-A")
 		}
 		if err == nil {
-			_, _, err = rootGit(ctx, g, a.Home, t.ID, path, "-c", "commit.gpgsign=false", "commit", "--no-verify", "-m", fmt.Sprintf("tasktree(%s): create", t.ID))
+			err = a.commitRootMessage(ctx, t.ID, path, fmt.Sprintf("tasktree(%s): create", t.ID))
 		}
 		if err == nil {
 			_, _, err = rootGit(ctx, g, a.Home, t.ID, path, "push", "-u", "origin", branch)
@@ -880,12 +862,29 @@ func registerAliases(s repoalias.Store, url string, r *AddResult) {
 	}
 	_ = s.Save(f)
 }
+
+// commitRootMessage commits with an identity resolved in the root clone's
+// context. A fallback is supplied only on this invocation, never persisted in
+// the user-owned clone configuration.
+func (a App) commitRootMessage(ctx context.Context, id, root, msg string) error {
+	if err := validateRootIdentity(id, root); err != nil {
+		return err
+	}
+	cfg, err := a.Home.LoadConfig()
+	if err != nil {
+		return err
+	}
+	g := a.Git.WithDefaults()
+	_, _, err = g.Commit(ctx, root, rootEnv(a.Home, id, root), cfg.Author, cfg.Machine, msg)
+	return err
+}
+
 func (a App) commitRoot(ctx context.Context, id, root, msg string) error {
 	g := a.Git.WithDefaults()
 	if _, _, e := rootGit(ctx, g, a.Home, id, root, "add", "-A"); e != nil {
 		return e
 	}
-	if _, _, e := rootGit(ctx, g, a.Home, id, root, "-c", "commit.gpgsign=false", "commit", "--no-verify", "-m", msg); e != nil {
+	if e := a.commitRootMessage(ctx, id, root, msg); e != nil {
 		return e
 	}
 	_, _, e := rootGit(ctx, g, a.Home, id, root, "push", "origin", "task/"+id)
@@ -919,7 +918,7 @@ func (a App) Commit(ctx context.Context, id, root, msg string) (bool, []string, 
 	if msg == "" {
 		msg = fmt.Sprintf("tasktree(%s): checkpoint", id)
 	}
-	if _, _, e = rootGit(ctx, g, a.Home, id, root, "-c", "commit.gpgsign=false", "commit", "--no-verify", "-m", msg); e != nil {
+	if e = a.commitRootMessage(ctx, id, root, msg); e != nil {
 		return false, warnings, e
 	}
 	_, _, e = rootGit(ctx, g, a.Home, id, root, "push", "origin", "task/"+id)
@@ -1113,8 +1112,38 @@ func (a App) Remove(ctx context.Context, id, root, name string, force bool) ([]s
 	if len(loss) > 0 && !force {
 		return loss, GateError{strings.Join(loss, "\n")}
 	}
-	rootGit(ctx, g, a.Home, id, root, "submodule", "deinit", "-f", "--", m.Path)
-	if _, _, e = rootGit(ctx, g, a.Home, id, root, "rm", "-f", "--", m.Path); e != nil {
+	// Keep both copies of the submodule until the root change is committed and
+	// pushed. A failed commit must leave the checkout recoverable.
+	indexPath := filepath.Join(a.Home.ClonePath(id), "index")
+	indexBefore, indexReadErr := os.ReadFile(indexPath)
+	if _, _, e = rootGit(ctx, g, a.Home, id, root, "rm", "--cached", "--", m.Path); e != nil {
+		return loss, e
+	}
+	gm := filepath.Join(root, ".gitmodules")
+	_, _, _ = git(ctx, g, "", "config", "-f", gm, "--remove-section", "submodule."+m.Name)
+	if _, _, e = rootGit(ctx, g, a.Home, id, root, "add", "--", ".gitmodules"); e != nil {
+		return loss, e
+	}
+	rollback := func() {
+		_, _, _ = rootGit(ctx, g, a.Home, id, root, "reset")
+		_, _, _ = rootGit(ctx, g, a.Home, id, root, "checkout", "--", ".gitmodules")
+		// reset restores the logical index, but may rewrite index metadata. Keep
+		// the byte-for-byte pre-operation index when it was readable.
+		if indexReadErr == nil {
+			_ = os.WriteFile(indexPath, indexBefore, 0o644)
+		}
+	}
+	// TASKTREE_TEST_REMOVE_COMMIT_FAIL is a test-only failure injection used to
+	// verify rollback before any user repository is deleted.
+	if os.Getenv("TASKTREE_TEST_REMOVE_COMMIT_FAIL") != "" {
+		rollback()
+		return loss, fmt.Errorf("test-only injected remove commit failure")
+	}
+	if e = a.commitRootMessage(ctx, id, root, fmt.Sprintf("tasktree(%s): remove %s", id, name)); e != nil {
+		rollback()
+		return loss, e
+	}
+	if _, _, e = rootGit(ctx, g, a.Home, id, root, "push", "origin", "task/"+id); e != nil {
 		return loss, e
 	}
 	modulesBase := filepath.Join(a.Home.ClonePath(id), "modules")
@@ -1123,9 +1152,15 @@ func (a App) Remove(ctx context.Context, id, root, name string, force bool) ([]s
 	if relErr != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return loss, fmt.Errorf("invalid submodule modules path %q", deletePath)
 	}
-	_ = os.RemoveAll(deletePath)
-	e = a.commitRoot(ctx, id, root, fmt.Sprintf("tasktree(%s): remove %s", id, name))
-	return loss, e
+	if e = os.RemoveAll(p); e != nil {
+		return loss, e
+	}
+	if e = os.RemoveAll(deletePath); e != nil {
+		return loss, e
+	}
+	// The hidden root clone is tool-owned; clear its obsolete submodule config.
+	_, _, _ = rootGit(ctx, g, a.Home, id, root, "config", "--remove-section", "submodule."+m.Name)
+	return loss, nil
 }
 
 func SortedRepos(in []RepoInfo) {
@@ -1465,16 +1500,6 @@ func (a App) openIsolated(ctx context.Context, t record.Task, o OpenOptions, pro
 	if _, _, err = git(ctx, g, "", "clone", "--no-checkout", "--separate-git-dir="+clonePath, a.Home.GitPath(), path); err != nil {
 		return "", err
 	}
-	name := cfg.Author
-	if name == "" {
-		name = "tasktree"
-	}
-	machine := cfg.Machine
-	if machine == "" {
-		machine = "localhost"
-	}
-	_, _, _ = rootGitInit(ctx, g, a.Home, t.ID, path, "config", "user.name", name)
-	_, _, _ = rootGitInit(ctx, g, a.Home, t.ID, path, "config", "user.email", name+"@"+machine)
 	if _, _, err = rootGitInit(ctx, g, a.Home, t.ID, path, "checkout", "--orphan", taskBranch); err != nil {
 		return "", err
 	}
@@ -1595,7 +1620,7 @@ func (a App) openIsolated(ctx context.Context, t record.Task, o OpenOptions, pro
 	if _, _, err = rootGit(ctx, g, a.Home, t.ID, path, "add", "-A"); err != nil {
 		return "", err
 	}
-	if _, _, err = rootGit(ctx, g, a.Home, t.ID, path, "-c", "commit.gpgsign=false", "commit", "--no-verify", "-m", fmt.Sprintf("tasktree(%s): fork from %s", t.ID, parent.Handle)); err != nil {
+	if err = a.commitRootMessage(ctx, t.ID, path, fmt.Sprintf("tasktree(%s): fork from %s", t.ID, parent.Handle)); err != nil {
 		return "", err
 	}
 	if _, _, err = rootGit(ctx, g, a.Home, t.ID, path, "push", "-u", "origin", taskBranch); err != nil {

@@ -817,10 +817,7 @@ func (a App) Import(ctx context.Context, root string, o ImportOptions) (res Impo
 	if err != nil {
 		return
 	}
-	env := rootEnv(a.Home, id, p.Path)
-	env["GIT_AUTHOR_NAME"], env["GIT_COMMITTER_NAME"] = name, name
-	env["GIT_AUTHOR_EMAIL"], env["GIT_COMMITTER_EMAIL"] = name+"@"+machine, name+"@"+machine
-	_, _, err = a.Git.Run(ctx, p.Path, env, "-c", "commit.gpgsign=false", "commit", "--no-verify", "-m", fmt.Sprintf("tasktree(%s): import from V1", id))
+	err = a.commitRootMessage(ctx, id, p.Path, fmt.Sprintf("tasktree(%s): import from V1", id))
 	if err != nil {
 		return
 	}

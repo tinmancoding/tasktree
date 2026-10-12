@@ -310,22 +310,7 @@ func (h Hub) ensureClean(ctx context.Context) error {
 	return nil
 }
 func (h Hub) commit(ctx context.Context, message, author, machine string) error {
-	env := map[string]string{}
-	name, _, nerr := h.Git.Run(ctx, h.Path, nil, "config", "user.name")
-	email, _, eerr := h.Git.Run(ctx, h.Path, nil, "config", "user.email")
-	if nerr != nil || eerr != nil || strings.TrimSpace(name) == "" || strings.TrimSpace(email) == "" {
-		if author == "" {
-			author = "tasktree"
-		}
-		if machine == "" {
-			machine = "localhost"
-		}
-		env["GIT_AUTHOR_NAME"] = author
-		env["GIT_COMMITTER_NAME"] = author
-		env["GIT_AUTHOR_EMAIL"] = author + "@" + machine
-		env["GIT_COMMITTER_EMAIL"] = author + "@" + machine
-	}
-	_, _, err := h.Git.Run(ctx, h.Path, env, "-c", "commit.gpgsign=false", "commit", "--no-verify", "-m", message)
+	_, _, err := h.Git.Commit(ctx, h.Path, nil, author, machine, message)
 	return err
 }
 func (h Hub) withLock(ctx context.Context, fn func() error) error {

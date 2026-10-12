@@ -110,6 +110,26 @@ func (c Client) run(ctx context.Context, args ...string) (string, string, error)
 	return c.Run(ctx, "", nil, args...)
 }
 
+// Commit records a commit using the repository identity when both identity
+// fields resolve. When they do not, it supplies the tasktree identity only for
+// this invocation; it never writes to the repository's configuration.
+func (c Client) Commit(ctx context.Context, dir string, env map[string]string, author, machine, message string) (string, string, error) {
+	name, _, nameErr := c.Run(ctx, dir, env, "config", "user.name")
+	email, _, emailErr := c.Run(ctx, dir, env, "config", "user.email")
+	args := []string{"-c", "commit.gpgsign=false"}
+	if nameErr != nil || emailErr != nil || strings.TrimSpace(name) == "" || strings.TrimSpace(email) == "" {
+		if author == "" {
+			author = "tasktree"
+		}
+		if machine == "" {
+			machine = "localhost"
+		}
+		args = append(args, "-c", "user.name="+author, "-c", "user.email="+author+"@"+machine)
+	}
+	args = append(args, "commit", "--no-verify", "-m", message)
+	return c.Run(ctx, dir, env, args...)
+}
+
 var localEnvOnce sync.Once
 var localEnvNames map[string]bool
 
