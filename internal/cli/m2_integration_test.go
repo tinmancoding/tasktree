@@ -120,7 +120,7 @@ func TestIsolatedForkRecursionAndPushWarning(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(pushErr, "push "+parent+"'s work first") || !strings.Contains(pushOut, "gh pr create") {
+	if !strings.Contains(pushErr, "push "+parent+"'s work first, or the PR will include 1 parent commits") || !strings.Contains(pushOut, "gh pr create") {
 		t.Fatalf("push out=%q err=%q", pushOut, pushErr)
 	}
 	grandOut, _, err := run(t, "new", "Tests", "--handle", "tests", "--parent", "iso-child", "--isolated")
