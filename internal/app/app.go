@@ -18,6 +18,10 @@ import (
 	"github.com/tinmancoding/tasktree/v2/internal/record"
 )
 
+type ValidationError struct{ Message string }
+
+func (e ValidationError) Error() string { return e.Message }
+
 type App struct {
 	Home           home.Home
 	Hub            hub.Hub
@@ -365,7 +369,7 @@ func (a App) SetInfo(ctx context.Context, ref, field, value string, clear bool) 
 	switch field {
 	case "title":
 		if value == "" {
-			return record.Task{}, false, fmt.Errorf("title must not be empty")
+			return record.Task{}, false, ValidationError{"title must not be empty"}
 		}
 		if current.Title == value {
 			return current, false, nil
@@ -373,7 +377,7 @@ func (a App) SetInfo(ctx context.Context, ref, field, value string, clear bool) 
 		summary = "title updated"
 	case "handle":
 		if !handlePattern.MatchString(value) {
-			return record.Task{}, false, fmt.Errorf("invalid handle %q (expected [A-Za-z0-9._-], max 64 characters)", value)
+			return record.Task{}, false, ValidationError{fmt.Sprintf("invalid handle %q (expected [A-Za-z0-9._-], max 64 characters)", value)}
 		}
 		if current.Handle == value {
 			return current, false, nil
@@ -388,19 +392,19 @@ func (a App) SetInfo(ctx context.Context, ref, field, value string, clear bool) 
 		var parent *string
 		if !clear {
 			if value == "" {
-				return record.Task{}, false, fmt.Errorf("parent requires a handle or id, or --clear")
+				return record.Task{}, false, ValidationError{"parent requires a handle or id, or --clear"}
 			}
 			p, e := hub.Resolve(docs, value)
 			if e != nil {
 				return record.Task{}, false, e
 			}
 			if p.Task.ID == current.ID {
-				return record.Task{}, false, fmt.Errorf("a task cannot be its own parent")
+				return record.Task{}, false, ValidationError{"a task cannot be its own parent"}
 			}
 			parentID := p.Task.ID
 			for parentID != "" {
 				if parentID == current.ID {
-					return record.Task{}, false, fmt.Errorf("parent would create a cycle")
+					return record.Task{}, false, ValidationError{"parent would create a cycle"}
 				}
 				var next *string
 				for _, d := range docs {
@@ -425,7 +429,7 @@ func (a App) SetInfo(ctx context.Context, ref, field, value string, clear bool) 
 			summary = "parent set to " + *parent
 		}
 	default:
-		return record.Task{}, false, fmt.Errorf("unknown info field %q (expected title, handle, or parent)", field)
+		return record.Task{}, false, ValidationError{fmt.Sprintf("unknown info field %q (expected title, handle, or parent)", field)}
 	}
 	author, machine, err := a.author()
 	if err != nil {
@@ -462,10 +466,10 @@ func (a App) SetInfo(ctx context.Context, ref, field, value string, clear bool) 
 			id := p.Task.ID
 			for id != "" {
 				if id == d.Task.ID {
-					return fmt.Errorf("parent would create a cycle")
+					return ValidationError{"parent would create a cycle"}
 				}
 				if seen[id] {
-					return fmt.Errorf("task parent cycle detected at %s", id)
+					return ValidationError{fmt.Sprintf("task parent cycle detected at %s", id)}
 				}
 				seen[id] = true
 				next, ok := byID[id]
@@ -483,10 +487,10 @@ func (a App) SetInfo(ctx context.Context, ref, field, value string, clear bool) 
 
 func (a App) Ref(ctx context.Context, ref, action, typ, value string) (record.Task, bool, error) {
 	if typ != "jira" && typ != "pr" && typ != "url" {
-		return record.Task{}, false, fmt.Errorf("invalid ref type %q", typ)
+		return record.Task{}, false, ValidationError{fmt.Sprintf("invalid ref type %q", typ)}
 	}
 	if typ == "pr" && !prPattern.MatchString(value) {
-		return record.Task{}, false, fmt.Errorf("invalid GitHub PR reference %q (expected owner/repo#N)", value)
+		return record.Task{}, false, ValidationError{fmt.Sprintf("invalid GitHub PR reference %q (expected owner/repo#N)", value)}
 	}
 	current, err := a.Info(ref)
 	if err != nil {
@@ -537,7 +541,7 @@ func (a App) Ref(ctx context.Context, ref, action, typ, value string) (record.Ta
 func (a App) Labels(ctx context.Context, ref, action string, values []string) (record.Task, bool, error) {
 	for _, v := range values {
 		if !labelPattern.MatchString(v) {
-			return record.Task{}, false, fmt.Errorf("invalid label %q", v)
+			return record.Task{}, false, ValidationError{fmt.Sprintf("invalid label %q", v)}
 		}
 	}
 	current, err := a.Info(ref)

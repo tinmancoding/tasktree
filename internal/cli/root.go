@@ -48,7 +48,8 @@ func Code(err error) int {
 		return 6
 	}
 	var ue usageError
-	if errors.As(err, &ue) {
+	var validation app.ValidationError
+	if errors.As(err, &ue) || errors.As(err, &validation) {
 		return 2
 	}
 	s := err.Error()
@@ -523,12 +524,7 @@ func infoSetCmd(o *options) *cobra.Command {
 		}
 		t, changed, e := a.SetInfo(cmd.Context(), resolved, args[0], value, clear)
 		if e != nil {
-			var conflict hub.ConflictError
-			var missing hub.NotFoundError
-			if errors.As(e, &conflict) || errors.As(e, &missing) {
-				return e
-			}
-			return usageError{e.Error()}
+			return e
 		}
 		if changed {
 			fmt.Fprintf(o.out, "%s updated\n", t.Handle)
@@ -621,11 +617,7 @@ func refCmd(o *options) *cobra.Command {
 			}
 			t, changed, e := a.Ref(cmd.Context(), resolved, action, args[0], args[1])
 			if e != nil {
-				var missing hub.NotFoundError
-				if errors.As(e, &missing) {
-					return e
-				}
-				return usageError{e.Error()}
+				return e
 			}
 			if changed {
 				fmt.Fprintf(o.out, "ref %s for %s\n", map[string]string{"add": "added", "rm": "removed"}[action], t.Handle)
@@ -661,7 +653,7 @@ func labelCmd(o *options) *cobra.Command {
 			}
 			t, changed, e := a.Labels(cmd.Context(), resolved, action, args)
 			if e != nil {
-				return usageError{e.Error()}
+				return e
 			}
 			if changed {
 				fmt.Fprintf(o.out, "labels %s for %s\n", map[string]string{"add": "updated", "rm": "updated"}[action], t.Handle)
