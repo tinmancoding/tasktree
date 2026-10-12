@@ -108,7 +108,7 @@ func exact(n int) cobra.PositionalArgs {
 }
 func setupCmd(o *options) *cobra.Command {
 	var x app.SetupOptions
-	c := &cobra.Command{Use: "setup", Args: exact(0), RunE: func(cmd *cobra.Command, args []string) error {
+	c := &cobra.Command{Use: "setup", Short: "Initialize ~/.tasktree and machine config", Args: exact(0), RunE: func(cmd *cobra.Command, args []string) error {
 		a, err := o.application()
 		if err != nil {
 			return err
@@ -141,8 +141,8 @@ func setupCmd(o *options) *cobra.Command {
 	return c
 }
 func configCmd(o *options) *cobra.Command {
-	root := &cobra.Command{Use: "config"}
-	root.AddCommand(&cobra.Command{Use: "get <key>", Args: exact(1), RunE: func(cmd *cobra.Command, args []string) error {
+	root := &cobra.Command{Use: "config", Short: "Read or change machine config"}
+	root.AddCommand(&cobra.Command{Use: "get <key>", Short: "Print a config value", Args: exact(1), RunE: func(cmd *cobra.Command, args []string) error {
 		a, e := o.application()
 		if e != nil {
 			return e
@@ -152,7 +152,7 @@ func configCmd(o *options) *cobra.Command {
 			fmt.Fprintln(o.out, v)
 		}
 		return e
-	}}, &cobra.Command{Use: "set <key> <value>", Args: exact(2), RunE: func(cmd *cobra.Command, args []string) error {
+	}}, &cobra.Command{Use: "set <key> <value>", Short: "Set a config value", Args: exact(2), RunE: func(cmd *cobra.Command, args []string) error {
 		a, e := o.application()
 		if e != nil {
 			return e
@@ -165,7 +165,7 @@ func newCmd(o *options) *cobra.Command {
 	var x app.NewOptions
 	var open bool
 	var path string
-	c := &cobra.Command{Use: "new <title>", Args: exact(1), RunE: func(cmd *cobra.Command, args []string) error {
+	c := &cobra.Command{Use: "new <title>", Short: "Create a task (optionally a subtask, optionally open its tasktree)", Args: exact(1), RunE: func(cmd *cobra.Command, args []string) error {
 		x.Title = args[0]
 		a, e := o.application()
 		if e != nil {
@@ -197,7 +197,7 @@ func newCmd(o *options) *cobra.Command {
 func listCmd(o *options) *cobra.Command {
 	var all, j bool
 	var statuses []string
-	c := &cobra.Command{Use: "list", Args: exact(0), RunE: func(cmd *cobra.Command, args []string) error {
+	c := &cobra.Command{Use: "list", Short: "List tasks (open tasks by default)", Args: exact(0), RunE: func(cmd *cobra.Command, args []string) error {
 		a, e := o.application()
 		if e != nil {
 			return e
@@ -242,7 +242,7 @@ func resolveTarget(a app.App, explicit string) (string, string, error) {
 func infoCmd(o *options) *cobra.Command {
 	var ref string
 	var j bool
-	c := &cobra.Command{Use: "info", Args: exact(0), RunE: func(cmd *cobra.Command, args []string) error {
+	c := &cobra.Command{Use: "info", Short: "Show a task record and, inside a tasktree, its repositories", Args: exact(0), RunE: func(cmd *cobra.Command, args []string) error {
 		a, e := o.application()
 		if e != nil {
 			return e
@@ -301,7 +301,7 @@ func infoCmd(o *options) *cobra.Command {
 }
 func noteCmd(o *options) *cobra.Command {
 	var ref, kind string
-	c := &cobra.Command{Use: "note <text>", Args: exact(1), RunE: func(cmd *cobra.Command, args []string) error {
+	c := &cobra.Command{Use: "note <text>", Short: "Append a note, decision, comment, or ref to a task log", Args: exact(1), RunE: func(cmd *cobra.Command, args []string) error {
 		a, e := o.application()
 		if e != nil {
 			return e
@@ -326,7 +326,7 @@ func noteCmd(o *options) *cobra.Command {
 func markCmd(o *options) *cobra.Command {
 	var ref string
 	var markOptions app.MarkOptions
-	c := &cobra.Command{Use: "mark <status>", Args: exact(1), RunE: func(cmd *cobra.Command, args []string) error {
+	c := &cobra.Command{Use: "mark <status>", Short: "Set task status; closing tears down the local tasktree", Args: exact(1), RunE: func(cmd *cobra.Command, args []string) error {
 		if e := record.ValidateStatus(args[0]); e != nil {
 			return usageError{e.Error()}
 		}
@@ -400,7 +400,7 @@ func writeRepoInfo(w io.Writer, tree app.TasktreeInfo) error {
 func openCmd(o *options) *cobra.Command {
 	var path string
 	var force bool
-	c := &cobra.Command{Use: "open <handle|id>", Args: exact(1), RunE: func(cmd *cobra.Command, args []string) error {
+	c := &cobra.Command{Use: "open <handle|id>", Short: "Materialize or locate a task's tasktree; prints its path", Args: exact(1), RunE: func(cmd *cobra.Command, args []string) error {
 		a, e := o.application()
 		if e != nil {
 			return e
@@ -428,7 +428,7 @@ func requireTree(a app.App, ref string) (string, string, error) {
 func addCmd(o *options) *cobra.Command {
 	var ref string
 	var x app.AddOptions
-	c := &cobra.Command{Use: "add <alias|url>", Args: exact(1), RunE: func(cmd *cobra.Command, args []string) error {
+	c := &cobra.Command{Use: "add <alias|url>", Short: "Add a repository to the tasktree", Args: exact(1), RunE: func(cmd *cobra.Command, args []string) error {
 		x.URL = args[0]
 		a, e := o.application()
 		if e != nil {
@@ -457,7 +457,7 @@ func addCmd(o *options) *cobra.Command {
 func removeCmd(o *options) *cobra.Command {
 	var ref string
 	var force bool
-	c := &cobra.Command{Use: "remove <name>", Args: exact(1), RunE: func(cmd *cobra.Command, args []string) error {
+	c := &cobra.Command{Use: "remove <name>", Short: "Remove a repository from the tasktree", Args: exact(1), RunE: func(cmd *cobra.Command, args []string) error {
 		a, e := o.application()
 		if e != nil {
 			return e
@@ -481,7 +481,7 @@ func removeCmd(o *options) *cobra.Command {
 }
 func commitCmd(o *options) *cobra.Command {
 	var ref, msg string
-	c := &cobra.Command{Use: "commit", Args: exact(0), RunE: func(cmd *cobra.Command, args []string) error {
+	c := &cobra.Command{Use: "commit", Short: "Record root files and repository commits on the task branch", Args: exact(0), RunE: func(cmd *cobra.Command, args []string) error {
 		a, e := o.application()
 		if e != nil {
 			return e
@@ -509,7 +509,7 @@ func commitCmd(o *options) *cobra.Command {
 }
 func rootCmd(o *options) *cobra.Command {
 	var ref string
-	c := &cobra.Command{Use: "root", Args: exact(0), RunE: func(cmd *cobra.Command, args []string) error {
+	c := &cobra.Command{Use: "root", Short: "Print the tasktree root path", Args: exact(0), RunE: func(cmd *cobra.Command, args []string) error {
 		a, e := o.application()
 		if e != nil {
 			return e
