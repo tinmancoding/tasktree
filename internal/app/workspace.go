@@ -46,13 +46,15 @@ func DiscoverRoot(start string) (string, TasktreeConfig, error) {
 		marker := filepath.Join(p, ".tasktree", "config.yml")
 		if b, readErr := os.ReadFile(marker); readErr == nil {
 			var c TasktreeConfig
-			if err := yaml.Unmarshal(b, &c); err != nil {
-				return "", c, fmt.Errorf("parse %s: %w", marker, err)
+			// Only a file declaring kind TasktreeConfig marks a tasktree root.
+			// ~/.tasktree/config.yml is the machine config (TASKTREE_HOME) and
+			// must not be mistaken for a marker, so non-markers are skipped.
+			if err := yaml.Unmarshal(b, &c); err == nil && c.Kind == "TasktreeConfig" {
+				if c.TaskID == "" {
+					return "", c, fmt.Errorf("%s has no taskId", marker)
+				}
+				return p, c, nil
 			}
-			if c.TaskID == "" {
-				return "", c, fmt.Errorf("%s has no taskId", marker)
-			}
-			return p, c, nil
 		} else if !os.IsNotExist(readErr) {
 			return "", TasktreeConfig{}, readErr
 		}
