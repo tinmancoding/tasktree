@@ -421,10 +421,10 @@ func removeCmd(o *options) *cobra.Command {
 			return e
 		}
 		loss, e := a.Remove(cmd.Context(), id, root, args[0], force)
-		for _, m := range loss {
-			fmt.Fprintln(o.err, m)
-		}
 		if e == nil {
+			for _, m := range loss {
+				fmt.Fprintln(o.err, m)
+			}
 			fmt.Fprintf(o.out, "removed %s\n", args[0])
 		}
 		return e

@@ -279,9 +279,12 @@ func TestTasktreeEndToEnd(t *testing.T) {
 	gitRun(t, filepath.Join(root, "upstream"), "push", "origin", "main")
 	// Dirty removal is gated; --force reports the loss and proceeds.
 	os.WriteFile(filepath.Join(root, "work", "dirty"), []byte("x"), 0o644)
-	_, _, e = run(t, "remove", "work")
+	_, gateOutput, e := run(t, "remove", "work")
 	if cli.Code(e) != 6 {
 		t.Fatalf("dirty remove gate code=%d err=%v", cli.Code(e), e)
+	}
+	if gateOutput != "" {
+		t.Fatalf("gate details printed before error renderer: %q", gateOutput)
 	}
 	gitRun(t, filepath.Join(root, "work"), "add", "dirty")
 	gitRun(t, filepath.Join(root, "work"), "commit", "-m", "unpushed")
