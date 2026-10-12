@@ -236,6 +236,9 @@ func (a App) ListFiltered(all bool, statuses, labels []string) ([]record.Task, e
 	if err != nil {
 		return nil, err
 	}
+	if err := validateParentGraph(docs); err != nil {
+		return nil, err
+	}
 	wanted := map[string]bool{}
 	for _, s := range statuses {
 		if err := record.ValidateStatus(s); err != nil {
@@ -269,6 +272,29 @@ func (a App) ListFiltered(all bool, statuses, labels []string) ([]record.Task, e
 	sort.SliceStable(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
 	return out, nil
 }
+func validateParentGraph(docs []*record.Document) error {
+	byID := map[string]record.Task{}
+	for _, d := range docs {
+		byID[d.Task.ID] = d.Task
+	}
+	for _, d := range docs {
+		seen := map[string]bool{}
+		id := d.Task.ID
+		for id != "" {
+			if seen[id] {
+				return fmt.Errorf("task parent cycle detected at %s", id)
+			}
+			seen[id] = true
+			t, ok := byID[id]
+			if !ok || t.Parent == nil {
+				break
+			}
+			id = *t.Parent
+		}
+	}
+	return nil
+}
+
 func progressFor(docs []*record.Document) map[string]*record.Progress {
 	result := map[string]*record.Progress{}
 	for _, d := range docs {
@@ -294,6 +320,9 @@ func (a App) Info(ref string) (record.Task, error) {
 	}
 	docs, err := a.Hub.ReadAll()
 	if err != nil {
+		return record.Task{}, err
+	}
+	if err := validateParentGraph(docs); err != nil {
 		return record.Task{}, err
 	}
 	d.Task.Progress = progressFor(docs)[d.Task.ID]
@@ -403,15 +432,49 @@ func (a App) SetInfo(ctx context.Context, ref, field, value string, clear bool) 
 		return record.Task{}, false, err
 	}
 	t, err := a.Hub.UpdateWithPostCommit(ctx, current.ID, summary, author, machine, func(d *record.Document) error {
+		latest, readErr := a.Hub.ReadAll()
+		if readErr != nil {
+			return readErr
+		}
 		switch field {
-		case "title", "handle":
+		case "title":
+			return d.SetFrontString(field, value, a.Now().UTC())
+		case "handle":
+			for _, candidate := range latest {
+				if candidate.Task.ID != d.Task.ID && candidate.Task.Handle == value {
+					return hub.ConflictError{Message: fmt.Sprintf("handle %q already exists", value)}
+				}
+			}
 			return d.SetFrontString(field, value, a.Now().UTC())
 		default:
 			if clear {
 				return d.SetParent(nil, a.Now().UTC())
 			}
-			p, _ := hub.Resolve(docs, value)
+			p, resolveErr := hub.Resolve(latest, value)
+			if resolveErr != nil {
+				return resolveErr
+			}
+			byID := map[string]record.Task{}
+			for _, candidate := range latest {
+				byID[candidate.Task.ID] = candidate.Task
+			}
+			seen := map[string]bool{}
 			id := p.Task.ID
+			for id != "" {
+				if id == d.Task.ID {
+					return fmt.Errorf("parent would create a cycle")
+				}
+				if seen[id] {
+					return fmt.Errorf("task parent cycle detected at %s", id)
+				}
+				seen[id] = true
+				next, ok := byID[id]
+				if !ok || next.Parent == nil {
+					break
+				}
+				id = *next.Parent
+			}
+			id = p.Task.ID
 			return d.SetParent(&id, a.Now().UTC())
 		}
 	}, func(task record.Task, raw []byte) { a.writeGeneratedTaskRecord(task.ID, raw) })
@@ -429,24 +492,18 @@ func (a App) Ref(ctx context.Context, ref, action, typ, value string) (record.Ta
 	if err != nil {
 		return record.Task{}, false, err
 	}
-	refs := append([]record.Ref(nil), current.Refs...)
-	found := -1
-	for i, r := range refs {
+	found := false
+	for _, r := range current.Refs {
 		if r.Type == typ && r.Value == value {
-			found = i
+			found = true
 			break
 		}
 	}
-	if action == "add" && found >= 0 {
+	if action == "add" && found {
 		return current, false, nil
 	}
-	if action == "rm" && found < 0 {
+	if action == "rm" && !found {
 		return record.Task{}, false, hub.NotFoundError{Ref: typ + ": " + value}
-	}
-	if action == "add" {
-		refs = append(refs, record.Ref{Type: typ, Value: value})
-	} else {
-		refs = append(refs[:found], refs[found+1:]...)
 	}
 	author, machine, err := a.author()
 	if err != nil {
@@ -456,7 +513,24 @@ func (a App) Ref(ctx context.Context, ref, action, typ, value string) (record.Ta
 	if action == "rm" {
 		summary = "ref removed"
 	}
-	t, err := a.Hub.UpdateWithPostCommit(ctx, current.ID, summary, author, machine, func(d *record.Document) error { return d.SetRefs(refs, a.Now().UTC()) }, func(task record.Task, raw []byte) { a.writeGeneratedTaskRecord(task.ID, raw) })
+	t, err := a.Hub.UpdateWithPostCommit(ctx, current.ID, summary, author, machine, func(d *record.Document) error {
+		refs := append([]record.Ref(nil), d.Task.Refs...)
+		found := -1
+		for i, r := range refs {
+			if r.Type == typ && r.Value == value {
+				found = i
+				break
+			}
+		}
+		if action == "add" {
+			if found < 0 {
+				refs = append(refs, record.Ref{Type: typ, Value: value})
+			}
+		} else if found >= 0 {
+			refs = append(refs[:found], refs[found+1:]...)
+		}
+		return d.SetRefs(refs, a.Now().UTC())
+	}, func(task record.Task, raw []byte) { a.writeGeneratedTaskRecord(task.ID, raw) })
 	return t, err == nil, err
 }
 
@@ -475,29 +549,17 @@ func (a App) Labels(ctx context.Context, ref, action string, values []string) (r
 		set[v] = true
 	}
 	changed := false
-	if action == "add" {
-		for _, v := range values {
-			if !set[v] {
-				set[v] = true
-				changed = true
-			}
+	for _, v := range values {
+		if action == "add" && !set[v] {
+			changed = true
 		}
-	} else {
-		for _, v := range values {
-			if set[v] {
-				delete(set, v)
-				changed = true
-			}
+		if action != "add" && set[v] {
+			changed = true
 		}
 	}
 	if !changed {
 		return current, false, nil
 	}
-	labels := make([]string, 0, len(set))
-	for v := range set {
-		labels = append(labels, v)
-	}
-	sort.Strings(labels)
 	author, machine, err := a.author()
 	if err != nil {
 		return record.Task{}, false, err
@@ -506,7 +568,25 @@ func (a App) Labels(ctx context.Context, ref, action string, values []string) (r
 	if action == "rm" {
 		summary = "labels removed"
 	}
-	t, err := a.Hub.UpdateWithPostCommit(ctx, current.ID, summary, author, machine, func(d *record.Document) error { return d.SetLabels(labels, a.Now().UTC()) }, func(task record.Task, raw []byte) { a.writeGeneratedTaskRecord(task.ID, raw) })
+	t, err := a.Hub.UpdateWithPostCommit(ctx, current.ID, summary, author, machine, func(d *record.Document) error {
+		set := map[string]bool{}
+		for _, v := range d.Task.Labels {
+			set[v] = true
+		}
+		for _, v := range values {
+			if action == "add" {
+				set[v] = true
+			} else {
+				delete(set, v)
+			}
+		}
+		labels := make([]string, 0, len(set))
+		for v := range set {
+			labels = append(labels, v)
+		}
+		sort.Strings(labels)
+		return d.SetLabels(labels, a.Now().UTC())
+	}, func(task record.Task, raw []byte) { a.writeGeneratedTaskRecord(task.ID, raw) })
 	return t, err == nil, err
 }
 
@@ -793,16 +873,32 @@ func (a App) markCascade(ctx context.Context, ref, status string, o MarkOptions)
 		sort.SliceStable(children[id], func(i, j int) bool { return children[id][i].CreatedAt.Before(children[id][j].CreatedAt) })
 	}
 	ordered := []record.Task{}
-	var visit func(record.Task)
-	visit = func(t record.Task) {
-		for _, c := range children[t.ID] {
-			visit(c)
+	seen := map[string]bool{}
+	visiting := map[string]bool{}
+	var visit func(record.Task) error
+	visit = func(t record.Task) error {
+		if visiting[t.ID] {
+			return fmt.Errorf("task parent cycle detected at %s", t.Handle)
 		}
+		if seen[t.ID] {
+			return nil
+		}
+		visiting[t.ID] = true
+		for _, c := range children[t.ID] {
+			if err := visit(c); err != nil {
+				return err
+			}
+		}
+		delete(visiting, t.ID)
+		seen[t.ID] = true
 		if record.IsOpen(t.Status) {
 			ordered = append(ordered, t)
 		}
+		return nil
 	}
-	visit(target)
+	if err := visit(target); err != nil {
+		return MarkResult{}, err
+	}
 	local, err := a.Home.LoadLocal()
 	if err != nil {
 		return MarkResult{}, err
@@ -833,13 +929,27 @@ func (a App) markCascade(ctx context.Context, ref, status string, o MarkOptions)
 	if len(refusals) > 0 {
 		return MarkResult{}, GateError{strings.Join(refusals, "\n")}
 	}
-	var result MarkResult
+	result := MarkResult{Task: target}
 	one := o
 	one.Cascade = false
-	for _, t := range ordered {
-		result, err = a.Mark(ctx, t.ID, status, one)
-		if err != nil {
-			return result, err
+	closed := []string{}
+	for i, t := range ordered {
+		oneResult, markErr := a.Mark(ctx, t.ID, status, one)
+		for _, loss := range oneResult.Loss {
+			result.Loss = append(result.Loss, t.Handle+": "+loss)
+		}
+		if oneResult.RemovedAt != "" {
+			result.RemovedAt = oneResult.RemovedAt
+		}
+		if markErr != nil {
+			for _, pending := range ordered[i:] {
+				result.Remaining = append(result.Remaining, pending.Handle)
+			}
+			return result, fmt.Errorf("cascade stopped at %s: %w; already closed: %s; remaining: %s", t.Handle, markErr, strings.Join(closed, ", "), strings.Join(result.Remaining, ", "))
+		}
+		closed = append(closed, t.Handle)
+		if t.ID == target.ID {
+			result.Task = oneResult.Task
 		}
 	}
 	return result, nil

@@ -172,6 +172,28 @@ func TestF18CrossProcessWritesAndOpens(t *testing.T) {
 		t.Fatalf("hub dirty after notes: %q", got)
 	}
 
+	// Each process reads before contending on the hub lock. Mutations must derive
+	// their new collection from the document re-read while that lock is held.
+	errs = make(chan error, 20)
+	for i := 0; i < 20; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			if out, err := runTT2("label", "add", "-t", noteID, fmt.Sprintf("label-%02d", i)); err != nil {
+				errs <- fmt.Errorf("label %d: %v\n%s", i, err, out)
+			}
+		}(i)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Error(err)
+	}
+	doc, err = record.Parse(mustRead(t, filepath.Join(homePath, "git", "tasks", noteID+".md")))
+	if err != nil || len(doc.Task.Labels) != 20 {
+		t.Fatalf("concurrent labels: labels=%v err=%v", doc.Task.Labels, err)
+	}
+
 	openIDs := make([]string, 6)
 	for i := range openIDs {
 		out, err := runTT2("new", fmt.Sprintf("Concurrent open %d", i))
