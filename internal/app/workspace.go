@@ -1204,8 +1204,9 @@ func (a App) openIsolated(ctx context.Context, t record.Task, o OpenOptions, pro
 	}
 	g := a.Git.WithDefaults()
 	taskBranch := "task/" + t.ID
+	materialized := false
 	defer func() {
-		if err != nil {
+		if err != nil && !materialized {
 			_ = os.RemoveAll(path)
 			_ = os.RemoveAll(a.Home.ClonePath(t.ID))
 		}
@@ -1351,6 +1352,7 @@ func (a App) openIsolated(ctx context.Context, t record.Task, o OpenOptions, pro
 		return "", err
 	}
 	a.refreshTaskRecord(ctx, t.ID)
+	materialized = true
 	if !o.SkipBootstrap {
 		if err = a.Bootstrap(ctx, t.ID, path, progress); err != nil {
 			return "", err
