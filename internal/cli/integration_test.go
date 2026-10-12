@@ -207,7 +207,7 @@ func TestTasktreeEndToEnd(t *testing.T) {
 	if _, e := os.Stat(filepath.Join(root, "tasks")); !os.IsNotExist(e) {
 		t.Fatalf("task records leaked into working tree: %v", e)
 	}
-	if got := gitRun(t, filepath.Join(homeDir, "git"), "ls-tree", "-r", "--name-only", "task/"+id); got != ".tasktree/.gitignore\n.tasktree/config.yml" {
+	if got := gitRun(t, filepath.Join(homeDir, "git"), "ls-tree", "-r", "--name-only", "task/"+id); got != ".tasktree/.gitignore\n.tasktree/config.yml\nAGENTS.md" {
 		t.Fatalf("initial task branch tree:\n%s", got)
 	}
 	plainStatus := exec.Command("git", "status")

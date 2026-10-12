@@ -97,6 +97,10 @@ func validateBody(kind, s string) error {
 	return nil
 }
 func ValidateDescription(s string) error { return validateBody("description", s) }
+
+// ValidateEntryBody validates text supplied to tt2 note before a hub write.
+func ValidateEntryBody(s string) error { return validateBody("note body", s) }
+
 func ValidateKind(s string) error {
 	for _, v := range []string{"note", "comment", "decision", "ref"} {
 		if s == v {
@@ -306,7 +310,7 @@ func (d *Document) Append(e Entry) error {
 	if err := ValidateKind(e.Kind); err != nil {
 		return err
 	}
-	if err := validateBody("note body", e.Body); err != nil {
+	if err := ValidateEntryBody(e.Body); err != nil {
 		return err
 	}
 	for _, x := range d.Task.Log {

@@ -151,6 +151,19 @@ func (h Hub) Read(ref string) (*record.Document, error) {
 	return nil, resolveErr
 }
 
+// ReadSerialized snapshots a record while holding the hub write lock. It is
+// used for generated checkout views so an older snapshot cannot overwrite a
+// newer record write from another process.
+func (h Hub) ReadSerialized(ctx context.Context, ref string) (*record.Document, error) {
+	var d *record.Document
+	err := h.withLock(ctx, func() error {
+		var err error
+		d, err = h.Read(ref)
+		return err
+	})
+	return d, err
+}
+
 func Resolve(docs []*record.Document, ref string) (*record.Document, error) {
 	for _, d := range docs {
 		if d.Task.ID == ref {
@@ -226,7 +239,20 @@ func (h Hub) Create(ctx context.Context, d *record.Document, summary, author, ma
 		return nil
 	})
 }
+
+// Update applies and commits a record mutation while holding the hub write lock.
 func (h Hub) Update(ctx context.Context, ref, summary, author, machine string, mutate func(*record.Document) error) (record.Task, error) {
+	return h.update(ctx, ref, summary, author, machine, mutate, nil)
+}
+
+// UpdateWithPostCommit invokes post after a successful record commit while the
+// hub write lock is still held. Post failures must be handled by the callback:
+// the committed record is authoritative and must not be rolled back.
+func (h Hub) UpdateWithPostCommit(ctx context.Context, ref, summary, author, machine string, mutate func(*record.Document) error, post func(record.Task, []byte)) (record.Task, error) {
+	return h.update(ctx, ref, summary, author, machine, mutate, post)
+}
+
+func (h Hub) update(ctx context.Context, ref, summary, author, machine string, mutate func(*record.Document) error, post func(record.Task, []byte)) (record.Task, error) {
 	var result record.Task
 	err := h.withLock(ctx, func() error {
 		if err := h.ensureClean(ctx); err != nil {
@@ -256,6 +282,9 @@ func (h Hub) Update(ctx context.Context, ref, summary, author, machine string, m
 			return err
 		}
 		result = d.Task
+		if post != nil {
+			post(result, d.Render())
+		}
 		return nil
 	})
 	return result, err

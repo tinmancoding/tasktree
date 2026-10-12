@@ -13,6 +13,7 @@ import (
 	"github.com/tinmancoding/tasktree/v2/internal/cache"
 	"github.com/tinmancoding/tasktree/v2/internal/gitx"
 	"github.com/tinmancoding/tasktree/v2/internal/home"
+	"github.com/tinmancoding/tasktree/v2/internal/record"
 	"github.com/tinmancoding/tasktree/v2/internal/repoalias"
 	"gopkg.in/yaml.v3"
 )
@@ -78,9 +79,18 @@ func git(ctx context.Context, g gitx.Client, dir string, args ...string) (string
 }
 
 func (a App) ResolveTarget(explicit, start string) (string, string, error) {
-	if explicit != "" {
-		t, err := a.Info(explicit)
+	ref := explicit
+	source := ""
+	if ref == "" {
+		ref = os.Getenv("TASKTREE_TASK")
+		source = "TASKTREE_TASK"
+	}
+	if ref != "" {
+		t, err := a.Info(ref)
 		if err != nil {
+			if source != "" {
+				return "", "", fmt.Errorf("%s=%q: %w", source, ref, err)
+			}
 			return "", "", err
 		}
 		s, err := a.Home.LoadLocal()
@@ -254,6 +264,7 @@ func (a App) Open(ctx context.Context, ref, requested string, force bool, progre
 	}
 	if c, ok := local.Checkouts[t.ID]; ok {
 		if st, e := os.Stat(c.Path); e == nil && st.IsDir() {
+			a.refreshTaskRecord(ctx, t.ID)
 			return c.Path, nil
 		}
 	}
@@ -345,6 +356,9 @@ func (a App) Open(ctx context.Context, ref, requested string, force bool, progre
 			err = os.WriteFile(filepath.Join(path, ".tasktree", ".gitignore"), []byte("task.md\n"), 0o644)
 		}
 		if err == nil {
+			err = os.WriteFile(filepath.Join(path, "AGENTS.md"), []byte(starterAgents(t)), 0o644)
+		}
+		if err == nil {
 			_, _, err = rootGit(ctx, g, a.Home, t.ID, path, "add", "-A")
 		}
 		if err == nil {
@@ -371,7 +385,12 @@ func (a App) Open(ctx context.Context, ref, requested string, force bool, progre
 	}); err != nil {
 		return "", err
 	}
+	a.refreshTaskRecord(ctx, t.ID)
 	return path, nil
+}
+
+func starterAgents(t record.Task) string {
+	return fmt.Sprintf("# %s (%s)\n\nThis folder is a tasktree for task `%s` (id `%s`), managed by `tt2`.\n\n## Rules for agents\n\n- The task record is the source of truth for status, notes, decisions, and references. Read it with `tt2 info` or `.tasktree/task.md` (a generated copy — never edit it).\n- Record progress with `tt2 note \"...\"`; use `--kind decision`, `--kind comment`, or `--kind ref` when it fits. Set `TASKTREE_AUTHOR` to your agent name.\n- Never run git in this folder's root; it is intentionally not a git repository. Record root files and repository commits with `tt2 commit -m \"...\"`.\n- Inside each repository folder, git works normally: branch, commit, push.\n- Add or remove repositories with `tt2 add <alias|url>` and `tt2 remove <name>`. Never `git clone` into this folder.\n- Change task status (`tt2 mark ...`) only when asked.\n\n## Notes\n", t.Title, t.Handle, t.Handle, t.ID)
 }
 func recordOpen(s string) bool { return s != "done" && s != "dropped" }
 

@@ -95,6 +95,7 @@ func (o *options) application() (app.App, error) {
 	}
 	a := app.New(h, v)
 	a.AuthorOverride = o.author
+	a.WarningWriter = o.err
 	return a, nil
 }
 func exact(n int) cobra.PositionalArgs {
@@ -304,6 +305,9 @@ func noteCmd(o *options) *cobra.Command {
 		a, e := o.application()
 		if e != nil {
 			return e
+		}
+		if e := record.ValidateEntryBody(args[0]); e != nil {
+			return usageError{e.Error()}
 		}
 		resolved, _, e := resolveTarget(a, ref)
 		if e != nil {
