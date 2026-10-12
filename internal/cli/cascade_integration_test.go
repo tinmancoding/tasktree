@@ -37,8 +37,12 @@ func TestCascadePreflightAbortsThenClosesCheckedOutChild(t *testing.T) {
 	if got := taskInfo(t, child).Status; got != "incoming" {
 		t.Fatalf("child changed on preflight abort: %s", got)
 	}
-	if _, _, err := run(t, "mark", "done", "--cascade", "--force", "-t", parent); err != nil {
+	_, forcedLoss, err := run(t, "mark", "done", "--cascade", "--force", "-t", parent)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if !strings.Contains(forcedLoss, child+": repo has unpushed commits") {
+		t.Fatalf("cascade forced loss=%q", forcedLoss)
 	}
 	if got := taskInfo(t, parent).Status; got != "done" {
 		t.Fatalf("parent=%s", got)
