@@ -1467,7 +1467,7 @@ func (a App) Push(ctx context.Context, id, root string, names []string) ([]PushR
 						if parentRef != nil || anc != nil {
 							countArgs := []string{"rev-list", "--count", fork, "--not", "origin/" + pm.Branch}
 							if parentRef != nil {
-								countArgs = []string{"rev-list", "--count", fork, "--not", "--remotes=origin"}
+								countArgs = []string{"rev-list", "--count", fork, "--not", "origin/" + def}
 							}
 							n, _, _ := git(ctx, g, p, countArgs...)
 							if strings.TrimSpace(n) == "" {
