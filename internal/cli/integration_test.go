@@ -24,7 +24,14 @@ func TestCommandFlowAndExitCodes(t *testing.T) {
 	home := t.TempDir()
 	old, had := os.LookupEnv("TASKTREE_HOME")
 	os.Setenv("TASKTREE_HOME", home)
+	oldV1, hadV1 := os.LookupEnv("TASKTREE_V1_ALIASES_FILE")
+	os.Setenv("TASKTREE_V1_ALIASES_FILE", filepath.Join(home, "missing-v1-aliases.yml"))
 	defer func() {
+		if hadV1 {
+			os.Setenv("TASKTREE_V1_ALIASES_FILE", oldV1)
+		} else {
+			os.Unsetenv("TASKTREE_V1_ALIASES_FILE")
+		}
 		if had {
 			os.Setenv("TASKTREE_HOME", old)
 		} else {
@@ -136,6 +143,26 @@ func gitRun(t *testing.T, dir string, args ...string) string {
 		t.Fatalf("git %v: %v\n%s", args, e, b)
 	}
 	return strings.TrimSpace(string(b))
+}
+
+func TestSetupMigratesV1AliasesOnce(t *testing.T) {
+	h := t.TempDir()
+	source := filepath.Join(t.TempDir(), "repos.yml")
+	os.WriteFile(source, []byte("repos:\n  - url: one\n    aliases: [one]\n"), 0o644)
+	t.Setenv("TASKTREE_HOME", h)
+	t.Setenv("TASKTREE_V1_ALIASES_FILE", source)
+	out, _, e := run(t, "setup", "--author", "test", "--machine", "box")
+	if e != nil || !strings.Contains(out, "copied V1") {
+		t.Fatalf("first setup %q %v", out, e)
+	}
+	os.WriteFile(source, []byte("changed"), 0o644)
+	out, _, e = run(t, "setup")
+	if e != nil || strings.Contains(out, "copied V1") {
+		t.Fatalf("second setup %q %v", out, e)
+	}
+	if !strings.Contains(string(mustRead(t, filepath.Join(h, "aliases.yml"))), "aliases: [one]") {
+		t.Fatal("aliases overwritten")
+	}
 }
 
 func TestTasktreeEndToEnd(t *testing.T) {
