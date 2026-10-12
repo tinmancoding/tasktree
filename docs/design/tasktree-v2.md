@@ -1,6 +1,6 @@
 # Design: tasktree V2
 
-Status: **Accepted** (design interview, decisions D1–D41)
+Status: **Accepted** (design interview, decisions D1–D42)
 Supersedes: the workspace-centric V1 model (`Tasktree.yml` + plain folders + registry)
 
 V2 turns tasktree into a single personal tool for **task management + multi-repo workspace
@@ -448,9 +448,11 @@ Targeting: inside a tasktree, commands act on its task (see target resolution); 
 
 - Same repo, Go, module `github.com/tinmancoding/tasktree/v2` on `main`; V1 frozen on a `v1`
   branch for fixes. Released as `v2.0.0` via release-please (`feat!:`); same binary name.
-- **During development the V2 binary is `tt`** (`cmd/tt`), installed alongside V1 `tasktree`
-  so existing V1 workspaces keep working until `import` (M3). It takes the `tasktree` name at
-  `v2.0.0` (D37).
+- **During development the V2 binary is `tt2`** (`cmd/tt2`), installed alongside V1 `tasktree`
+  and its `tt` alias, so existing V1 workspaces keep working until `import` (M3). It takes the
+  `tasktree` name at `v2.0.0` (D37, D42).
+- Development happens on branch `v2`; V1 is frozen on branch `v1`; `v2` merges to `main` at
+  `v2.0.0`.
 - Rewrite `domain`, `app`, `cli` (~79% of V1 non-test code).
 - Port leaf packages: `gitx` (extended for `GIT_DIR`/submodules), `output`, `bootstrap`,
   `variable`, `testutil`, `materialize/git.go` (K2), `repoalias`, `fsx`, `cache` (~1.8k LOC).
@@ -477,7 +479,7 @@ The folder stays in place (path in `local.yml`) unless `--move` relocates it to
 
 | Milestone | Scope |
 |---|---|
-| **S — Walking skeleton** (D41) | Hub, `setup`, `new` (incl. `--parent` for shared subtasks), `list`, `info`, `note`, `mark` (incl. close flow), `open`, `add` (aliases, modes, K2), `remove`, `commit`, `root`, `-t` targeting, `--json` for `list`/`info`. Record syntax (D38), `open` branch rules (D39), git env/path rules (D40). Binary `tt`. Backup of `~/.tasktree` in place (R4). |
+| **S — Walking skeleton** (D41) | Hub, `setup`, `new` (incl. `--parent` for shared subtasks), `list`, `info`, `note`, `mark` (incl. close flow), `open`, `add` (aliases, modes, K2), `remove`, `commit`, `root`, `-t` targeting, `--json` for `list`/`info`. Record syntax (D38), `open` branch rules (D39), git env/path rules (D40). Binary `tt2`. Backup of `~/.tasktree` in place (R4). |
 | **M1 — Records** | `info edit`, `info set` (incl. reparent), `ref`, `label`, `history`, `list` tree, `mark --cascade`, starter `AGENTS.md`. |
 | **M2 — Tasktrees + isolated subtasks** | `mode`, `bootstrap`, `focus` (D36), full target resolution (`TASKTREE_TASK`, focus), `.tasktree/task.md`, orphan cleanup, pi skill rewrite, `--isolated`, promotion, `parent` remote, `push` + fork-point check. |
 | **M3 — Import** | `import` (D24); stop using V1 day to day. |
@@ -568,3 +570,4 @@ Checked against git 2.53.0:
 | D39 | `open` attaches `work`/`follow` repos to a local branch at the gitlink (tracking `origin/<branch>` if present), `pin` detached; never resets existing branches |
 | D40 | Never export `GIT_*`; strip inherited `GIT_*` for child processes; rewrite submodule paths to absolute |
 | D41 | Walking-skeleton milestone S precedes M1; M1/M2 reduced accordingly |
+| D42 | Development binary is `tt2` (revises D37); `tt` stays the V1 alias |
