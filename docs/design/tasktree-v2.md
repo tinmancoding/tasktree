@@ -254,8 +254,9 @@ bootstrap:                  # optional (K4)
 ```
 
 The gitlink records concrete state; `.gitmodules` `branch` records intent. Together they
-replace V1's `Tasktree.yml` and snapshot base pin. Root discovery walks up to
-`.tasktree/config.yml`.
+replace V1's `Tasktree.yml` and snapshot base pin. Root discovery walks up to the nearest
+`.tasktree/config.yml` declaring `kind: TasktreeConfig`; other files at that path (notably the
+machine config `~/.tasktree/config.yml`) are skipped.
 
 ### Repo modes (D14)
 
