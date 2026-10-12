@@ -162,6 +162,9 @@ func (a App) PlanImport(ctx context.Context, root string, o ImportOptions) (Impo
 		return ImportPlan{}, err
 	}
 	p := ImportPlan{Path: abs}
+	if id, ok := pendingImportForRoot(a.Home, abs); ok {
+		return p, GateError{fmt.Sprintf("incomplete import %s; run tt2 import --recover %s", id, abs)}
+	}
 	if _, err := os.Lstat(filepath.Join(abs, ".tasktree", "config.yml")); err == nil {
 		var marker TasktreeConfig
 		b, readErr := os.ReadFile(filepath.Join(abs, ".tasktree", "config.yml"))
@@ -580,6 +583,24 @@ func snapshotsEqual(a, b repoSnapshot, allowWorktree bool) error {
 	return nil
 }
 
+func pendingImportForRoot(h home.Home, root string) (string, bool) {
+	entries, err := os.ReadDir(filepath.Join(h.Root, "imports"))
+	if err != nil {
+		return "", false
+	}
+	for _, entry := range entries {
+		b, e := os.ReadFile(filepath.Join(h.Root, "imports", entry.Name(), "journal.json"))
+		if e != nil {
+			continue
+		}
+		var j importJournal
+		if json.Unmarshal(b, &j) == nil && j.Root == root {
+			return j.ID, true
+		}
+	}
+	return "", false
+}
+
 func writeImportJournal(dir string, j importJournal) error {
 	j.Step++
 	b, err := json.MarshalIndent(j, "", "  ")
@@ -693,7 +714,7 @@ func (a App) Import(ctx context.Context, root string, o ImportOptions) (res Impo
 	}
 	started := true
 	defer func() {
-		if err != nil && started {
+		if err != nil && started && os.Getenv("TASKTREE_TEST_IMPORT_KILL") == "" {
 			rb := a.rollbackImport(ctx, st)
 			if rb != nil {
 				err = fmt.Errorf("%w; ROLLBACK INCOMPLETE: %v", err, rb)

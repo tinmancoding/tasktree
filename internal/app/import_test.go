@@ -181,6 +181,56 @@ func TestImportDryRunRollbackAndSuccess(t *testing.T) {
 	}
 }
 
+func TestInterruptedImportRequiresRecoveryAndRestoresExactly(t *testing.T) {
+	a, root := importFixture(t)
+	before := treeDigest(t, root)
+	t.Setenv("TASKTREE_TEST_IMPORT_FAIL", "3")
+	t.Setenv("TASKTREE_TEST_IMPORT_KILL", "1")
+	if _, err := a.Import(context.Background(), root, ImportOptions{}); err == nil {
+		t.Fatal("expected simulated interruption")
+	}
+	t.Setenv("TASKTREE_TEST_IMPORT_FAIL", "")
+	t.Setenv("TASKTREE_TEST_IMPORT_KILL", "")
+	if _, err := a.Import(context.Background(), root, ImportOptions{}); err == nil || !strings.Contains(err.Error(), "incomplete import") {
+		t.Fatalf("rerun error = %v", err)
+	}
+	message, err := a.RecoverImport(context.Background(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(message, "restored V1 workspace exactly") {
+		t.Fatalf("message = %q", message)
+	}
+	if got := treeDigest(t, root); got != before {
+		t.Fatalf("recovery changed fixture: %s != %s", got, before)
+	}
+}
+
+func TestImportMovePreservesRepositorySnapshot(t *testing.T) {
+	a, root := importFixture(t)
+	before, err := snapshotRepo(context.Background(), a, filepath.Join(root, "repo"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := a.Import(context.Background(), root, ImportOptions{Move: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Path == root {
+		t.Fatal("workspace was not moved")
+	}
+	after, err := snapshotRepo(context.Background(), a, filepath.Join(r.Path, "repo"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := snapshotsEqual(before, after, true); err != nil {
+		t.Fatalf("moved snapshot differs: %v", err)
+	}
+	if _, _, err := a.Git.Run(context.Background(), "", nil, "config", "--file", filepath.Join(a.Home.ClonePath(r.Task.ID), "config"), "--get", "core.worktree"); err == nil {
+		t.Fatal("root clone retained core.worktree")
+	}
+}
+
 func TestImportUsesDeclaredNameForNestedPath(t *testing.T) {
 	a, root := importFixture(t)
 	if err := os.MkdirAll(filepath.Join(root, "a"), 0o755); err != nil {
