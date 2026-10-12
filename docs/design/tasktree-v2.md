@@ -104,8 +104,11 @@ is the only regenerable data and stays in the OS cache directory.
   them to absolute after `add`, `open`, and `import` (D40).
 - **Never export `GIT_*`** (F7, D40). The CLI passes `GIT_DIR`/`GIT_WORK_TREE` per root git
   invocation only; exported, they leak into child processes (e.g. `git clone` of a submodule
-  fails with "working tree already exists"). Inherited `GIT_*` variables are stripped from the
-  environment of bootstrap steps and any other spawned process.
+  fails with "working tree already exists"). Inherited repository-context variables (the list
+  from `git rev-parse --local-env-vars`, e.g. `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`) are
+  stripped from the environment of child git processes, bootstrap steps, and any other spawned
+  process. Auth and transport settings (`GIT_SSH_COMMAND`, `GIT_ASKPASS`, `GIT_CONFIG_*`) pass
+  through.
 
 ### Writes and concurrency (D9)
 
@@ -568,6 +571,6 @@ Checked against git 2.53.0:
 | D37 | Development binary is `tt` alongside V1 `tasktree`; renamed to `tasktree` at `v2.0.0` |
 | D38 | Record syntax: reserved `## Description`/`## Log`, Log last, entry header `### <ts> <kind> <author>@<machine> {#e-<id>}`, lossless parser |
 | D39 | `open` attaches `work`/`follow` repos to a local branch at the gitlink (tracking `origin/<branch>` if present), `pin` detached; never resets existing branches |
-| D40 | Never export `GIT_*`; strip inherited `GIT_*` for child processes; rewrite submodule paths to absolute |
+| D40 | Never export `GIT_*`; strip inherited repository-context `GIT_*` (`git rev-parse --local-env-vars`) for child processes, keep auth/transport vars; rewrite submodule paths to absolute |
 | D41 | Walking-skeleton milestone S precedes M1; M1/M2 reduced accordingly |
 | D42 | Development binary is `tt2` (revises D37); `tt` stays the V1 alias |
