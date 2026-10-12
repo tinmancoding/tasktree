@@ -177,6 +177,11 @@ func TestTasktreeEndToEnd(t *testing.T) {
 	if _, e := os.Stat(filepath.Join(root, ".git")); !os.IsNotExist(e) {
 		t.Fatalf("root .git exists: %v", e)
 	}
+	plainStatus := exec.Command("git", "status")
+	plainStatus.Dir = root
+	if e := plainStatus.Run(); e == nil {
+		t.Fatal("plain git status unexpectedly worked in root")
+	}
 	cmd := exec.Command("git", "merge-base", "main", "task/"+id)
 	cmd.Dir = filepath.Join(homeDir, "git")
 	if e := cmd.Run(); e == nil {
@@ -200,6 +205,9 @@ func TestTasktreeEndToEnd(t *testing.T) {
 		dot := string(mustRead(t, filepath.Join(root, name, ".git")))
 		if !strings.HasPrefix(dot, "gitdir: /") {
 			t.Errorf("relative gitdir: %s", dot)
+		}
+		if worktree := gitRun(t, filepath.Join(root, name), "config", "--get", "core.worktree"); !filepath.IsAbs(worktree) {
+			t.Errorf("relative core.worktree: %s", worktree)
 		}
 		if _, e := os.Stat(filepath.Join(homeDir, "clones", id+".git", "modules", name, "objects", "info", "alternates")); !os.IsNotExist(e) {
 			t.Errorf("alternates exists: %v", e)
@@ -235,7 +243,13 @@ func TestTasktreeEndToEnd(t *testing.T) {
 	os.WriteFile(filepath.Join(root, "work", "dirty"), []byte("x"), 0o644)
 	_, _, e = run(t, "remove", "work")
 	if cli.Code(e) != 6 {
-		t.Fatalf("remove gate code=%d err=%v", cli.Code(e), e)
+		t.Fatalf("dirty remove gate code=%d err=%v", cli.Code(e), e)
+	}
+	gitRun(t, filepath.Join(root, "work"), "add", "dirty")
+	gitRun(t, filepath.Join(root, "work"), "commit", "-m", "unpushed")
+	_, _, e = run(t, "remove", "work")
+	if cli.Code(e) != 6 || !strings.Contains(e.Error(), "unpushed") {
+		t.Fatalf("unpushed remove gate code=%d err=%v", cli.Code(e), e)
 	}
 	if _, _, e = run(t, "remove", "work", "--force"); e != nil {
 		t.Fatal(e)
