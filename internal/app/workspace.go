@@ -564,7 +564,16 @@ func (a App) materialize(ctx context.Context, id, root string, progress interfac
 	if e != nil {
 		return e
 	}
+	var parentID string
+	if task, infoErr := a.Info(id); infoErr == nil && task.Parent != nil && localCheckoutPath(a.Home, *task.Parent) != "" {
+		parentID = *task.Parent
+	}
 	for _, m := range ms {
+		gitlink, _, ge := rootGit(ctx, g, a.Home, id, root, "rev-parse", "HEAD:"+m.Path)
+		if ge != nil {
+			return ge
+		}
+		gitlink = strings.TrimSpace(gitlink)
 		cp, e := mgr.Ensure(ctx, m.URL)
 		if e != nil {
 			cp = mgr.PathForURL(m.URL)
@@ -575,18 +584,25 @@ func (a App) materialize(ctx context.Context, id, root string, progress interfac
 				fmt.Fprintf(progress, "warning: fetch %s failed; using cache\n", m.Name)
 			}
 		}
+		if parentID != "" {
+			parentGit := filepath.Join(a.Home.ClonePath(parentID), "modules", m.Name)
+			if _, statErr := os.Stat(parentGit); statErr == nil {
+				_, _, _ = git(ctx, g, cp, "remote", "remove", "parent")
+				if _, _, addErr := git(ctx, g, cp, "remote", "add", "parent", parentGit); addErr == nil {
+					_, _, _ = git(ctx, g, cp, "fetch", "parent")
+				}
+			}
+		}
 		rootGit(ctx, g, a.Home, id, root, "config", "submodule."+m.Name+".url", cp)
 		_, _, e = rootGit(ctx, g, a.Home, id, root, "-c", "protocol.file.allow=always", "submodule", "update", "--init", "--", m.Path)
 		rootGit(ctx, g, a.Home, id, root, "config", "submodule."+m.Name+".url", m.URL)
 		if e != nil {
+			if _, _, missing := git(ctx, g, cp, "cat-file", "-e", gitlink+"^{commit}"); missing != nil {
+				return fmt.Errorf("repository %s: gitlink commit %s is unavailable from the cache and local parent checkout", m.Name, gitlink)
+			}
 			return e
 		}
 		p := filepath.Join(root, m.Path)
-		gitlink, _, ge := rootGit(ctx, g, a.Home, id, root, "rev-parse", "HEAD:"+m.Path)
-		if ge != nil {
-			return ge
-		}
-		gitlink = strings.TrimSpace(gitlink)
 		g.RemoteSetURL(ctx, p, "origin", m.URL)
 		if err := rewriteSubmodule(a.Home, id, root, m); err != nil {
 			return err
