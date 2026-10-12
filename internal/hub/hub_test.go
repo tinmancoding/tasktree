@@ -1,6 +1,7 @@
 package hub_test
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"github.com/tinmancoding/tasktree/v2/internal/gitx"
@@ -41,6 +42,27 @@ func TestInitIdempotent(t *testing.T) {
 		t.Fatalf("count=%q err=%v", out, err)
 	}
 }
+func TestReadAllWarnsAndTargetReportsMalformedRecord(t *testing.T) {
+	h := newHub(t)
+	var warnings bytes.Buffer
+	h.WarningWriter = &warnings
+	path := filepath.Join(h.Path, "tasks", "abc123.md")
+	bad := "---\nid: abc123\nhandle: broken\ntitle: Broken\nstatus: incoming\ncreatedAt: 2026-01-01T00:00:00Z\nupdatedAt: 2026-01-01T00:00:00Z\n---\n"
+	if err := os.WriteFile(path, []byte(bad), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	docs, err := h.ReadAll()
+	if err != nil || len(docs) != 0 {
+		t.Fatalf("docs=%d err=%v", len(docs), err)
+	}
+	if !strings.Contains(warnings.String(), path) {
+		t.Fatalf("warning = %q", warnings.String())
+	}
+	if _, err := h.Read("broken"); err == nil || !strings.Contains(err.Error(), path) {
+		t.Fatalf("target error = %v", err)
+	}
+}
+
 func TestDirtyHubRefused(t *testing.T) {
 	h := newHub(t)
 	if err := os.WriteFile(filepath.Join(h.Path, "manual"), []byte("dirty"), 0o644); err != nil {

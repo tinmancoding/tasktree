@@ -15,6 +15,7 @@ import (
 	"github.com/tinmancoding/tasktree/v2/internal/fsx"
 	"github.com/tinmancoding/tasktree/v2/internal/gitx"
 	"github.com/tinmancoding/tasktree/v2/internal/record"
+	"gopkg.in/yaml.v3"
 )
 
 type ConflictError struct{ Message string }
@@ -112,7 +113,42 @@ func (h Hub) Read(ref string) (*record.Document, error) {
 	if err != nil {
 		return nil, err
 	}
-	return Resolve(docs, ref)
+	d, resolveErr := Resolve(docs, ref)
+	if resolveErr == nil {
+		return d, nil
+	}
+	// A malformed record is skipped by ReadAll, but commands explicitly
+	// targeting its frontmatter identity must receive its actionable parse error.
+	entries, readErr := os.ReadDir(filepath.Join(h.Path, "tasks"))
+	if readErr == nil {
+		for _, entry := range entries {
+			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
+				continue
+			}
+			path := filepath.Join(h.Path, "tasks", entry.Name())
+			b, e := os.ReadFile(path)
+			if e != nil {
+				continue
+			}
+			if _, e = record.Parse(b); e == nil {
+				continue
+			}
+			var hint struct {
+				ID     string `yaml:"id"`
+				Handle string `yaml:"handle"`
+			}
+			if len(b) >= 4 {
+				normalized := strings.ReplaceAll(string(b), "\r\n", "\n")
+				if end := strings.Index(normalized[4:], "\n---"); strings.HasPrefix(normalized, "---\n") && end >= 0 {
+					_ = yaml.Unmarshal([]byte(normalized[4:4+end]), &hint)
+				}
+			}
+			if hint.ID == ref || hint.Handle == ref {
+				return nil, fmt.Errorf("parse %s: %w", path, e)
+			}
+		}
+	}
+	return nil, resolveErr
 }
 
 func Resolve(docs []*record.Document, ref string) (*record.Document, error) {
