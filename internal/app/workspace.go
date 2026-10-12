@@ -167,7 +167,7 @@ func modules(root string) ([]module, error) {
 }
 
 func (a App) InspectTasktree(ctx context.Context, id, root string) (TasktreeInfo, error) {
-	g := gitx.NewClient()
+	g := a.Git.WithDefaults()
 	result := TasktreeInfo{Path: root, Repos: []RepoInfo{}}
 	out, _, err := rootGit(ctx, g, a.Home, id, root, "status", "--porcelain")
 	if err != nil {
@@ -259,7 +259,7 @@ func (a App) Open(ctx context.Context, ref, requested string, progress interface
 	if err := os.MkdirAll(a.Home.ClonesPath(), 0o755); err != nil {
 		return "", err
 	}
-	g := gitx.NewClient()
+	g := a.Git.WithDefaults()
 	branch := "task/" + t.ID
 	_, _, existsErr := git(ctx, g, a.Home.GitPath(), "show-ref", "--verify", "--quiet", "refs/heads/"+branch)
 	configureIdentity := func() {
@@ -336,7 +336,7 @@ func (a App) materialize(ctx context.Context, id, root string, progress interfac
 	if err != nil {
 		return err
 	}
-	g := gitx.NewClient()
+	g := a.Git.WithDefaults()
 	mgr, e := cacheManager(g)
 	if e != nil {
 		return e
@@ -429,7 +429,7 @@ func (a App) Add(ctx context.Context, id, root string, o AddOptions) (AddResult,
 	if _, e := os.Stat(dest); !os.IsNotExist(e) {
 		return r, fmt.Errorf("destination %s exists", dest)
 	}
-	g := gitx.NewClient()
+	g := a.Git.WithDefaults()
 	mgr, e := cacheManager(g)
 	if e != nil {
 		return r, e
@@ -600,7 +600,7 @@ func registerAliases(s repoalias.Store, url string, r *AddResult) {
 	_ = s.Save(f)
 }
 func (a App) commitRoot(ctx context.Context, id, root, msg string) error {
-	g := gitx.NewClient()
+	g := a.Git.WithDefaults()
 	if _, _, e := rootGit(ctx, g, a.Home, id, root, "add", "-A"); e != nil {
 		return e
 	}
@@ -612,7 +612,7 @@ func (a App) commitRoot(ctx context.Context, id, root, msg string) error {
 }
 
 func (a App) Commit(ctx context.Context, id, root, msg string) (bool, []string, error) {
-	g := gitx.NewClient()
+	g := a.Git.WithDefaults()
 	warnings := []string{}
 	ms, e := modules(root)
 	if e != nil {
@@ -656,7 +656,7 @@ func (a App) Remove(ctx context.Context, id, root, name string, force bool) ([]s
 		return nil, fmt.Errorf("repository %q not found", name)
 	}
 	p := filepath.Join(root, m.Path)
-	g := gitx.NewClient()
+	g := a.Git.WithDefaults()
 	loss := []string{}
 	if dirty, _ := g.IsDirty(ctx, p); dirty {
 		loss = append(loss, name+" has uncommitted changes")
