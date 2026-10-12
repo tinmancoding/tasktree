@@ -84,7 +84,7 @@ func NewRoot(out, errOut io.Writer) *cobra.Command {
 	root.PersistentFlags().StringVarP(&o.chdir, "chdir", "C", "", "run as if started in this directory")
 	root.PersistentFlags().BoolVarP(&o.verbose, "verbose", "v", false, "print git commands")
 	root.PersistentFlags().StringVar(&o.author, "author", "", "author for log entries")
-	root.AddCommand(setupCmd(o), configCmd(o), newCmd(o), listCmd(o), infoCmd(o), noteCmd(o), markCmd(o), refCmd(o), labelCmd(o), historyCmd(o), openCmd(o), addCmd(o), removeCmd(o), modeCmd(o), bootstrapCmd(o), focusCmd(o), pushCmd(o), commitCmd(o), rootCmd(o))
+	root.AddCommand(setupCmd(o), configCmd(o), newCmd(o), listCmd(o), infoCmd(o), noteCmd(o), markCmd(o), refCmd(o), labelCmd(o), historyCmd(o), openCmd(o), addCmd(o), removeCmd(o), modeCmd(o), bootstrapCmd(o), focusCmd(o), pushCmd(o), commitCmd(o), importCmd(o), rootCmd(o))
 	return root
 }
 func (o *options) application() (app.App, error) {
@@ -991,9 +991,95 @@ func pushCmd(o *options) *cobra.Command {
 				fmt.Fprintln(o.out, x.Hint)
 			}
 		}
+		if e == nil && len(r) == 0 && len(args) == 0 {
+			fmt.Fprintln(o.out, "no work repos to push (name follow/pin repos explicitly)")
+		}
 		return e
 	}}
 	c.Flags().StringVarP(&ref, "task", "t", "", "task handle or id")
+	return c
+}
+
+func importCmd(o *options) *cobra.Command {
+	var x app.ImportOptions
+	var all bool
+	c := &cobra.Command{Use: "import <v1-path>", Short: "Import V1 workspaces without recloning repositories", Args: func(cmd *cobra.Command, args []string) error {
+		if all && len(args) != 0 {
+			return usageError{"tt2 import --all accepts no path"}
+		}
+		if !all && len(args) != 1 {
+			return usageError{"tt2 import accepts one path or --all"}
+		}
+		if all && (cmd.Flags().Changed("handle") || cmd.Flags().Changed("status")) {
+			return usageError{"--handle and --status cannot be used with --all"}
+		}
+		return nil
+	}, RunE: func(cmd *cobra.Command, args []string) error {
+		a, err := o.application()
+		if err != nil {
+			return err
+		}
+		paths := args
+		if all {
+			registry := os.Getenv("TASKTREE_V1_REGISTRY")
+			if registry == "" {
+				u, e := os.UserHomeDir()
+				if e != nil {
+					return e
+				}
+				registry = filepath.Join(u, ".local", "state", "tasktree", "registry.toml")
+			}
+			paths, err = app.ReadV1Registry(registry)
+			if err != nil {
+				return err
+			}
+		}
+		imported, refused, failed, skipped := 0, 0, 0, 0
+		for _, path := range paths {
+			result, e := a.Import(cmd.Context(), path, x)
+			app.PrintImportPlan(o.out, result.Plan)
+			if e != nil {
+				var gate app.GateError
+				if errors.As(e, &gate) {
+					refused++
+					fmt.Fprintf(o.err, "%s: refused: %v\n", path, e)
+				} else {
+					failed++
+					fmt.Fprintf(o.err, "%s: failed: %v\n", path, e)
+				}
+				if !all {
+					return e
+				}
+				continue
+			}
+			if result.Skipped {
+				skipped++
+				fmt.Fprintln(o.out, "already imported")
+			} else if x.DryRun {
+				fmt.Fprintln(o.out, "dry-run: no changes")
+			} else {
+				imported++
+				fmt.Fprintf(o.out, "imported %s as %s (%s)\n", path, result.Task.Handle, result.Task.ID)
+				fmt.Fprintln(o.out, "V1 registry unchanged; run `tasktree prune` to drop its entry")
+			}
+		}
+		if all {
+			fmt.Fprintf(o.out, "summary: imported=%d refused=%d failed=%d skipped=%d\n", imported, refused, failed, skipped)
+			if refused > 0 {
+				return app.GateError{Message: "one or more workspaces were refused"}
+			}
+			if failed > 0 {
+				return fmt.Errorf("one or more workspaces failed")
+			}
+		}
+		return nil
+	}}
+	c.Flags().BoolVar(&all, "all", false, "import all entries from the V1 registry")
+	c.Flags().StringVar(&x.Handle, "handle", "", "V2 task handle")
+	c.Flags().StringVar(&x.Status, "status", "", "V2 task status (default active)")
+	c.Flags().BoolVar(&x.Move, "move", false, "atomically move under tasksRoot after import")
+	c.Flags().BoolVar(&x.DryRun, "dry-run", false, "print the plan without changing anything")
+	c.Flags().BoolVar(&x.AllowLarge, "allow-large", false, "allow committing root files larger than 50 MB")
 	return c
 }
 

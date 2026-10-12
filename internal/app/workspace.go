@@ -485,6 +485,9 @@ func (a App) Open(ctx context.Context, ref string, o OpenOptions, progress inter
 		_ = os.RemoveAll(a.Home.ClonePath(t.ID))
 		return "", err
 	}
+	if err = ensureDSStoreExcluded(a.Home.ClonePath(t.ID)); err != nil {
+		return "", err
+	}
 	_ = os.Remove(filepath.Join(path, ".git"))
 	if err := a.materialize(ctx, t.ID, path, progress); err != nil {
 		_ = os.RemoveAll(path)
@@ -505,6 +508,28 @@ func (a App) Open(ctx context.Context, ref string, o OpenOptions, progress inter
 		}
 	}
 	return path, nil
+}
+
+func ensureDSStoreExcluded(gitDir string) error {
+	info := filepath.Join(gitDir, "info")
+	if err := os.MkdirAll(info, 0o755); err != nil {
+		return err
+	}
+	path := filepath.Join(info, "exclude")
+	b, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		if strings.TrimSpace(line) == ".DS_Store" {
+			return nil
+		}
+	}
+	if len(b) > 0 && b[len(b)-1] != '\n' {
+		b = append(b, '\n')
+	}
+	b = append(b, []byte(".DS_Store\n")...)
+	return os.WriteFile(path, b, 0o644)
 }
 
 func starterAgents(t record.Task) string {
@@ -1574,6 +1599,9 @@ func (a App) openIsolated(ctx context.Context, t record.Task, o OpenOptions, pro
 		return "", err
 	}
 	if _, _, err = rootGit(ctx, g, a.Home, t.ID, path, "push", "-u", "origin", taskBranch); err != nil {
+		return "", err
+	}
+	if err = ensureDSStoreExcluded(a.Home.ClonePath(t.ID)); err != nil {
 		return "", err
 	}
 	_ = os.Remove(filepath.Join(path, ".git"))
