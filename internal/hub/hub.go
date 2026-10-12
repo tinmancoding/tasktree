@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -29,13 +30,14 @@ type NotSetupError struct{}
 func (NotSetupError) Error() string { return "tasktree is not set up; run tt2 setup" }
 
 type Hub struct {
-	Path        string
-	Git         gitx.Client
-	LockTimeout time.Duration
+	Path          string
+	Git           gitx.Client
+	LockTimeout   time.Duration
+	WarningWriter io.Writer
 }
 
 func New(path string, g gitx.Client) Hub {
-	return Hub{Path: path, Git: g, LockTimeout: 10 * time.Second}
+	return Hub{Path: path, Git: g, LockTimeout: 10 * time.Second, WarningWriter: os.Stderr}
 }
 func (h Hub) IsSetup() bool {
 	st, err := os.Stat(filepath.Join(h.Path, ".git"))
@@ -81,13 +83,38 @@ func (h Hub) ReadAll() ([]*record.Document, error) {
 		}
 		d, err := record.Parse(b)
 		if err != nil {
-			return nil, fmt.Errorf("parse %s: %w", e.Name(), err)
+			if h.WarningWriter != nil {
+				fmt.Fprintf(h.WarningWriter, "warning: parse %s: %v\n", filepath.Join(h.Path, "tasks", e.Name()), err)
+			}
+			continue
 		}
 		docs = append(docs, d)
 	}
 	sort.Slice(docs, func(i, j int) bool { return docs[i].Task.CreatedAt.Before(docs[j].Task.CreatedAt) })
 	return docs, nil
 }
+func (h Hub) Read(ref string) (*record.Document, error) {
+	if record.ValidID(ref) {
+		path := filepath.Join(h.Path, "tasks", ref+".md")
+		b, err := os.ReadFile(path)
+		if err == nil {
+			d, parseErr := record.Parse(b)
+			if parseErr != nil {
+				return nil, fmt.Errorf("parse %s: %w", path, parseErr)
+			}
+			return d, nil
+		}
+		if !os.IsNotExist(err) {
+			return nil, err
+		}
+	}
+	docs, err := h.ReadAll()
+	if err != nil {
+		return nil, err
+	}
+	return Resolve(docs, ref)
+}
+
 func Resolve(docs []*record.Document, ref string) (*record.Document, error) {
 	for _, d := range docs {
 		if d.Task.ID == ref {
@@ -145,13 +172,22 @@ func (h Hub) Create(ctx context.Context, d *record.Document, summary, author, ma
 		if _, err := os.Stat(path); err == nil {
 			return ConflictError{"task id already exists"}
 		}
+		if _, err := record.Parse(d.Render()); err != nil {
+			return fmt.Errorf("refuse to write invalid record: %w", err)
+		}
 		if err := fsx.AtomicWriteFile(path, d.Render(), 0o644); err != nil {
 			return err
 		}
-		if _, _, err := h.Git.Run(ctx, h.Path, nil, "add", "tasks/"+d.Task.ID+".md"); err != nil {
+		rel := "tasks/" + d.Task.ID + ".md"
+		if _, _, err := h.Git.Run(ctx, h.Path, nil, "add", rel); err != nil {
+			h.rollbackPath(ctx, rel)
 			return err
 		}
-		return h.commit(ctx, fmt.Sprintf("task(%s): %s", d.Task.ID, summary), author, machine)
+		if err := h.commit(ctx, fmt.Sprintf("task(%s): %s", d.Task.ID, summary), author, machine); err != nil {
+			h.rollbackPath(ctx, rel)
+			return err
+		}
+		return nil
 	})
 }
 func (h Hub) Update(ctx context.Context, ref, summary, author, machine string, mutate func(*record.Document) error) (record.Task, error) {
@@ -160,11 +196,7 @@ func (h Hub) Update(ctx context.Context, ref, summary, author, machine string, m
 		if err := h.ensureClean(ctx); err != nil {
 			return err
 		}
-		docs, err := h.ReadAll()
-		if err != nil {
-			return err
-		}
-		d, err := Resolve(docs, ref)
+		d, err := h.Read(ref)
 		if err != nil {
 			return err
 		}
@@ -172,13 +204,19 @@ func (h Hub) Update(ctx context.Context, ref, summary, author, machine string, m
 			return err
 		}
 		path := filepath.Join(h.Path, "tasks", d.Task.ID+".md")
+		if _, err := record.Parse(d.Render()); err != nil {
+			return fmt.Errorf("refuse to write invalid record: %w", err)
+		}
 		if err := fsx.AtomicWriteFile(path, d.Render(), 0o644); err != nil {
 			return err
 		}
-		if _, _, err := h.Git.Run(ctx, h.Path, nil, "add", "tasks/"+d.Task.ID+".md"); err != nil {
+		rel := "tasks/" + d.Task.ID + ".md"
+		if _, _, err := h.Git.Run(ctx, h.Path, nil, "add", rel); err != nil {
+			h.rollbackPath(ctx, rel)
 			return err
 		}
 		if err := h.commit(ctx, fmt.Sprintf("task(%s): %s", d.Task.ID, summary), author, machine); err != nil {
+			h.rollbackPath(ctx, rel)
 			return err
 		}
 		result = d.Task
@@ -186,6 +224,16 @@ func (h Hub) Update(ctx context.Context, ref, summary, author, machine string, m
 	})
 	return result, err
 }
+func (h Hub) rollbackPath(ctx context.Context, rel string) {
+	// Restore both index and worktree when tracked; remove a newly-created file.
+	if _, _, err := h.Git.Run(ctx, h.Path, nil, "cat-file", "-e", "HEAD:"+rel); err == nil {
+		_, _, _ = h.Git.Run(ctx, h.Path, nil, "restore", "--source=HEAD", "--staged", "--worktree", "--", rel)
+	} else {
+		_, _, _ = h.Git.Run(ctx, h.Path, nil, "reset", "HEAD", "--", rel)
+		_ = os.Remove(filepath.Join(h.Path, filepath.FromSlash(rel)))
+	}
+}
+
 func (h Hub) ensureClean(ctx context.Context) error {
 	out, _, err := h.Git.Run(ctx, h.Path, nil, "status", "--porcelain")
 	if err != nil {

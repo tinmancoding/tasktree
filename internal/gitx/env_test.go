@@ -40,6 +40,20 @@ func TestRunUsesWorkingDirectoryAndStripsInheritedGitEnv(t *testing.T) {
 	}
 }
 
+func TestRunPreservesTransportEnvironment(t *testing.T) {
+	t.Setenv("GIT_SSH_COMMAND", "ssh -i /tmp/tasktree-test-key")
+	t.Setenv("GIT_DIR", filepath.Join(t.TempDir(), "bad"))
+	client := gitx.NewClient()
+	out, _, err := client.Run(context.Background(), "", nil, "-c", `alias.showenv=!printf '%s' "$GIT_SSH_COMMAND"`, "showenv")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "ssh -i /tmp/tasktree-test-key" {
+		t.Fatalf("GIT_SSH_COMMAND = %q", out)
+	}
+	// Successful invocation also proves the inherited invalid GIT_DIR was stripped.
+}
+
 func TestRunAcceptsPerInvocationGitEnvironment(t *testing.T) {
 	client := gitx.NewClient()
 	gitDir := filepath.Join(t.TempDir(), "repo.git")

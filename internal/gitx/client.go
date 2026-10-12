@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 type Client struct {
@@ -69,8 +70,8 @@ func (c Client) WithDefaults() Client {
 }
 
 // Run executes git with an optional working directory and per-invocation
-// environment. Inherited GIT_* variables are always removed before env is
-// applied, so repository context never leaks into child git processes.
+// environment. Inherited repository-context variables are removed before env
+// is applied; transport and authentication variables are preserved.
 func (c Client) Run(ctx context.Context, dir string, env map[string]string, args ...string) (string, string, error) {
 	cfg := c.withConfig()
 	if cfg.verboseWriter != nil {
@@ -109,11 +110,35 @@ func (c Client) run(ctx context.Context, args ...string) (string, string, error)
 	return c.Run(ctx, "", nil, args...)
 }
 
+var localEnvOnce sync.Once
+var localEnvNames map[string]bool
+
+func repositoryEnvNames() map[string]bool {
+	localEnvOnce.Do(func() {
+		localEnvNames = map[string]bool{}
+		// Keep this fallback aligned with Git's common repository-local variables.
+		fallback := []string{"GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_CONFIG", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT", "GIT_OBJECT_DIRECTORY", "GIT_DIR", "GIT_WORK_TREE", "GIT_IMPLICIT_WORK_TREE", "GIT_GRAFT_FILE", "GIT_INDEX_FILE", "GIT_NO_REPLACE_OBJECTS", "GIT_REPLACE_REF_BASE", "GIT_PREFIX", "GIT_INTERNAL_SUPER_PREFIX", "GIT_SHALLOW_FILE", "GIT_COMMON_DIR"}
+		for _, n := range fallback {
+			localEnvNames[n] = true
+		}
+		cmd := exec.Command("git", "rev-parse", "--local-env-vars")
+		cmd.Env = os.Environ()
+		if out, err := cmd.Output(); err == nil {
+			localEnvNames = map[string]bool{}
+			for _, n := range strings.Fields(string(out)) {
+				localEnvNames[n] = true
+			}
+		}
+	})
+	return localEnvNames
+}
+
 func cleanEnv(extra map[string]string) []string {
 	env := make([]string, 0, len(os.Environ())+len(extra))
+	strip := repositoryEnvNames()
 	for _, item := range os.Environ() {
 		name, _, _ := strings.Cut(item, "=")
-		if strings.HasPrefix(name, "GIT_") {
+		if strip[name] {
 			continue
 		}
 		if _, replaced := extra[name]; replaced {

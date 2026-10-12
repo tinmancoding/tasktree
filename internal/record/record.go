@@ -14,10 +14,10 @@ import (
 
 var idPattern = regexp.MustCompile(`^[0-9a-hjkmnp-tv-z]{6}$`)
 var logHeader = regexp.MustCompile(`(?m)^### ([^ ]+) (note|comment|decision|ref) ([^ @]+)@([^ ]+) \{#e-([0-9a-hjkmnp-tv-z]{6})\}[ \t]*$`)
-var reservedH2 = regexp.MustCompile(`(?m)^## (Description|Log)[ \t]*$`)
-var descriptionH2 = regexp.MustCompile(`(?m)^## Description[ \t]*$`)
-var logH2 = regexp.MustCompile(`(?m)^## Log[ \t]*$`)
-var anyH2 = regexp.MustCompile(`(?m)^## [^\n]+$`)
+var reservedH2 = regexp.MustCompile(`(?m)^## (Description|Log)$`)
+var descriptionH2 = regexp.MustCompile(`(?m)^## Description$`)
+var logH2 = regexp.MustCompile(`(?m)^## Log$`)
+var entryHeaderLine = regexp.MustCompile(`^### ([^ ]+) (note|comment|decision|ref) ([^ @]+)@([^ ]+) \{#e-([0-9a-hjkmnp-tv-z]{6})\}[ \t]*$`)
 
 var OpenStatuses = []string{"incoming", "next", "active", "blocked"}
 var ClosedStatuses = []string{"done", "dropped"}
@@ -85,12 +85,18 @@ func IsOpen(s string) bool {
 	}
 	return false
 }
-func ValidateDescription(s string) error {
-	if reservedH2.MatchString(s) {
-		return fmt.Errorf("description contains reserved H2 heading")
+func validateBody(kind, s string) error {
+	for _, line := range strings.Split(strings.ReplaceAll(s, "\r\n", "\n"), "\n") {
+		if reservedH2.MatchString(line) {
+			return fmt.Errorf("%s contains reserved heading %q", kind, line)
+		}
+		if entryHeaderLine.MatchString(line) {
+			return fmt.Errorf("%s contains reserved log entry header", kind)
+		}
 	}
 	return nil
 }
+func ValidateDescription(s string) error { return validateBody("description", s) }
 func ValidateKind(s string) error {
 	for _, v := range []string{"note", "comment", "decision", "ref"} {
 		if s == v {
@@ -101,6 +107,9 @@ func ValidateKind(s string) error {
 }
 
 func Parse(data []byte) (*Document, error) {
+	original := append([]byte(nil), data...)
+	// Parse against LF while retaining the original bytes for lossless round trips.
+	data = bytes.ReplaceAll(data, []byte("\r\n"), []byte("\n"))
 	if !bytes.HasPrefix(data, []byte("---\n")) {
 		return nil, fmt.Errorf("record missing YAML frontmatter")
 	}
@@ -160,13 +169,7 @@ func Parse(data []byte) (*Document, error) {
 	descEnd := descMatch[1]
 	logPos, logEnd := logMatch[0], logMatch[1]
 	logTail := body[logEnd:]
-	if anyH2.MatchString(logTail) {
-		return nil, fmt.Errorf("Log must be the last H2 section")
-	}
 	descTail := body[descEnd:logPos]
-	if next := anyH2.FindStringIndex(descTail); next != nil {
-		descTail = descTail[:next[0]]
-	}
 	t.Description = strings.Trim(descTail, "\n")
 	matches := logHeader.FindAllStringSubmatchIndex(logTail, -1)
 	seen := map[string]bool{}
@@ -194,7 +197,7 @@ func Parse(data []byte) (*Document, error) {
 	if t.Log == nil {
 		t.Log = []Entry{}
 	}
-	return &Document{Task: t, raw: append([]byte(nil), data...), frontEnd: end}, nil
+	return &Document{Task: t, raw: original, frontEnd: end}, nil
 }
 
 func New(t Task) (*Document, error) {
@@ -262,22 +265,39 @@ func (d *Document) SetStatus(status string, at time.Time) error {
 	if err := ValidateStatus(status); err != nil {
 		return err
 	}
-	d.raw = replaceFront(d.raw, "status", status)
-	d.raw = replaceFront(d.raw, "updatedAt", at.UTC().Format(time.RFC3339))
-	d.Task.Status = status
-	d.Task.UpdatedAt = at.UTC()
+	candidate := replaceFront(d.raw, "status", status)
+	candidate = replaceFront(candidate, "updatedAt", at.UTC().Format(time.RFC3339))
+	parsed, err := Parse(candidate)
+	if err != nil {
+		return fmt.Errorf("rendered record is invalid: %w", err)
+	}
+	d.raw, d.Task = candidate, parsed.Task
 	return nil
 }
 func replaceFront(raw []byte, key, value string) []byte {
-	lines := bytes.Split(raw, []byte("\n"))
+	eol := []byte("\n")
+	if bytes.Contains(raw, []byte("\r\n")) {
+		eol = []byte("\r\n")
+	}
+	lines := bytes.Split(raw, eol)
 	prefix := []byte(key + ":")
-	for i, l := range lines {
-		if bytes.HasPrefix(l, prefix) {
-			lines[i] = []byte(key + ": " + value)
+	end, found := len(lines), false
+	for i := 1; i < len(lines); i++ {
+		if bytes.Equal(lines[i], []byte("---")) {
+			end = i
 			break
 		}
 	}
-	return bytes.Join(lines, []byte("\n"))
+	for i := 1; i < end; i++ {
+		if bytes.HasPrefix(lines[i], prefix) {
+			lines[i], found = []byte(key+": "+value), true
+			break
+		}
+	}
+	if !found && end < len(lines) {
+		lines = append(lines[:end], append([][]byte{[]byte(key + ": " + value)}, lines[end:]...)...)
+	}
+	return bytes.Join(lines, eol)
 }
 func (d *Document) Append(e Entry) error {
 	if !ValidID(e.ID) {
@@ -286,22 +306,34 @@ func (d *Document) Append(e Entry) error {
 	if err := ValidateKind(e.Kind); err != nil {
 		return err
 	}
+	if err := validateBody("note body", e.Body); err != nil {
+		return err
+	}
 	for _, x := range d.Task.Log {
 		if x.ID == e.ID {
 			return fmt.Errorf("duplicate entry id %s", e.ID)
 		}
 	}
 	e.Timestamp = e.Timestamp.UTC()
-	separator := "\n\n"
-	if bytes.HasSuffix(d.raw, []byte("\n\n")) {
-		separator = ""
-	} else if bytes.HasSuffix(d.raw, []byte("\n")) {
-		separator = "\n"
+	eol := "\n"
+	if bytes.Contains(d.raw, []byte("\r\n")) {
+		eol = "\r\n"
 	}
-	d.raw = append(d.raw, []byte(separator+"### "+e.Timestamp.Format(time.RFC3339)+" "+e.Kind+" "+e.Author+"@"+e.Machine+" {#e-"+e.ID+"}\n"+e.Body+"\n")...)
-	d.Task.Log = append(d.Task.Log, e)
-	d.Task.UpdatedAt = e.Timestamp
-	d.raw = replaceFront(d.raw, "updatedAt", e.Timestamp.Format(time.RFC3339))
+	separator := eol + eol
+	if bytes.HasSuffix(d.raw, []byte(eol+eol)) {
+		separator = ""
+	} else if bytes.HasSuffix(d.raw, []byte(eol)) {
+		separator = eol
+	}
+	candidate := append([]byte(nil), d.raw...)
+	body := strings.ReplaceAll(e.Body, "\r\n", "\n")
+	candidate = append(candidate, []byte(separator+"### "+e.Timestamp.Format(time.RFC3339)+" "+e.Kind+" "+e.Author+"@"+e.Machine+" {#e-"+e.ID+"}"+eol+strings.ReplaceAll(body, "\n", eol)+eol)...)
+	candidate = replaceFront(candidate, "updatedAt", e.Timestamp.Format(time.RFC3339))
+	parsed, err := Parse(candidate)
+	if err != nil {
+		return fmt.Errorf("rendered record is invalid: %w", err)
+	}
+	d.raw, d.Task = candidate, parsed.Task
 	return nil
 }
 

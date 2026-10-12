@@ -50,7 +50,10 @@ func Code(err error) int {
 		return 2
 	}
 	s := err.Error()
-	if strings.Contains(s, "unknown flag") || strings.Contains(s, "requires") || strings.Contains(s, "accepts ") {
+	// Cobra/pflag does not expose a stable public error type for flag parsing.
+	// Match only its concrete flag diagnostics; application errors containing
+	// words such as "requires" must retain exit 1.
+	if strings.HasPrefix(s, "unknown flag:") || strings.HasPrefix(s, "unknown shorthand flag:") || strings.HasPrefix(s, "flag needs an argument:") || strings.HasPrefix(s, "invalid argument ") {
 		return 2
 	}
 	return 1
@@ -176,7 +179,7 @@ func newCmd(o *options) *cobra.Command {
 			return nil
 		}
 		fmt.Fprintf(o.err, "%s %s\n", t.Handle, t.ID)
-		p, e := a.Open(cmd.Context(), t.ID, path, o.err)
+		p, e := a.Open(cmd.Context(), t.ID, path, false, o.err)
 		if e == nil {
 			fmt.Fprintln(o.out, p)
 		}
@@ -392,18 +395,20 @@ func writeRepoInfo(w io.Writer, tree app.TasktreeInfo) error {
 
 func openCmd(o *options) *cobra.Command {
 	var path string
+	var force bool
 	c := &cobra.Command{Use: "open <handle|id>", Args: exact(1), RunE: func(cmd *cobra.Command, args []string) error {
 		a, e := o.application()
 		if e != nil {
 			return e
 		}
-		p, e := a.Open(cmd.Context(), args[0], path, o.err)
+		p, e := a.Open(cmd.Context(), args[0], path, force, o.err)
 		if e == nil {
 			fmt.Fprintln(o.out, p)
 		}
 		return e
 	}}
 	c.Flags().StringVar(&path, "path", "", "checkout path")
+	c.Flags().BoolVar(&force, "force", false, "replace an orphaned hidden git directory after reporting loss")
 	return c
 }
 func requireTree(a app.App, ref string) (string, string, error) {

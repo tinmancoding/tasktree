@@ -89,6 +89,53 @@ func TestDescriptionReservedHeadingRejected(t *testing.T) {
 		t.Fatal("expected error")
 	}
 }
+
+func TestLogBodyAllowsOrdinaryHeadingsAndRoundTripsCRLF(t *testing.T) {
+	crlf := []byte(strings.ReplaceAll(fixture, "\n", "\r\n"))
+	d, err := record.Parse(crlf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(d.Render(), crlf) {
+		t.Fatal("CRLF round trip changed bytes")
+	}
+	if err := d.Append(record.Entry{ID: "01jabc", Timestamp: time.Date(2026, 10, 12, 13, 0, 0, 0, time.UTC), Kind: "note", Author: "pi", Machine: "mbp", Body: "## Findings\n### Detail"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := record.Parse(d.Render()); err != nil {
+		t.Fatalf("render no longer parses: %v", err)
+	}
+}
+
+func TestAppendRejectsRecordBoundaryLines(t *testing.T) {
+	d, err := record.Parse([]byte(fixture))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, body := range []string{"## Log", "### 2026-10-12T10:03:00Z note laci@mbp {#e-01jab4}"} {
+		if err := d.Append(record.Entry{ID: "01jab8", Timestamp: time.Now(), Kind: "note", Author: "a", Machine: "m", Body: body}); err == nil {
+			t.Fatalf("accepted %q", body)
+		}
+	}
+}
+
+func TestReplaceFrontDoesNotReplaceBodyAndInsertsMissingKey(t *testing.T) {
+	raw := strings.Replace(fixture, "updatedAt: 2026-10-12T10:03:00Z\n", "", 1) + "\nupdatedAt: prose\n"
+	d, err := record.Parse([]byte(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.SetStatus("active", time.Date(2026, 10, 12, 14, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatal(err)
+	}
+	got := string(d.Render())
+	if !strings.Contains(got, "updatedAt: 2026-10-12T14:00:00Z\n---") {
+		t.Fatal("missing frontmatter key was not inserted")
+	}
+	if !strings.Contains(got, "updatedAt: prose") {
+		t.Fatal("body key was replaced")
+	}
+}
 func TestIDFormat(t *testing.T) {
 	seen := map[string]bool{}
 	for i := 0; i < 100; i++ {
