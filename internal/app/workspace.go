@@ -288,6 +288,14 @@ func (a App) Open(ctx context.Context, ref, requested string, progress interface
 			_, _, err = rootGit(ctx, g, a.Home, t.ID, path, "checkout", "--orphan", branch)
 		}
 		if err == nil {
+			// checkout --orphan seeds the index and work tree from its start point.
+			// Remove that seed so task branches never inherit records from main.
+			_, _, err = rootGit(ctx, g, a.Home, t.ID, path, "rm", "-rf", "--ignore-unmatch", ".")
+		}
+		if err == nil {
+			_, _, err = rootGit(ctx, g, a.Home, t.ID, path, "clean", "-fdx")
+		}
+		if err == nil {
 			err = os.MkdirAll(filepath.Join(path, ".tasktree"), 0o755)
 		}
 		if err == nil {

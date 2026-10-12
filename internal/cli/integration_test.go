@@ -204,6 +204,12 @@ func TestTasktreeEndToEnd(t *testing.T) {
 	if _, e := os.Stat(filepath.Join(root, ".git")); !os.IsNotExist(e) {
 		t.Fatalf("root .git exists: %v", e)
 	}
+	if _, e := os.Stat(filepath.Join(root, "tasks")); !os.IsNotExist(e) {
+		t.Fatalf("task records leaked into working tree: %v", e)
+	}
+	if got := gitRun(t, filepath.Join(homeDir, "git"), "ls-tree", "-r", "--name-only", "task/"+id); got != ".tasktree/.gitignore\n.tasktree/config.yml" {
+		t.Fatalf("initial task branch tree:\n%s", got)
+	}
 	plainStatus := exec.Command("git", "status")
 	plainStatus.Dir = root
 	if e := plainStatus.Run(); e == nil {
@@ -263,6 +269,11 @@ func TestTasktreeEndToEnd(t *testing.T) {
 	gitlink := gitRun(t, filepath.Join(homeDir, "git"), "rev-parse", "task/"+id+":upstream")
 	if gitlink != gitRun(t, filepath.Join(root, "upstream"), "rev-parse", "HEAD") {
 		t.Fatal("hub gitlink was not updated")
+	}
+	for _, path := range strings.Split(gitRun(t, filepath.Join(homeDir, "git"), "ls-tree", "-r", "--name-only", "task/"+id), "\n") {
+		if path == "tasks" || strings.HasPrefix(path, "tasks/") {
+			t.Fatalf("task record leaked into task branch: %s", path)
+		}
 	}
 	gitRun(t, upstream, "config", "receive.denyCurrentBranch", "updateInstead")
 	gitRun(t, filepath.Join(root, "upstream"), "push", "origin", "main")
