@@ -75,7 +75,25 @@ func rootEnv(h home.Home, id, root string) map[string]string {
 	return map[string]string{"GIT_DIR": h.ClonePath(id), "GIT_WORK_TREE": root}
 }
 func rootGit(ctx context.Context, g gitx.Client, h home.Home, id, root string, args ...string) (string, string, error) {
+	if err := validateRootIdentity(id, root); err != nil {
+		return "", "", err
+	}
 	return g.Run(ctx, root, rootEnv(h, id, root), args...)
+}
+
+// rootGitInit is restricted to checkout construction before its committed marker exists.
+func rootGitInit(ctx context.Context, g gitx.Client, h home.Home, id, root string, args ...string) (string, string, error) {
+	return g.Run(ctx, root, rootEnv(h, id, root), args...)
+}
+func validateRootIdentity(id, root string) error {
+	markerID, err := markerTaskID(root)
+	if err != nil {
+		return fmt.Errorf("tasktree root invariant failed: %w", err)
+	}
+	if markerID != id {
+		return fmt.Errorf("tasktree root invariant failed: marker task %s does not match git task %s", markerID, id)
+	}
+	return nil
 }
 func git(ctx context.Context, g gitx.Client, dir string, args ...string) (string, string, error) {
 	return g.Run(ctx, dir, nil, args...)
@@ -114,11 +132,80 @@ func (a App) ResolveTarget(explicit, start string) (string, string, error) {
 		return "", "", err
 	}
 	if checkout, ok := local.Checkouts[cfg.TaskID]; ok && checkout.Focus != "" {
-		if _, err := a.Info(checkout.Focus); err == nil {
+		docs, readErr := a.Hub.ReadAll()
+		if readErr != nil {
+			return "", "", readErr
+		}
+		byID := map[string]record.Task{}
+		for _, d := range docs {
+			byID[d.Task.ID] = d.Task
+		}
+		focused, exists := byID[checkout.Focus]
+		valid := exists && record.IsOpen(focused.Status) && isDescendant(byID, focused.ID, cfg.TaskID)
+		if valid {
 			return checkout.Focus, root, nil
 		}
+		_ = a.Home.UpdateLocal(func(s *home.LocalState) error {
+			c := s.Checkouts[cfg.TaskID]
+			if c.Focus == checkout.Focus {
+				c.Focus = ""
+				s.Checkouts[cfg.TaskID] = c
+			}
+			return nil
+		})
 	}
 	return cfg.TaskID, root, nil
+}
+
+// ResolveTreeTarget resolves structural commands without ever combining one
+// task's hidden git directory with another task's work tree.
+func (a App) ResolveTreeTarget(explicit, start string) (string, string, error) {
+	root, cfg, discoverErr := DiscoverRoot(start)
+	if discoverErr == nil && explicit == "" {
+		return cfg.TaskID, root, nil
+	}
+	if explicit == "" {
+		return "", "", discoverErr
+	}
+	t, err := a.Info(explicit)
+	if err != nil {
+		return "", "", err
+	}
+	if discoverErr == nil && t.ID == cfg.TaskID {
+		return t.ID, root, nil
+	}
+	local, err := a.Home.LoadLocal()
+	if err != nil {
+		return "", "", err
+	}
+	checkout, ok := local.Checkouts[t.ID]
+	if !ok || checkout.Path == "" {
+		return t.ID, "", nil
+	}
+	markerID, err := markerTaskID(checkout.Path)
+	if err != nil || markerID != t.ID {
+		return "", "", fmt.Errorf("recorded checkout for %s has a missing or mismatched task marker", t.Handle)
+	}
+	return t.ID, checkout.Path, nil
+}
+
+func isDescendant(byID map[string]record.Task, id, ancestor string) bool {
+	seen := map[string]bool{}
+	for id != "" {
+		if seen[id] {
+			return false
+		}
+		seen[id] = true
+		t, ok := byID[id]
+		if !ok || t.Parent == nil {
+			return false
+		}
+		if *t.Parent == ancestor {
+			return true
+		}
+		id = *t.Parent
+	}
+	return false
 }
 
 type RepoInfo struct {
@@ -342,8 +429,8 @@ func (a App) Open(ctx context.Context, ref string, o OpenOptions, progress inter
 		if machine == "" {
 			machine = "localhost"
 		}
-		_, _, _ = rootGit(ctx, g, a.Home, t.ID, path, "config", "user.name", name)
-		_, _, _ = rootGit(ctx, g, a.Home, t.ID, path, "config", "user.email", name+"@"+machine)
+		_, _, _ = rootGitInit(ctx, g, a.Home, t.ID, path, "config", "user.name", name)
+		_, _, _ = rootGitInit(ctx, g, a.Home, t.ID, path, "config", "user.email", name+"@"+machine)
 	}
 	if existsErr == nil {
 		_, _, err = git(ctx, g, "", "clone", "--separate-git-dir="+a.Home.ClonePath(t.ID), "--branch", branch, a.Home.GitPath(), path)
@@ -356,15 +443,15 @@ func (a App) Open(ctx context.Context, ref string, o OpenOptions, progress inter
 			configureIdentity()
 		}
 		if err == nil {
-			_, _, err = rootGit(ctx, g, a.Home, t.ID, path, "checkout", "--orphan", branch)
+			_, _, err = rootGitInit(ctx, g, a.Home, t.ID, path, "checkout", "--orphan", branch)
 		}
 		if err == nil {
 			// checkout --orphan seeds the index and work tree from its start point.
 			// Remove that seed so task branches never inherit records from main.
-			_, _, err = rootGit(ctx, g, a.Home, t.ID, path, "rm", "-rf", "--ignore-unmatch", ".")
+			_, _, err = rootGitInit(ctx, g, a.Home, t.ID, path, "rm", "-rf", "--ignore-unmatch", ".")
 		}
 		if err == nil {
-			_, _, err = rootGit(ctx, g, a.Home, t.ID, path, "clean", "-fdx")
+			_, _, err = rootGitInit(ctx, g, a.Home, t.ID, path, "clean", "-fdx")
 		}
 		if err == nil {
 			err = os.MkdirAll(filepath.Join(path, ".tasktree"), 0o755)
@@ -542,6 +629,9 @@ func deriveName(url string) string {
 }
 func (a App) Add(ctx context.Context, id, root string, o AddOptions) (AddResult, error) {
 	r := AddResult{}
+	if err := validateRootIdentity(id, root); err != nil {
+		return r, err
+	}
 	store := repoalias.NewStore(a.Home.AliasesPath())
 	if u, ok, e := store.Resolve(o.URL); e != nil {
 		return r, e
@@ -758,6 +848,9 @@ func (a App) commitRoot(ctx context.Context, id, root, msg string) error {
 }
 
 func (a App) Commit(ctx context.Context, id, root, msg string) (bool, []string, error) {
+	if err := validateRootIdentity(id, root); err != nil {
+		return false, nil, err
+	}
 	g := a.Git.WithDefaults()
 	warnings := []string{}
 	ms, e := modules(root)
@@ -930,6 +1023,9 @@ func (a App) tasktreeLoss(ctx context.Context, id, root string) ([]string, error
 }
 
 func (a App) Remove(ctx context.Context, id, root, name string, force bool) ([]string, error) {
+	if err := validateRootIdentity(id, root); err != nil {
+		return nil, err
+	}
 	ms, e := modules(root)
 	if e != nil {
 		return nil, e
@@ -995,6 +1091,9 @@ var _ = errors.Is
 
 // Bootstrap executes the committed bootstrap plan for a materialized checkout.
 func (a App) Bootstrap(ctx context.Context, id, root string, progress interface{ Write([]byte) (int, error) }) error {
+	if err := validateRootIdentity(id, root); err != nil {
+		return err
+	}
 	b, err := os.ReadFile(filepath.Join(root, ".tasktree", "config.yml"))
 	if err != nil {
 		return err
@@ -1008,6 +1107,9 @@ func (a App) Bootstrap(ctx context.Context, id, root string, progress interface{
 
 // Mode changes repository update intent and records the structural change.
 func (a App) Mode(ctx context.Context, id, root, name, mode string) error {
+	if err := validateRootIdentity(id, root); err != nil {
+		return err
+	}
 	if mode != "follow" && mode != "work" && mode != "pin" {
 		return fmt.Errorf("invalid mode %q", mode)
 	}
@@ -1058,7 +1160,10 @@ func (a App) Focus(root, ref string, clear bool) (record.Task, error) {
 	}
 	if clear {
 		err = a.Home.UpdateLocal(func(s *home.LocalState) error {
-			c := s.Checkouts[base.ID]
+			c, ok := s.Checkouts[base.ID]
+			if !ok {
+				return fmt.Errorf("tasktree checkout is not recorded")
+			}
 			c.Focus = ""
 			s.Checkouts[base.ID] = c
 			return nil
@@ -1068,6 +1173,9 @@ func (a App) Focus(root, ref string, clear bool) (record.Task, error) {
 	t, err := a.Info(ref)
 	if err != nil {
 		return record.Task{}, err
+	}
+	if !record.IsOpen(t.Status) {
+		return record.Task{}, GateError{fmt.Sprintf("%s is closed", t.Handle)}
 	}
 	docs, err := a.Hub.ReadAll()
 	if err != nil {
@@ -1079,7 +1187,12 @@ func (a App) Focus(root, ref string, clear bool) (record.Task, error) {
 	}
 	p := t.Parent
 	descendant := false
+	seen := map[string]bool{}
 	for p != nil {
+		if seen[*p] {
+			return record.Task{}, fmt.Errorf("task parent cycle detected at %s", *p)
+		}
+		seen[*p] = true
 		if *p == base.ID {
 			descendant = true
 			break
@@ -1137,6 +1250,76 @@ func (a App) clearFocus(id string) {
 		}
 		return nil
 	})
+}
+
+// PreflightIsolated validates failures that can be known before creating a task record.
+func (a App) PreflightIsolated(ctx context.Context, parentRef, handle string, o OpenOptions) error {
+	parent, err := a.Info(parentRef)
+	if err != nil {
+		return err
+	}
+	local, err := a.Home.LoadLocal()
+	if err != nil {
+		return err
+	}
+	pc, ok := local.Checkouts[parent.ID]
+	if !ok {
+		return GateError{"open " + parent.Handle + " first"}
+	}
+	if st, statErr := os.Stat(pc.Path); statErr != nil || !st.IsDir() {
+		return GateError{"open " + parent.Handle + " first"}
+	}
+	ms, err := modules(pc.Path)
+	if err != nil {
+		return err
+	}
+	byName := map[string]module{}
+	for _, m := range ms {
+		byName[m.Name] = m
+	}
+	selected := o.Repos
+	if len(selected) == 0 {
+		for _, m := range ms {
+			if m.Mode == "work" {
+				selected = append(selected, m.Name)
+			}
+		}
+	}
+	g := a.Git.WithDefaults()
+	for _, name := range selected {
+		m, exists := byName[name]
+		if !exists {
+			return fmt.Errorf("repository %q does not exist in parent", name)
+		}
+		if m.Mode == "work" {
+			branch := o.Branch
+			if branch == "" {
+				branch = m.Branch + "-" + handle
+			}
+			if err := g.ValidateBranchName(ctx, branch); err != nil {
+				return err
+			}
+			pp := filepath.Join(pc.Path, m.Path)
+			refs, _, _ := git(ctx, g, pp, "for-each-ref", "--format=%(refname:strip=2)", "refs/heads")
+			for _, existing := range strings.Fields(refs) {
+				if strings.HasPrefix(existing, branch+"/") || strings.HasPrefix(branch, existing+"/") {
+					return hub.ConflictError{Message: fmt.Sprintf("branch %s conflicts with existing branch %s", branch, existing)}
+				}
+			}
+		}
+	}
+	cfg, err := a.Home.LoadConfig()
+	if err != nil {
+		return err
+	}
+	path := o.Path
+	if path == "" {
+		path = filepath.Join(cfg.TasksRoot, handle)
+	}
+	if err := ensureEmpty(path); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (a App) openIsolated(ctx context.Context, t record.Task, o OpenOptions, progress interface{ Write([]byte) (int, error) }) (path string, err error) {
@@ -1198,6 +1381,27 @@ func (a App) openIsolated(ctx context.Context, t record.Task, o OpenOptions, pro
 	if err = os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return "", err
 	}
+	clonePath := a.Home.ClonePath(t.ID)
+	if _, statErr := os.Stat(clonePath); statErr == nil {
+		msg := fmt.Sprintf("hidden git dir for %s already exists at %s; the checkout may have been moved or local.yml lost", t.Handle, clonePath)
+		if !o.Force {
+			return "", GateError{msg}
+		}
+		loss, lossErr := lossInModules(ctx, a.Git.WithDefaults(), clonePath)
+		if lossErr != nil {
+			loss = append(loss, lossErr.Error())
+		}
+		if progress != nil {
+			for _, item := range loss {
+				fmt.Fprintln(progress, item)
+			}
+		}
+		if err = os.RemoveAll(clonePath); err != nil {
+			return "", err
+		}
+	} else if !os.IsNotExist(statErr) {
+		return "", statErr
+	}
 	_ = os.Remove(path)
 	if err = os.MkdirAll(a.Home.ClonesPath(), 0755); err != nil {
 		return "", err
@@ -1205,15 +1409,17 @@ func (a App) openIsolated(ctx context.Context, t record.Task, o OpenOptions, pro
 	g := a.Git.WithDefaults()
 	taskBranch := "task/" + t.ID
 	materialized := false
+	created := false
 	defer func() {
-		if err != nil && !materialized {
+		if err != nil && !materialized && created {
 			_ = os.RemoveAll(path)
-			_ = os.RemoveAll(a.Home.ClonePath(t.ID))
+			_ = os.RemoveAll(clonePath)
 		}
 	}()
-	if _, _, err = git(ctx, g, "", "clone", "--no-checkout", "--separate-git-dir="+a.Home.ClonePath(t.ID), a.Home.GitPath(), path); err != nil {
+	if _, _, err = git(ctx, g, "", "clone", "--no-checkout", "--separate-git-dir="+clonePath, a.Home.GitPath(), path); err != nil {
 		return "", err
 	}
+	created = true
 	name := cfg.Author
 	if name == "" {
 		name = "tasktree"
@@ -1222,13 +1428,13 @@ func (a App) openIsolated(ctx context.Context, t record.Task, o OpenOptions, pro
 	if machine == "" {
 		machine = "localhost"
 	}
-	_, _, _ = rootGit(ctx, g, a.Home, t.ID, path, "config", "user.name", name)
-	_, _, _ = rootGit(ctx, g, a.Home, t.ID, path, "config", "user.email", name+"@"+machine)
-	if _, _, err = rootGit(ctx, g, a.Home, t.ID, path, "checkout", "--orphan", taskBranch); err != nil {
+	_, _, _ = rootGitInit(ctx, g, a.Home, t.ID, path, "config", "user.name", name)
+	_, _, _ = rootGitInit(ctx, g, a.Home, t.ID, path, "config", "user.email", name+"@"+machine)
+	if _, _, err = rootGitInit(ctx, g, a.Home, t.ID, path, "checkout", "--orphan", taskBranch); err != nil {
 		return "", err
 	}
-	_, _, _ = rootGit(ctx, g, a.Home, t.ID, path, "rm", "-rf", "--ignore-unmatch", ".")
-	_, _, _ = rootGit(ctx, g, a.Home, t.ID, path, "clean", "-fdx")
+	_, _, _ = rootGitInit(ctx, g, a.Home, t.ID, path, "rm", "-rf", "--ignore-unmatch", ".")
+	_, _, _ = rootGitInit(ctx, g, a.Home, t.ID, path, "clean", "-fdx")
 	if err = os.MkdirAll(filepath.Join(path, ".tasktree"), 0755); err != nil {
 		return "", err
 	}
@@ -1285,6 +1491,9 @@ func (a App) openIsolated(ctx context.Context, t record.Task, o OpenOptions, pro
 		}
 		if _, _, e = git(ctx, g, dest, "fetch", "parent"); e != nil {
 			return "", e
+		}
+		if _, _, e = git(ctx, g, dest, "cat-file", "-e", head+"^{commit}"); e != nil {
+			return "", fmt.Errorf("repository %s: parent gitlink commit %s is unavailable after fetching the local parent checkout", m.Name, head)
 		}
 		branch := m.Branch
 		switch m.Mode {
@@ -1353,6 +1562,7 @@ func (a App) openIsolated(ctx context.Context, t record.Task, o OpenOptions, pro
 	}
 	a.refreshTaskRecord(ctx, t.ID)
 	materialized = true
+	a.clearFocus(t.ID)
 	if !o.SkipBootstrap {
 		if err = a.Bootstrap(ctx, t.ID, path, progress); err != nil {
 			return "", err
@@ -1394,6 +1604,9 @@ func (a App) addParentRemotes(ctx context.Context, t record.Task, root string) {
 type PushResult struct{ Name, Message, Hint string }
 
 func (a App) Push(ctx context.Context, id, root string, names []string) ([]PushResult, error) {
+	if err := validateRootIdentity(id, root); err != nil {
+		return nil, err
+	}
 	ms, e := modules(root)
 	if e != nil {
 		return nil, e
@@ -1423,27 +1636,33 @@ func (a App) Push(ctx context.Context, id, root string, names []string) ([]PushR
 		parent, _ = a.Info(*t.Parent)
 	}
 	g := a.Git.WithDefaults()
-	results := []PushResult{}
+	selected := []module{}
 	for _, m := range ms {
-		if explicit && !wanted[m.Name] {
-			continue
+		if (explicit && wanted[m.Name]) || (!explicit && m.Mode == "work") {
+			selected = append(selected, m)
 		}
+	}
+	branches := map[string]string{}
+	// Preflight every selected repository before any network-mutating push.
+	for _, m := range selected {
 		p := filepath.Join(root, m.Path)
-		branch, e := g.CurrentBranch(ctx, p)
-		if e != nil {
-			return results, e
+		branch, branchErr := g.CurrentBranch(ctx, p)
+		if branchErr != nil {
+			return nil, branchErr
 		}
 		if branch == "" {
-			if explicit {
-				return results, fmt.Errorf("repository %s is detached", m.Name)
-			}
-			results = append(results, PushResult{Name: m.Name, Message: "skipped (detached)"})
-			continue
+			return nil, fmt.Errorf("repository %s is detached", m.Name)
 		}
 		def, _ := g.DefaultBranch(ctx, p)
 		if branch == "main" || branch == "master" || strings.HasPrefix(branch, "release/") || branch == def {
-			return results, GateError{fmt.Sprintf("refusing to push protected branch %s in %s", branch, m.Name)}
+			return nil, GateError{fmt.Sprintf("refusing to push protected branch %s in %s", branch, m.Name)}
 		}
+		branches[m.Name] = branch
+	}
+	results := []PushResult{}
+	for _, m := range selected {
+		p := filepath.Join(root, m.Path)
+		branch := branches[m.Name]
 		if _, _, e = git(ctx, g, p, "push", "-u", "origin", branch); e != nil {
 			return results, e
 		}
@@ -1470,19 +1689,19 @@ func (a App) Push(ctx context.Context, id, root string, names []string) ([]PushR
 					fork, _, x := git(ctx, g, p, "merge-base", "HEAD", "refs/remotes/parent/"+pm.Branch)
 					if x == nil {
 						fork = strings.TrimSpace(fork)
-						_, _, parentRef := git(ctx, g, p, "show-ref", "--verify", "--quiet", "refs/remotes/origin/"+pm.Branch)
-						_, _, anc := git(ctx, g, p, "merge-base", "--is-ancestor", fork, "origin/"+pm.Branch)
-						if parentRef != nil || anc != nil {
-							countArgs := []string{"rev-list", "--count", fork, "--not", "origin/" + pm.Branch}
-							if parentRef != nil {
-								countArgs = []string{"rev-list", "--count", fork, "--not", "origin/" + def}
+						originParent := "origin/" + pm.Branch
+						if _, _, parentRefErr := git(ctx, g, p, "show-ref", "--verify", "--quiet", "refs/remotes/origin/"+pm.Branch); parentRefErr != nil {
+							r.Message += "; fork-point check skipped (parent branch is unavailable on origin)"
+						} else if _, _, anc := git(ctx, g, p, "merge-base", "--is-ancestor", fork, originParent); anc != nil {
+							n, _, countErr := git(ctx, g, p, "rev-list", "--count", fork, "^"+originParent)
+							if countErr != nil {
+								r.Message += "; fork-point check skipped (could not count parent commits)"
+							} else if strings.TrimSpace(n) != "0" {
+								r.Message += fmt.Sprintf("; warning: push %s's %s first, or the PR will include %s parent commits", parent.Handle, m.Name, strings.TrimSpace(n))
 							}
-							n, _, _ := git(ctx, g, p, countArgs...)
-							if strings.TrimSpace(n) == "" {
-								n = "1"
-							}
-							r.Message += fmt.Sprintf("; warning: push %s's %s first, or the PR will include %s parent commits", parent.Handle, m.Name, strings.TrimSpace(n))
 						}
+					} else {
+						r.Message += "; fork-point check skipped (could not determine fork point)"
 					}
 				}
 				r.Hint = "gh pr create" + repoFlag + " --base " + pm.Branch + " --head " + branch

@@ -180,6 +180,19 @@ func newCmd(o *options) *cobra.Command {
 		if open && isolated {
 			return usageError{"--open and --isolated are mutually exclusive"}
 		}
+		if isolated {
+			handle := x.Handle
+			if handle == "" {
+				if x.Jira != "" {
+					handle = x.Jira
+				} else {
+					handle = app.Slug(x.Title)
+				}
+			}
+			if e := a.PreflightIsolated(cmd.Context(), x.Parent, handle, app.OpenOptions{Path: path, Repos: repos, Branch: branch}); e != nil {
+				return e
+			}
+		}
 		t, e := a.NewTask(cmd.Context(), x)
 		if e != nil {
 			return e
@@ -188,9 +201,7 @@ func newCmd(o *options) *cobra.Command {
 			fmt.Fprintf(o.out, "%s %s\n", t.Handle, t.ID)
 			return nil
 		}
-		if !isolated {
-			fmt.Fprintf(o.err, "%s %s\n", t.Handle, t.ID)
-		}
+		fmt.Fprintf(o.err, "%s %s\n", t.Handle, t.ID)
 		p, e := a.Open(cmd.Context(), t.ID, app.OpenOptions{Path: path, Repos: repos, Branch: branch}, o.err)
 		if e != nil && strings.Contains(e.Error(), "does not exist in parent") {
 			return usageError{e.Error()}
@@ -306,15 +317,13 @@ func infoCmd(o *options) *cobra.Command {
 			if discoverErr != nil {
 				return discoverErr
 			}
-			rootID := t.ID
-			if _, statErr := os.Stat(a.Home.ClonePath(rootID)); statErr != nil {
-				rootID = rootCfg.TaskID
+			if _, statErr := os.Stat(a.Home.ClonePath(rootCfg.TaskID)); statErr == nil {
+				x, inspectErr := a.InspectTasktree(cmd.Context(), rootCfg.TaskID, root)
+				if inspectErr != nil {
+					return inspectErr
+				}
+				tree = &x
 			}
-			x, inspectErr := a.InspectTasktree(cmd.Context(), rootID, root)
-			if inspectErr != nil {
-				return inspectErr
-			}
-			tree = &x
 		}
 		allTasks, listErr := a.List(true, nil)
 		if listErr != nil {
@@ -342,6 +351,19 @@ func infoCmd(o *options) *cobra.Command {
 				refs = append(refs, x)
 			}
 			payload["refs"] = refs
+			subtasks := make([]map[string]any, 0)
+			for _, candidate := range allTasks {
+				if candidate.Parent != nil && *candidate.Parent == t.ID {
+					subtasks = append(subtasks, map[string]any{"id": candidate.ID, "handle": candidate.Handle, "status": candidate.Status})
+				}
+			}
+			payload["subtasks"] = subtasks
+			if root != "" {
+				payload["focus"] = nil
+				if ft, ok := a.FocusForRoot(root); ok {
+					payload["focus"] = ft.Handle
+				}
+			}
 			if tree != nil {
 				payload["tasktree"] = tree
 			}
@@ -448,7 +470,7 @@ func infoEditCmd(o *options) *cobra.Command {
 			if readErr != nil {
 				return readErr
 			}
-			text = string(b)
+			text = strings.TrimRight(string(b), "\r\n")
 		}
 		if e := record.ValidateDescription(text); e != nil {
 			return usageError{e.Error()}
@@ -763,8 +785,11 @@ func openCmd(o *options) *cobra.Command {
 	return c
 }
 func requireTree(a app.App, ref string) (string, string, error) {
-	id, root, e := resolveTarget(a, ref)
+	id, root, e := a.ResolveTreeTarget(ref, "")
 	if e != nil {
+		if errors.Is(e, os.ErrNotExist) {
+			return "", "", notInTasktreeError{}
+		}
 		return "", "", e
 	}
 	if root == "" {

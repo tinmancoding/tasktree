@@ -141,14 +141,14 @@ func TestNewOpenAndSharedSubtaskCloseRules(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, _, err = run(t, "mark", "done", "-t", unsafeHandle)
-	if cli.Code(err) != 1 || !strings.Contains(err.Error(), "task marker missing or mismatched") {
+	if cli.Code(err) != 1 || !strings.Contains(err.Error(), "root invariant failed") {
 		t.Fatalf("unsafe teardown code=%d err=%v", cli.Code(err), err)
 	}
 	if _, statErr := os.Stat(unsafeRoot); statErr != nil {
 		t.Fatalf("unsafe checkout was deleted: %v", statErr)
 	}
-	if got := taskInfo(t, unsafeHandle).Status; got != "done" {
-		t.Fatalf("status did not remain closed after partial teardown: %s", got)
+	if got := taskInfo(t, unsafeHandle).Status; got == "done" {
+		t.Fatalf("status changed despite mismatched root marker: %s", got)
 	}
 }
 

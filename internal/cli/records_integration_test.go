@@ -74,8 +74,14 @@ func TestRecordCommandsAndHierarchy(t *testing.T) {
 		t.Fatalf("labels list=%s err=%v", out, err)
 	}
 	out, _, err = run(t, "list", "--label", "one", "--label", "two")
-	if err != nil || !strings.Contains(out, "child") || !strings.Contains(out, "parent") {
-		t.Fatalf("filtered parent tree=%q err=%v", out, err)
+	parentRow := false
+	for _, line := range strings.Split(out, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "parent ") {
+			parentRow = true
+		}
+	}
+	if err != nil || !strings.Contains(out, "child") || parentRow {
+		t.Fatalf("filtered rows=%q err=%v", out, err)
 	}
 	out, _, err = run(t, "list")
 	if err != nil {
@@ -83,6 +89,20 @@ func TestRecordCommandsAndHierarchy(t *testing.T) {
 	}
 	if !strings.Contains(out, "  child") || !strings.Contains(out, "    grandchild") || !strings.Contains(out, "0/1") {
 		t.Fatalf("tree output:\n%s", out)
+	}
+	jsonInfo, _, err := run(t, "info", "--json", "-t", "parent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload struct {
+		Focus    *string                               `json:"focus"`
+		Subtasks []struct{ ID, Handle, Status string } `json:"subtasks"`
+	}
+	if err := json.Unmarshal([]byte(jsonInfo), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Focus != nil || len(payload.Subtasks) != 1 || payload.Subtasks[0].ID != child || payload.Subtasks[0].Handle != "child" {
+		t.Fatalf("info json=%s", jsonInfo)
 	}
 	if _, _, err := run(t, "mark", "done", "--cascade", "--keep", "-t", "parent"); err != nil {
 		t.Fatal(err)

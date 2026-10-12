@@ -30,7 +30,7 @@ func TestInfoListsClosedDirectSubtasks(t *testing.T) {
 
 func TestFocusPrecedenceAndAutoClear(t *testing.T) {
 	f := newCloseFixture(t)
-	parent, _, root := createAndOpen(t, "Focus parent", filepath.Join(f.tasks, "focus-parent"))
+	parent, parentID, root := createAndOpen(t, "Focus parent", filepath.Join(f.tasks, "focus-parent"))
 	out, _, err := run(t, "new", "Focus child", "--handle", "focus-child", "--parent", parent)
 	if err != nil {
 		t.Fatal(err)
@@ -58,6 +58,15 @@ func TestFocusPrecedenceAndAutoClear(t *testing.T) {
 		t.Fatalf("env log=%+v", got.Log)
 	}
 	os.Unsetenv("TASKTREE_TASK")
+	if err := os.WriteFile(filepath.Join(root, "focused-structural"), []byte("parent root\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err = run(t, "commit", "-m", "focused structural commit"); err != nil {
+		t.Fatal(err)
+	}
+	if got := gitRun(t, filepath.Join(f.home, "git"), "show", "task/"+parentID+":focused-structural"); got != "parent root" {
+		t.Fatalf("structural command targeted wrong branch: %q", got)
+	}
 	info, _, err := run(t, "info")
 	if err != nil {
 		t.Fatal(err)
@@ -67,6 +76,9 @@ func TestFocusPrecedenceAndAutoClear(t *testing.T) {
 	}
 	if _, _, err = run(t, "mark", "done", "--keep", "-t", child); err != nil {
 		t.Fatal(err)
+	}
+	if _, _, err = run(t, "focus", child); cli.Code(err) != 6 {
+		t.Fatalf("focus closed code=%d err=%v", cli.Code(err), err)
 	}
 	local := string(mustRead(t, filepath.Join(f.home, "local.yml")))
 	if strings.Contains(local, "focus:") {
@@ -120,7 +132,7 @@ func TestIsolatedForkRecursionAndPushWarning(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(pushErr, "push "+parent+"'s work first, or the PR will include 1 parent commits") || !strings.Contains(pushOut, "gh pr create") {
+	if !strings.Contains(pushErr, "fork-point check skipped (parent branch is unavailable on origin)") || !strings.Contains(pushOut, "gh pr create") {
 		t.Fatalf("push out=%q err=%q", pushOut, pushErr)
 	}
 	grandOut, _, err := run(t, "new", "Tests", "--handle", "tests", "--parent", "iso-child", "--isolated")
