@@ -273,7 +273,7 @@ func infoCmd(o *options) *cobra.Command {
 		}
 		writeInfo(o.out, t, parent)
 		if tree != nil {
-			writeRepoInfo(o.out, *tree)
+			return writeRepoInfo(o.out, *tree)
 		}
 		return nil
 	}}
@@ -338,16 +338,19 @@ func writeInfo(w io.Writer, t record.Task, parent string) {
 		fmt.Fprintf(w, "  %s %s %s@%s: %s\n", e.Timestamp.Format("2006-01-02T15:04:05Z"), e.Kind, e.Author, e.Machine, e.Body)
 	}
 }
-func writeRepoInfo(w io.Writer, tree app.TasktreeInfo) {
-	fmt.Fprintf(w, "Tasktree: %s\nRoot changes: %d\n", tree.Path, tree.RootDirty)
-	fmt.Fprintln(w, "NAME\tMODE\tBRANCH\tHEAD\tSTATE\tAHEAD\tBEHIND\tUNPUSHED")
+func writeRepoInfo(w io.Writer, tree app.TasktreeInfo) error {
+	if _, err := fmt.Fprintf(w, "Tasktree: %s\nRoot changes: %d\n", tree.Path, tree.RootDirty); err != nil {
+		return err
+	}
+	rows := make([]output.RepoRow, 0, len(tree.Repos))
 	for _, r := range tree.Repos {
 		state := "clean"
 		if r.Dirty {
 			state = "modified"
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%d\t%d\t%d\n", r.Name, r.Mode, r.Branch, r.Head, state, r.Ahead, r.Behind, r.Unpushed)
+		rows = append(rows, output.RepoRow{Name: r.Name, Mode: r.Mode, Branch: r.Branch, Head: r.Head, State: state, Ahead: r.Ahead, Behind: r.Behind, Unpushed: r.Unpushed})
 	}
+	return output.WriteRepoTable(w, rows)
 }
 
 func openCmd(o *options) *cobra.Command {

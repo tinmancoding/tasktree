@@ -307,6 +307,13 @@ func TestTasktreeEndToEnd(t *testing.T) {
 	if len(tree["repos"].([]any)) != 3 {
 		t.Fatalf("info: %s", out)
 	}
+	out, _, e = run(t, "info")
+	if e != nil {
+		t.Fatal(e)
+	}
+	if strings.Contains(out, "\t") || !strings.Contains(out, "NAME      MODE") {
+		t.Fatalf("human info repository table is not aligned:\n%s", out)
+	}
 	if out, _, e = run(t, "commit"); e != nil || !strings.Contains(out, "nothing to commit") {
 		t.Fatalf("commit %q %v", out, e)
 	}
