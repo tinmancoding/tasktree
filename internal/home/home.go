@@ -41,9 +41,12 @@ func Resolve() (Home, error) {
 	}
 	return Home{filepath.Join(u, ".tasktree")}, nil
 }
-func (h Home) ConfigPath() string { return filepath.Join(h.Root, "config.yml") }
-func (h Home) LocalPath() string  { return filepath.Join(h.Root, "local.yml") }
-func (h Home) GitPath() string    { return filepath.Join(h.Root, "git") }
+func (h Home) ConfigPath() string         { return filepath.Join(h.Root, "config.yml") }
+func (h Home) LocalPath() string          { return filepath.Join(h.Root, "local.yml") }
+func (h Home) GitPath() string            { return filepath.Join(h.Root, "git") }
+func (h Home) ClonesPath() string         { return filepath.Join(h.Root, "clones") }
+func (h Home) ClonePath(id string) string { return filepath.Join(h.ClonesPath(), id+".git") }
+func (h Home) AliasesPath() string        { return filepath.Join(h.Root, "aliases.yml") }
 func Defaults() Config {
 	u, _ := os.UserHomeDir()
 	host, _ := os.Hostname()

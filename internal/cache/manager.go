@@ -20,6 +20,9 @@ func NewManager(rootPath string, git gitx.Client) Manager {
 }
 
 func DefaultRoot() (string, error) {
+	if root := os.Getenv("TASKTREE_CACHE_DIR"); root != "" {
+		return filepath.Abs(root)
+	}
 	userCacheDir, err := os.UserCacheDir()
 	if err != nil {
 		return "", fmt.Errorf("resolve user cache dir: %w", err)

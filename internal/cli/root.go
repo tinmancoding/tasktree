@@ -40,6 +40,10 @@ func Code(err error) int {
 	if errors.As(err, &conflict) {
 		return 5
 	}
+	var gate app.GateError
+	if errors.As(err, &gate) {
+		return 6
+	}
 	var ue usageError
 	if errors.As(err, &ue) {
 		return 2
@@ -73,7 +77,7 @@ func NewRoot(out, errOut io.Writer) *cobra.Command {
 	root.PersistentFlags().StringVarP(&o.chdir, "chdir", "C", "", "run as if started in this directory")
 	root.PersistentFlags().BoolVarP(&o.verbose, "verbose", "v", false, "print git commands")
 	root.PersistentFlags().StringVar(&o.author, "author", "", "author for log entries")
-	root.AddCommand(setupCmd(o), configCmd(o), newCmd(o), listCmd(o), infoCmd(o), noteCmd(o), markCmd(o))
+	root.AddCommand(setupCmd(o), configCmd(o), newCmd(o), listCmd(o), infoCmd(o), noteCmd(o), markCmd(o), openCmd(o), addCmd(o), removeCmd(o), commitCmd(o), rootCmd(o))
 	return root
 }
 func (o *options) application() (app.App, error) {
@@ -108,11 +112,18 @@ func setupCmd(o *options) *cobra.Command {
 		x.AuthorSet = cmd.Flags().Changed("author")
 		x.MachineSet = cmd.Flags().Changed("machine")
 		x.RemoteSet = cmd.Flags().Changed("remote")
+		migrated, err := a.MigrateV1Aliases()
+		if err != nil {
+			return err
+		}
 		cfg, err := a.Setup(cmd.Context(), x)
 		if err != nil {
 			return err
 		}
 		fmt.Fprintln(o.out, "tasktree setup complete")
+		if migrated {
+			fmt.Fprintln(o.out, "copied V1 repository aliases to aliases.yml")
+		}
 		if cfg.Remote == "" {
 			fmt.Fprintln(o.err, "warning: ~/.tasktree is the only copy; back it up")
 		}
@@ -200,29 +211,53 @@ func listCmd(o *options) *cobra.Command {
 	c.Flags().BoolVar(&j, "json", false, "emit JSON")
 	return c
 }
-func target(c *cobra.Command, v string) error {
-	if v == "" {
-		return notInTasktreeError{}
+func resolveTarget(a app.App, explicit string) (string, string, error) {
+	id, root, err := a.ResolveTarget(explicit, "")
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", "", notInTasktreeError{}
+		}
+		return "", "", err
 	}
-	return nil
+	return id, root, nil
 }
 func infoCmd(o *options) *cobra.Command {
 	var ref string
 	var j bool
 	c := &cobra.Command{Use: "info", Args: exact(0), RunE: func(cmd *cobra.Command, args []string) error {
-		if e := target(cmd, ref); e != nil {
-			return e
-		}
 		a, e := o.application()
 		if e != nil {
 			return e
 		}
-		t, e := a.Info(ref)
+		resolved, root, e := resolveTarget(a, ref)
 		if e != nil {
 			return e
 		}
+		t, e := a.Info(resolved)
+		if e != nil {
+			return e
+		}
+		var tree *app.TasktreeInfo
+		if root != "" {
+			x, inspectErr := a.InspectTasktree(cmd.Context(), t.ID, root)
+			if inspectErr != nil {
+				return inspectErr
+			}
+			tree = &x
+		}
 		if j {
-			return json.NewEncoder(o.out).Encode(t)
+			b, marshalErr := json.Marshal(t)
+			if marshalErr != nil {
+				return marshalErr
+			}
+			var payload map[string]any
+			if unmarshalErr := json.Unmarshal(b, &payload); unmarshalErr != nil {
+				return unmarshalErr
+			}
+			if tree != nil {
+				payload["tasktree"] = tree
+			}
+			return json.NewEncoder(o.out).Encode(payload)
 		}
 		parent := "-"
 		if t.Parent != nil {
@@ -237,6 +272,9 @@ func infoCmd(o *options) *cobra.Command {
 			}
 		}
 		writeInfo(o.out, t, parent)
+		if tree != nil {
+			writeRepoInfo(o.out, *tree)
+		}
 		return nil
 	}}
 	c.Flags().StringVarP(&ref, "task", "t", "", "task handle or id")
@@ -246,14 +284,15 @@ func infoCmd(o *options) *cobra.Command {
 func noteCmd(o *options) *cobra.Command {
 	var ref, kind string
 	c := &cobra.Command{Use: "note <text>", Args: exact(1), RunE: func(cmd *cobra.Command, args []string) error {
-		if e := target(cmd, ref); e != nil {
-			return e
-		}
 		a, e := o.application()
 		if e != nil {
 			return e
 		}
-		t, e := a.Note(cmd.Context(), ref, args[0], kind)
+		resolved, _, e := resolveTarget(a, ref)
+		if e != nil {
+			return e
+		}
+		t, e := a.Note(cmd.Context(), resolved, args[0], kind)
 		if e == nil {
 			fmt.Fprintf(o.out, "note added to %s\n", t.Handle)
 		}
@@ -266,9 +305,6 @@ func noteCmd(o *options) *cobra.Command {
 func markCmd(o *options) *cobra.Command {
 	var ref string
 	c := &cobra.Command{Use: "mark <status>", Args: exact(1), RunE: func(cmd *cobra.Command, args []string) error {
-		if e := target(cmd, ref); e != nil {
-			return e
-		}
 		if e := record.ValidateStatus(args[0]); e != nil {
 			return usageError{e.Error()}
 		}
@@ -276,7 +312,11 @@ func markCmd(o *options) *cobra.Command {
 		if e != nil {
 			return e
 		}
-		t, e := a.Mark(cmd.Context(), ref, args[0])
+		resolved, _, e := resolveTarget(a, ref)
+		if e != nil {
+			return e
+		}
+		t, e := a.Mark(cmd.Context(), resolved, args[0])
 		if e == nil {
 			fmt.Fprintf(o.out, "%s marked %s\n", t.Handle, t.Status)
 		}
@@ -298,6 +338,147 @@ func writeInfo(w io.Writer, t record.Task, parent string) {
 		fmt.Fprintf(w, "  %s %s %s@%s: %s\n", e.Timestamp.Format("2006-01-02T15:04:05Z"), e.Kind, e.Author, e.Machine, e.Body)
 	}
 }
+func writeRepoInfo(w io.Writer, tree app.TasktreeInfo) {
+	fmt.Fprintf(w, "Tasktree: %s\nRoot changes: %d\n", tree.Path, tree.RootDirty)
+	fmt.Fprintln(w, "NAME\tMODE\tBRANCH\tHEAD\tSTATE\tAHEAD\tBEHIND\tUNPUSHED")
+	for _, r := range tree.Repos {
+		state := "clean"
+		if r.Dirty {
+			state = "modified"
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%d\t%d\t%d\n", r.Name, r.Mode, r.Branch, r.Head, state, r.Ahead, r.Behind, r.Unpushed)
+	}
+}
+
+func openCmd(o *options) *cobra.Command {
+	var path string
+	c := &cobra.Command{Use: "open <handle|id>", Args: exact(1), RunE: func(cmd *cobra.Command, args []string) error {
+		a, e := o.application()
+		if e != nil {
+			return e
+		}
+		p, e := a.Open(cmd.Context(), args[0], path, o.err)
+		if e == nil {
+			fmt.Fprintln(o.out, p)
+		}
+		return e
+	}}
+	c.Flags().StringVar(&path, "path", "", "checkout path")
+	return c
+}
+func requireTree(a app.App, ref string) (string, string, error) {
+	id, root, e := resolveTarget(a, ref)
+	if e != nil {
+		return "", "", e
+	}
+	if root == "" {
+		return "", "", notInTasktreeError{}
+	}
+	return id, root, nil
+}
+func addCmd(o *options) *cobra.Command {
+	var ref string
+	var x app.AddOptions
+	c := &cobra.Command{Use: "add <alias|url>", Args: exact(1), RunE: func(cmd *cobra.Command, args []string) error {
+		x.URL = args[0]
+		a, e := o.application()
+		if e != nil {
+			return e
+		}
+		id, root, e := requireTree(a, ref)
+		if e != nil {
+			return e
+		}
+		r, e := a.Add(cmd.Context(), id, root, x)
+		if e == nil {
+			for _, m := range r.Messages {
+				fmt.Fprintln(o.err, m)
+			}
+			fmt.Fprintf(o.out, "added %s (%s)\n", r.Name, r.Mode)
+		}
+		return e
+	}}
+	c.Flags().StringVarP(&ref, "task", "t", "", "task handle or id")
+	c.Flags().StringVar(&x.Branch, "branch", "", "branch")
+	c.Flags().StringVar(&x.From, "from", "", "base ref")
+	c.Flags().StringVar(&x.Name, "name", "", "repository name")
+	c.Flags().StringVar(&x.Mode, "mode", "", "follow, work, or pin")
+	return c
+}
+func removeCmd(o *options) *cobra.Command {
+	var ref string
+	var force bool
+	c := &cobra.Command{Use: "remove <name>", Args: exact(1), RunE: func(cmd *cobra.Command, args []string) error {
+		a, e := o.application()
+		if e != nil {
+			return e
+		}
+		id, root, e := requireTree(a, ref)
+		if e != nil {
+			return e
+		}
+		loss, e := a.Remove(cmd.Context(), id, root, args[0], force)
+		for _, m := range loss {
+			fmt.Fprintln(o.err, m)
+		}
+		if e == nil {
+			fmt.Fprintf(o.out, "removed %s\n", args[0])
+		}
+		return e
+	}}
+	c.Flags().StringVarP(&ref, "task", "t", "", "task handle or id")
+	c.Flags().BoolVar(&force, "force", false, "remove despite lost work")
+	return c
+}
+func commitCmd(o *options) *cobra.Command {
+	var ref, msg string
+	c := &cobra.Command{Use: "commit", Args: exact(0), RunE: func(cmd *cobra.Command, args []string) error {
+		a, e := o.application()
+		if e != nil {
+			return e
+		}
+		id, root, e := requireTree(a, ref)
+		if e != nil {
+			return e
+		}
+		committed, warnings, e := a.Commit(cmd.Context(), id, root, msg)
+		for _, w := range warnings {
+			fmt.Fprintln(o.err, "warning:", w)
+		}
+		if e == nil {
+			if committed {
+				fmt.Fprintln(o.out, "tasktree committed and pushed")
+			} else {
+				fmt.Fprintln(o.out, "nothing to commit")
+			}
+		}
+		return e
+	}}
+	c.Flags().StringVarP(&ref, "task", "t", "", "task handle or id")
+	c.Flags().StringVarP(&msg, "message", "m", "", "commit message")
+	return c
+}
+func rootCmd(o *options) *cobra.Command {
+	var ref string
+	c := &cobra.Command{Use: "root", Args: exact(0), RunE: func(cmd *cobra.Command, args []string) error {
+		a, e := o.application()
+		if e != nil {
+			return e
+		}
+		_, root, e := resolveTarget(a, ref)
+		if e != nil {
+			return e
+		}
+		if root == "" {
+			return notInTasktreeError{}
+		}
+		fmt.Fprintln(o.out, root)
+		return nil
+	}}
+	c.Flags().StringVarP(&ref, "task", "t", "", "task handle or id")
+	return c
+}
+
 func Execute(ctx context.Context, args []string, out, errOut io.Writer) error {
 	r := NewRoot(out, errOut)
 	r.SetArgs(args)

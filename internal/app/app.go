@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -18,6 +19,7 @@ import (
 type App struct {
 	Home           home.Home
 	Hub            hub.Hub
+	Git            gitx.Client
 	Now            func() time.Time
 	AuthorOverride string
 }
@@ -27,12 +29,43 @@ func New(h home.Home, verboseWriter interface{ Write([]byte) (int, error) }) App
 	if verboseWriter != nil {
 		g.SetVerboseWriter(verboseWriter)
 	}
-	return App{Home: h, Hub: hub.New(h.GitPath(), g), Now: time.Now}
+	return App{Home: h, Hub: hub.New(h.GitPath(), g), Git: g, Now: time.Now}
 }
 
 type SetupOptions struct {
 	TasksRoot, Author, Machine, Remote             string
 	TasksRootSet, AuthorSet, MachineSet, RemoteSet bool
+}
+
+func (a App) MigrateV1Aliases() (bool, error) {
+	dest := a.Home.AliasesPath()
+	if _, err := os.Stat(dest); err == nil {
+		return false, nil
+	} else if !os.IsNotExist(err) {
+		return false, err
+	}
+	source := os.Getenv("TASKTREE_V1_ALIASES_FILE")
+	if source == "" {
+		u, err := os.UserHomeDir()
+		if err != nil {
+			return false, err
+		}
+		source = filepath.Join(u, ".config", "tasktree", "repos.yml")
+	}
+	b, err := os.ReadFile(source)
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("read V1 aliases: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+		return false, err
+	}
+	if err := os.WriteFile(dest, b, 0o644); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (a App) Setup(ctx context.Context, o SetupOptions) (home.Config, error) {
