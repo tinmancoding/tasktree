@@ -1,6 +1,6 @@
 # Design: tasktree V2
 
-Status: **Accepted** (design interview, decisions D1–D45)
+Status: **Accepted** (design interview, decisions D1–D46)
 Supersedes: the workspace-centric V1 model (`Tasktree.yml` + plain folders + registry)
 
 V2 turns tasktree into a single personal tool for **task management + multi-repo workspace
@@ -581,3 +581,4 @@ Checked against git 2.53.0:
 | D43 | `import` derives branch and mode from each checkout's current state, not the V1 spec; orphan cleanup moves from M2 to M4 (`doctor`); M3 rollout: dry-run → backup → one small workspace → `--all` |
 | D44 | `push` without arguments pushes only `work` repos and checks protected branches for all selected repos before pushing any; `follow`/`pin` repos are pushed only when named |
 | D45 | Structural commands (`add`, `remove`, `commit`, `mode`, `push`, `bootstrap`) always act on the tasktree root's own task; `focus`/`TASKTREE_TASK` retarget only record commands (refines D30) |
+| D46 | The loss gate (close, `remove`, import report) counts commits reachable from HEAD or local branches but not from `origin`, plus stashes; tags are excluded (tags fetched from `origin` are indistinguishable from local ones and caused false refusals) |
