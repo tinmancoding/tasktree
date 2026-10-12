@@ -290,7 +290,7 @@ func modules(root string) ([]module, error) {
 func (a App) InspectTasktree(ctx context.Context, id, root string) (TasktreeInfo, error) {
 	g := a.Git.WithDefaults()
 	result := TasktreeInfo{Path: root, Repos: []RepoInfo{}}
-	out, _, err := rootGit(ctx, g, a.Home, id, root, "status", "--porcelain")
+	out, _, err := rootGit(ctx, g, a.Home, id, root, "status", "--porcelain", "--ignore-submodules=dirty")
 	if err != nil {
 		return result, err
 	}
@@ -946,7 +946,7 @@ func repoLoss(ctx context.Context, g gitx.Client, name, path string, bare bool) 
 			loss = append(loss, name+" has uncommitted changes")
 		}
 	}
-	out, err := run("rev-list", "--oneline", "HEAD", "--branches", "--tags", "--not", "--remotes=origin")
+	out, err := run("rev-list", "--oneline", "HEAD", "--branches", "--not", "--remotes=origin")
 	if err != nil {
 		return nil, fmt.Errorf("cannot check %s for loss: %w", name, err)
 	}

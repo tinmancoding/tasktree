@@ -183,7 +183,7 @@ func TestImportDryRunRollbackAndSuccess(t *testing.T) {
 
 func TestReadV1RegistryOrder(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "registry.toml")
-	if err := os.WriteFile(p, []byte("version = 1\n[[tasktrees]]\npath = \"/one\"\nname = \"one\"\n[[tasktrees]]\npath = \"/two\"\n"), 0o644); err != nil {
+	if err := os.WriteFile(p, []byte("version = 1\n[[tasktrees]]\npath = '/one'\nname = 'one'\nadded_at = '2025-01-02T03:04:05Z'\n[[tasktrees]]\npath = '/two'\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	got, err := ReadV1Registry(p)

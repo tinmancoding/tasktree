@@ -1,7 +1,6 @@
 package app
 
 import (
-	"bufio"
 	"context"
 	"crypto/sha256"
 	"fmt"
@@ -15,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/pelletier/go-toml/v2"
 	"github.com/tinmancoding/tasktree/v2/internal/home"
 	"github.com/tinmancoding/tasktree/v2/internal/record"
 	"gopkg.in/yaml.v3"
@@ -233,7 +233,7 @@ func (a App) PlanImport(ctx context.Context, root string, o ImportOptions) (Impo
 			sp.Dirty = countLines(status)
 			st, _, _ := git(ctx, g, full, "stash", "list")
 			sp.Stashes = countLines(st)
-			un, _, _ := git(ctx, g, full, "rev-list", "--branches", "--tags", "HEAD", "--not", "--remotes=origin")
+			un, _, _ := git(ctx, g, full, "rev-list", "--branches", "HEAD", "--not", "--remotes=origin")
 			sp.Unpushed = countLines(un)
 		}
 		p.Sources = append(p.Sources, sp)
@@ -874,32 +874,24 @@ func (a App) rollbackImport(ctx context.Context, st *importState) error {
 
 // ReadV1Registry reads only the ordered path entries needed by import --all.
 func ReadV1Registry(path string) ([]string, error) {
-	b, e := os.ReadFile(path)
-	if e != nil {
-		return nil, e
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
 	}
-	var out []string
-	scan := bufio.NewScanner(strings.NewReader(string(b)))
-	in := false
-	for scan.Scan() {
-		line := strings.TrimSpace(scan.Text())
-		if line == "[[tasktrees]]" {
-			in = true
-			continue
-		}
-		if in && strings.HasPrefix(line, "path") {
-			_, v, ok := strings.Cut(line, "=")
-			if !ok {
-				continue
-			}
-			v = strings.TrimSpace(v)
-			x, e := strconv.Unquote(v)
-			if e != nil {
-				return nil, fmt.Errorf("parse registry path %q: %w", v, e)
-			}
-			out = append(out, x)
-			in = false
+	var registry struct {
+		Version   int `toml:"version"`
+		Tasktrees []struct {
+			Path string `toml:"path"`
+		} `toml:"tasktrees"`
+	}
+	if err := toml.Unmarshal(b, &registry); err != nil {
+		return nil, fmt.Errorf("parse V1 registry: %w", err)
+	}
+	out := make([]string, 0, len(registry.Tasktrees))
+	for _, entry := range registry.Tasktrees {
+		if entry.Path != "" {
+			out = append(out, entry.Path)
 		}
 	}
-	return out, scan.Err()
+	return out, nil
 }
