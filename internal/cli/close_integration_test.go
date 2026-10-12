@@ -111,9 +111,12 @@ func TestNewOpenAndSharedSubtaskCloseRules(t *testing.T) {
 	if got := taskInfo(t, child); len(got.Log) != 1 || got.Log[0].Body != "worked in parent" {
 		t.Fatalf("shared child note: %+v", got.Log)
 	}
-	_, _, err = run(t, "open", child)
-	if cli.Code(err) != 6 || !strings.Contains(err.Error(), "isolated subtasks arrive in M2") {
-		t.Fatalf("open shared child code=%d err=%v", cli.Code(err), err)
+	childOut, _, err := run(t, "open", child)
+	if err != nil {
+		t.Fatalf("promote shared child: %v", err)
+	}
+	if strings.TrimSpace(childOut) == "" {
+		t.Fatal("promoted child path is empty")
 	}
 	_, _, err = run(t, "mark", "done", "-t", parentID)
 	if cli.Code(err) != 6 || !strings.Contains(err.Error(), child) {
