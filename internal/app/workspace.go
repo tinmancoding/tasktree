@@ -174,7 +174,17 @@ func (a App) InspectTasktree(ctx context.Context, id, root string) (TasktreeInfo
 		return result, err
 	}
 	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
-		if line != "" && !(len(line) > 3 && strings.HasPrefix(line[3:], ".")) {
+		if line == "" {
+			continue
+		}
+		p := line
+		if len(line) > 3 {
+			p = line[3:]
+		}
+		if arrow := strings.LastIndex(p, " -> "); arrow >= 0 {
+			p = p[arrow+4:]
+		}
+		if p != ".tasktree/task.md" {
 			result.RootDirty++
 		}
 	}
@@ -219,7 +229,7 @@ func ensureEmpty(path string) error {
 	return nil
 }
 
-func (a App) Open(ctx context.Context, ref, requested string, progress interface{ Write([]byte) (int, error) }) (string, error) {
+func (a App) Open(ctx context.Context, ref, requested string, force bool, progress interface{ Write([]byte) (int, error) }) (string, error) {
 	t, err := a.Info(ref)
 	if err != nil {
 		return "", err
@@ -257,7 +267,25 @@ func (a App) Open(ctx context.Context, ref, requested string, progress interface
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return "", err
 	}
-	_ = os.RemoveAll(a.Home.ClonePath(t.ID))
+	clonePath := a.Home.ClonePath(t.ID)
+	if _, statErr := os.Stat(clonePath); statErr == nil {
+		msg := fmt.Sprintf("hidden git dir for %s already exists at %s; the checkout may have been moved or local.yml lost", t.Handle, clonePath)
+		if !force {
+			return "", GateError{msg}
+		}
+		loss, lossErr := lossInModules(ctx, a.Git.WithDefaults(), clonePath)
+		if lossErr != nil {
+			loss = append(loss, lossErr.Error())
+		}
+		if progress != nil {
+			for _, item := range loss {
+				fmt.Fprintln(progress, item)
+			}
+		}
+		if err := os.RemoveAll(clonePath); err != nil {
+			return "", err
+		}
+	}
 	_ = os.Remove(path)
 	if err := os.MkdirAll(a.Home.ClonesPath(), 0o755); err != nil {
 		return "", err
@@ -325,10 +353,14 @@ func (a App) Open(ctx context.Context, ref, requested string, progress interface
 	}
 	_ = os.Remove(filepath.Join(path, ".git"))
 	if err := a.materialize(ctx, t.ID, path, progress); err != nil {
+		_ = os.RemoveAll(path)
+		_ = os.RemoveAll(a.Home.ClonePath(t.ID))
 		return "", err
 	}
-	local.Checkouts[t.ID] = home.Checkout{Path: path}
-	if err := a.Home.SaveLocal(local); err != nil {
+	if err := a.Home.UpdateLocal(func(current *home.LocalState) error {
+		current.Checkouts[t.ID] = home.Checkout{Path: path}
+		return nil
+	}); err != nil {
 		return "", err
 	}
 	return path, nil
@@ -348,25 +380,26 @@ func markerTaskID(root string) (string, error) {
 }
 
 func (a App) teardownTasktree(id, root string, local home.LocalState) []string {
-	remaining := []string{}
 	if markerID, err := markerTaskID(root); err != nil || markerID != id {
-		remaining = append(remaining, root+" (task marker missing or mismatched)")
-	} else if err := os.RemoveAll(root); err != nil {
-		remaining = append(remaining, root+" ("+err.Error()+")")
-	} else if _, err := os.Stat(root); !os.IsNotExist(err) {
-		remaining = append(remaining, root)
+		return []string{root + " (task marker missing or mismatched)"}
+	}
+	if err := os.RemoveAll(root); err != nil {
+		return []string{root + " (" + err.Error() + ")"}
+	}
+	if _, err := os.Stat(root); !os.IsNotExist(err) {
+		return []string{root}
 	}
 	clone := a.Home.ClonePath(id)
 	if err := os.RemoveAll(clone); err != nil {
-		remaining = append(remaining, clone+" ("+err.Error()+")")
-	} else if _, err := os.Stat(clone); !os.IsNotExist(err) {
-		remaining = append(remaining, clone)
+		return []string{clone + " (" + err.Error() + ")"}
 	}
-	delete(local.Checkouts, id)
-	if err := a.Home.SaveLocal(local); err != nil {
-		remaining = append(remaining, a.Home.LocalPath()+" entry ("+err.Error()+")")
+	if _, err := os.Stat(clone); !os.IsNotExist(err) {
+		return []string{clone}
 	}
-	return remaining
+	if err := a.Home.UpdateLocal(func(current *home.LocalState) error { delete(current.Checkouts, id); return nil }); err != nil {
+		return []string{a.Home.LocalPath() + " entry (" + err.Error() + ")"}
+	}
+	return nil
 }
 
 func cacheManager(g gitx.Client) (cache.Manager, error) {
@@ -404,6 +437,11 @@ func (a App) materialize(ctx context.Context, id, root string, progress interfac
 			return e
 		}
 		p := filepath.Join(root, m.Path)
+		gitlink, _, ge := rootGit(ctx, g, a.Home, id, root, "rev-parse", "HEAD:"+m.Path)
+		if ge != nil {
+			return ge
+		}
+		gitlink = strings.TrimSpace(gitlink)
 		g.RemoteSetURL(ctx, p, "origin", m.URL)
 		if err := rewriteSubmodule(a.Home, id, root, m); err != nil {
 			return err
@@ -412,21 +450,14 @@ func (a App) materialize(ctx context.Context, id, root string, progress interfac
 			git(ctx, g, p, "checkout", "--detach")
 			continue
 		}
-		exists, _ := g.BranchExists(ctx, p, m.Branch)
-		if exists {
-			if _, _, e = git(ctx, g, p, "checkout", m.Branch); e != nil {
-				return e
-			}
-		} else {
-			remote := "origin/" + m.Branch
-			if _, _, re := git(ctx, g, p, "show-ref", "--verify", "--quiet", "refs/remotes/"+remote); re == nil {
-				_, _, e = git(ctx, g, p, "checkout", "-b", m.Branch, "--track", remote)
-			} else {
-				_, _, e = git(ctx, g, p, "checkout", "-b", m.Branch)
-			}
-			if e != nil {
-				return e
-			}
+		// A cache clone may already have a same-named local branch ahead of the
+		// root gitlink. A freshly materialized checkout must start at the gitlink.
+		if _, _, e = git(ctx, g, p, "checkout", "-B", m.Branch, gitlink); e != nil {
+			return e
+		}
+		remote := "origin/" + m.Branch
+		if _, _, re := git(ctx, g, p, "show-ref", "--verify", "--quiet", "refs/remotes/"+remote); re == nil {
+			_, _, _ = git(ctx, g, p, "branch", "--set-upstream-to", remote, m.Branch)
 		}
 	}
 	return nil
@@ -487,9 +518,20 @@ func (a App) Add(ctx context.Context, id, root string, o AddOptions) (AddResult,
 		return r, e
 	}
 	cleanup := true
+	registered := false
 	defer func() {
-		if cleanup {
-			os.RemoveAll(dest)
+		if !cleanup {
+			return
+		}
+		os.RemoveAll(dest)
+		if registered {
+			_, _, _ = rootGit(ctx, g, a.Home, id, root, "reset", "HEAD", "--", o.Name, ".gitmodules")
+			if _, _, err := rootGit(ctx, g, a.Home, id, root, "cat-file", "-e", "HEAD:.gitmodules"); err == nil {
+				_, _, _ = rootGit(ctx, g, a.Home, id, root, "restore", "--source=HEAD", "--worktree", "--", ".gitmodules")
+			} else {
+				_ = os.Remove(filepath.Join(root, ".gitmodules"))
+			}
+			_ = os.RemoveAll(filepath.Join(a.Home.ClonePath(id), "modules", o.Name))
 		}
 	}()
 	if e = g.RemoteSetURL(ctx, dest, "origin", o.URL); e != nil {
@@ -561,6 +603,7 @@ func (a App) Add(ctx context.Context, id, root string, o AddOptions) (AddResult,
 	if e != nil {
 		return r, e
 	}
+	registered = true
 	_, _, e = rootGit(ctx, g, a.Home, id, root, "submodule", "absorbgitdirs", o.Name)
 	if e != nil {
 		return r, e
@@ -576,6 +619,10 @@ func (a App) Add(ctx context.Context, id, root string, o AddOptions) (AddResult,
 	git(ctx, g, "", "config", "-f", gm, "submodule."+o.Name+".tasktree-mode", mode)
 	registerAliases(store, o.URL, &r)
 	if e = a.commitRoot(ctx, id, root, fmt.Sprintf("tasktree(%s): add %s", id, o.Name)); e != nil {
+		// If commit succeeded but push failed, preserve the committed submodule.
+		if _, _, committedErr := rootGit(ctx, g, a.Home, id, root, "cat-file", "-e", "HEAD:"+o.Name); committedErr == nil {
+			cleanup = false
+		}
 		return r, e
 	}
 	cleanup = false
@@ -674,7 +721,8 @@ func (a App) Commit(ctx context.Context, id, root, msg string) (bool, []string, 
 	}
 	_, _, e = rootGit(ctx, g, a.Home, id, root, "diff", "--cached", "--quiet")
 	if e == nil {
-		return false, warnings, nil
+		_, _, e = rootGit(ctx, g, a.Home, id, root, "push", "origin", "task/"+id)
+		return false, warnings, e
 	}
 	if msg == "" {
 		msg = fmt.Sprintf("tasktree(%s): checkpoint", id)
@@ -686,27 +734,143 @@ func (a App) Commit(ctx context.Context, id, root, msg string) (bool, []string, 
 	return true, warnings, e
 }
 
-func repoLoss(ctx context.Context, g gitx.Client, name, path string) []string {
+func repoLoss(ctx context.Context, g gitx.Client, name, path string, bare bool) ([]string, error) {
 	loss := []string{}
-	if dirty, _ := g.IsDirty(ctx, path); dirty {
-		loss = append(loss, name+" has uncommitted changes")
+	args := []string{}
+	dir := path
+	if bare {
+		args, dir = append(args, "--git-dir", path), ""
 	}
-	out, _, _ := git(ctx, g, path, "rev-list", "--oneline", "--branches", "--not", "--remotes=origin")
+	run := func(a ...string) (string, error) {
+		out, _, err := git(ctx, g, dir, append(args, a...)...)
+		return out, err
+	}
+	if !bare {
+		out, err := run("status", "--porcelain")
+		if err != nil {
+			return nil, fmt.Errorf("cannot check %s for loss: %w", name, err)
+		}
+		if strings.TrimSpace(out) != "" {
+			loss = append(loss, name+" has uncommitted changes")
+		}
+	}
+	out, err := run("rev-list", "--oneline", "HEAD", "--branches", "--tags", "--not", "--remotes=origin")
+	if err != nil {
+		return nil, fmt.Errorf("cannot check %s for loss: %w", name, err)
+	}
 	if strings.TrimSpace(out) != "" {
 		loss = append(loss, name+" has unpushed commits:\n"+strings.TrimSpace(out))
 	}
-	return loss
+	if _, err = run("show-ref", "--verify", "--quiet", "refs/stash"); err == nil {
+		loss = append(loss, name+" has a stash")
+	}
+	return loss, nil
 }
 
-func (a App) tasktreeLoss(ctx context.Context, root string) ([]string, error) {
+func moduleGitDirs(clone string) ([]string, error) {
+	base := filepath.Join(clone, "modules")
+	var dirs []string
+	err := filepath.WalkDir(base, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !d.IsDir() {
+			return nil
+		}
+		if _, e1 := os.Stat(filepath.Join(path, "HEAD")); e1 == nil {
+			if _, e2 := os.Stat(filepath.Join(path, "objects")); e2 == nil {
+				dirs = append(dirs, path)
+				return filepath.SkipDir
+			}
+		}
+		return nil
+	})
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	return dirs, err
+}
+func lossInModules(ctx context.Context, g gitx.Client, clone string) ([]string, error) {
+	dirs, err := moduleGitDirs(clone)
+	if err != nil {
+		return nil, err
+	}
+	var all []string
+	for _, d := range dirs {
+		x, e := repoLoss(ctx, g, filepath.Base(d), d, true)
+		if e != nil {
+			return all, e
+		}
+		all = append(all, x...)
+	}
+	return all, nil
+}
+func (a App) tasktreeLoss(ctx context.Context, id, root string) ([]string, error) {
 	ms, err := modules(root)
 	if err != nil {
 		return nil, err
 	}
 	g := a.Git.WithDefaults()
 	loss := []string{}
+	seen := map[string]bool{}
 	for _, m := range ms {
-		loss = append(loss, repoLoss(ctx, g, m.Name, filepath.Join(root, m.Path))...)
+		worktree := filepath.Join(root, m.Path)
+		gitdir := filepath.Join(a.Home.ClonePath(id), "modules", m.Name)
+		_, statErr := os.Stat(worktree)
+		x, e := repoLoss(ctx, g, m.Name, worktree, false)
+		if statErr != nil {
+			x, e = repoLoss(ctx, g, m.Name, gitdir, true)
+		}
+		if e != nil {
+			return loss, e
+		}
+		loss = append(loss, x...)
+		seen[filepath.Clean(gitdir)] = true
+	}
+	dirs, e := moduleGitDirs(a.Home.ClonePath(id))
+	if e != nil {
+		return loss, e
+	}
+	for _, d := range dirs {
+		if seen[filepath.Clean(d)] {
+			continue
+		}
+		x, e := repoLoss(ctx, g, filepath.Base(d), d, true)
+		if e != nil {
+			return loss, e
+		}
+		loss = append(loss, x...)
+	}
+	ignored, _, e := rootGit(ctx, g, a.Home, id, root, "ls-files", "--others", "--ignored", "--exclude-standard")
+	if e != nil {
+		return loss, fmt.Errorf("cannot check root ignored files: %w", e)
+	}
+	for _, p := range strings.Split(strings.TrimSpace(ignored), "\n") {
+		if p != "" && filepath.Base(p) != ".DS_Store" && p != ".tasktree/task.md" {
+			loss = append(loss, "root has ignored untracked file "+p)
+		}
+	}
+	registered := map[string]bool{}
+	for _, m := range ms {
+		registered[filepath.Clean(filepath.Join(root, m.Path))] = true
+	}
+	e = filepath.WalkDir(root, func(p string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if d.IsDir() && registered[filepath.Clean(p)] {
+			return filepath.SkipDir
+		}
+		if p != root && d.Name() == ".git" {
+			loss = append(loss, "root has unregistered nested git repository "+strings.TrimPrefix(p, root+string(filepath.Separator)))
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+		}
+		return nil
+	})
+	if e != nil {
+		return loss, fmt.Errorf("cannot scan root for nested repositories: %w", e)
 	}
 	return loss, nil
 }
@@ -725,9 +889,32 @@ func (a App) Remove(ctx context.Context, id, root, name string, force bool) ([]s
 	if m == nil {
 		return nil, fmt.Errorf("repository %q not found", name)
 	}
+	validRelative := func(v string) bool {
+		if v == "" || filepath.IsAbs(v) {
+			return false
+		}
+		for _, part := range strings.FieldsFunc(filepath.ToSlash(v), func(r rune) bool { return r == '/' }) {
+			if part == ".." {
+				return false
+			}
+		}
+		return true
+	}
+	if !validRelative(m.Name) || !validRelative(m.Path) {
+		return nil, fmt.Errorf("invalid submodule name/path %q/%q", m.Name, m.Path)
+	}
 	p := filepath.Join(root, m.Path)
+	if rel, err := filepath.Rel(root, p); err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return nil, fmt.Errorf("invalid submodule checkout path %q", p)
+	}
 	g := a.Git.WithDefaults()
-	loss := repoLoss(ctx, g, name, p)
+	loss, lossErr := repoLoss(ctx, g, name, p, false)
+	if lossErr != nil && !force {
+		return nil, GateError{lossErr.Error()}
+	}
+	if lossErr != nil {
+		loss = append(loss, lossErr.Error())
+	}
 	if len(loss) > 0 && !force {
 		return loss, GateError{strings.Join(loss, "\n")}
 	}
@@ -735,7 +922,13 @@ func (a App) Remove(ctx context.Context, id, root, name string, force bool) ([]s
 	if _, _, e = rootGit(ctx, g, a.Home, id, root, "rm", "-f", "--", m.Path); e != nil {
 		return loss, e
 	}
-	_ = os.RemoveAll(filepath.Join(a.Home.ClonePath(id), "modules", m.Name))
+	modulesBase := filepath.Join(a.Home.ClonePath(id), "modules")
+	deletePath := filepath.Join(modulesBase, m.Name)
+	rel, relErr := filepath.Rel(modulesBase, deletePath)
+	if relErr != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return loss, fmt.Errorf("invalid submodule modules path %q", deletePath)
+	}
+	_ = os.RemoveAll(deletePath)
 	e = a.commitRoot(ctx, id, root, fmt.Sprintf("tasktree(%s): remove %s", id, name))
 	return loss, e
 }

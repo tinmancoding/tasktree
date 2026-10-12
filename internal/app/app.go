@@ -245,11 +245,7 @@ func (a App) List(all bool, statuses []string) ([]record.Task, error) {
 	return out, nil
 }
 func (a App) Info(ref string) (record.Task, error) {
-	docs, err := a.Hub.ReadAll()
-	if err != nil {
-		return record.Task{}, err
-	}
-	d, err := hub.Resolve(docs, ref)
+	d, err := a.Hub.Read(ref)
 	if err != nil {
 		return record.Task{}, err
 	}
@@ -377,7 +373,7 @@ func (a App) Mark(ctx context.Context, ref, status string, o MarkOptions) (MarkR
 		result.Task, err = a.updateStatus(ctx, task.ID, status)
 		return result, err
 	}
-	result.Loss, err = a.tasktreeLoss(ctx, checkout.Path)
+	result.Loss, err = a.tasktreeLoss(ctx, task.ID, checkout.Path)
 	if err != nil {
 		return result, err
 	}
@@ -387,9 +383,26 @@ func (a App) Mark(ctx context.Context, ref, status string, o MarkOptions) (MarkR
 	if _, _, err = a.Commit(ctx, task.ID, checkout.Path, fmt.Sprintf("tasktree(%s): close: %s", task.ID, status)); err != nil {
 		return result, err
 	}
+	// Close is complete only when the hub task branch exactly matches the clone.
+	g := a.Git.WithDefaults()
+	cloneHead, _, e1 := rootGit(ctx, g, a.Home, task.ID, checkout.Path, "rev-parse", "HEAD")
+	hubHead, _, e2 := git(ctx, g, a.Home.GitPath(), "rev-parse", "refs/heads/task/"+task.ID)
+	if e1 != nil || e2 != nil || strings.TrimSpace(cloneHead) != strings.TrimSpace(hubHead) {
+		return result, GateError{"task branch synchronization could not be verified; rerun the command"}
+	}
 	result.Task, err = a.updateStatus(ctx, task.ID, status)
 	if err != nil {
 		return result, err
+	}
+	// Recheck immediately before destructive teardown. A concurrent write after
+	// the close commit must be retained for the user to recover.
+	lateLoss, lateErr := a.tasktreeLoss(ctx, task.ID, checkout.Path)
+	if lateErr != nil {
+		return result, GateError{"task closed but loss recheck failed: " + lateErr.Error() + "; push and rerun tt2 mark " + status}
+	}
+	if len(lateLoss) > 0 && !o.Force {
+		result.Loss = append(result.Loss, lateLoss...)
+		return result, GateError{strings.Join(lateLoss, "\n") + "\ntask is closed; push and rerun tt2 mark " + status}
 	}
 	result.RemovedAt = checkout.Path
 	result.Remaining = a.teardownTasktree(task.ID, checkout.Path, local)

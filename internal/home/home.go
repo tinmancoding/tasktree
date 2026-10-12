@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"github.com/tinmancoding/tasktree/v2/internal/fsx"
 	"gopkg.in/yaml.v3"
@@ -102,16 +103,42 @@ func (h Home) LoadLocal() (LocalState, error) {
 	}
 	return s, nil
 }
-func (h Home) SaveLocal(s LocalState) error {
+func (h Home) saveLocalUnlocked(s LocalState) error {
 	if s.Checkouts == nil {
 		s.Checkouts = map[string]Checkout{}
-	}
-	if err := os.MkdirAll(h.Root, 0o755); err != nil {
-		return err
 	}
 	b, err := yaml.Marshal(s)
 	if err != nil {
 		return err
 	}
 	return fsx.AtomicWriteFile(h.LocalPath(), b, 0o644)
+}
+
+// UpdateLocal serializes cross-process read-modify-write operations and reloads
+// after acquiring the lock so concurrent checkout entries cannot be lost.
+func (h Home) UpdateLocal(update func(*LocalState) error) error {
+	if err := os.MkdirAll(h.Root, 0o755); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(h.LocalPath()+".lock", os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	if err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+		return err
+	}
+	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	s, err := h.LoadLocal()
+	if err != nil {
+		return err
+	}
+	if err = update(&s); err != nil {
+		return err
+	}
+	return h.saveLocalUnlocked(s)
+}
+
+func (h Home) SaveLocal(s LocalState) error {
+	return h.UpdateLocal(func(current *LocalState) error { *current = s; return nil })
 }
