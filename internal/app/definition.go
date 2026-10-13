@@ -124,10 +124,18 @@ func renderModules(ms []module) []byte {
 	return []byte(b.String())
 }
 
-func (a App) resolveDefinitionRepo(ctx context.Context, o AddOptions) (module, string, error) {
-	store := repoalias.NewStore(a.Home.AliasesPath())
-	if u, ok, e := store.Resolve(o.URL); e != nil {
-		return module{}, "", e
+func validateAddMode(mode string) error {
+	if mode != "" && mode != "follow" && mode != "work" && mode != "pin" {
+		return ValidationError{fmt.Sprintf("invalid mode %q", mode)}
+	}
+	return nil
+}
+
+// resolveAddOptions applies the checks shared by every add path: alias
+// resolution, name derivation and name validation.
+func (a App) resolveAddOptions(o AddOptions) (AddOptions, error) {
+	if u, ok, e := repoalias.NewStore(a.Home.AliasesPath()).Resolve(o.URL); e != nil {
+		return o, e
 	} else if ok {
 		o.URL = u
 	}
@@ -135,14 +143,155 @@ func (a App) resolveDefinitionRepo(ctx context.Context, o AddOptions) (module, s
 		o.Name = deriveName(o.URL)
 	}
 	if !validRepoName(o.Name) {
-		return module{}, "", ValidationError{fmt.Sprintf("invalid repository name %q", o.Name)}
+		return o, ValidationError{fmt.Sprintf("invalid repository name %q", o.Name)}
+	}
+	return o, nil
+}
+
+// repoPlan is the outcome of K2 branch/from/mode resolution. Kind is one of
+// default, branch (an existing branch), created (a new branch) or headless
+// (a tag or commit, detached).
+type repoPlan struct {
+	Mod         module
+	SHA         string
+	Kind        string
+	Base        string // created: the ref the new branch starts from
+	IgnoredFrom string
+	From        string
+}
+
+func (p repoPlan) message() string {
+	var m string
+	switch p.Kind {
+	case "default":
+		m = fmt.Sprintf("Using the default branch %q", p.Mod.Branch)
+	case "branch":
+		m = fmt.Sprintf("Using existing branch %q", p.Mod.Branch)
+	case "created":
+		m = fmt.Sprintf("Creating new branch %q from %q", p.Mod.Branch, p.Base)
+	case "headless":
+		m = fmt.Sprintf("Checking out %q without creating a branch", p.From)
+	}
+	if m != "" && p.IgnoredFrom != "" {
+		m += fmt.Sprintf("; ignoring --from %q", p.IgnoredFrom)
+	}
+	if m == "" {
+		return ""
+	}
+	return m + "."
+}
+
+// planRepo is the single K2 resolver (M28), shared by checkout add and
+// definition add -t. It reads only the bare cache cp, where every upstream
+// branch is refs/heads/<name>:
+//
+//	--branch B                 existing B → follow its tip; else create B from
+//	                           --from (default branch when absent); mode work
+//	--from F, no --branch      F an existing branch → follow it;
+//	                           F a tag or commit → pin
+//	neither                    follow the default branch
+//
+// --mode overrides the derived mode; work and follow need a branch, and pin
+// never records one.
+func (a App) planRepo(ctx context.Context, g interface {
+	Run(context.Context, string, map[string]string, ...string) (string, string, error)
+}, cp string, o AddOptions) (repoPlan, error) {
+	if err := validateAddMode(o.Mode); err != nil {
+		return repoPlan{}, err
 	}
 	if o.Branch != "" {
 		if e := a.Git.ValidateBranchName(ctx, o.Branch); e != nil {
-			return module{}, "", ValidationError{e.Error()}
+			return repoPlan{}, ValidationError{e.Error()}
 		}
 	}
-	mgr, e := cacheManager(a.Git.WithDefaults())
+	resolve := func(ref string) (string, error) { return resolveRefInCache(ctx, g, cp, ref) }
+	headBranch, _, _ := g.Run(ctx, cp, nil, "symbolic-ref", "--short", "HEAD")
+	headBranch = strings.TrimSpace(strings.TrimPrefix(headBranch, "refs/heads/"))
+	if headBranch == "" {
+		headBranch = "main"
+	}
+	p := repoPlan{From: o.From}
+	switch {
+	case o.Branch != "":
+		p.Mod.Branch = o.Branch
+		if v, x := resolve("refs/heads/" + o.Branch); x == nil {
+			p.SHA, p.Kind, p.IgnoredFrom = v, "branch", o.From
+		} else {
+			base := o.From
+			if base == "" {
+				base = headBranch
+			}
+			v, x := resolve(base)
+			if x != nil {
+				return repoPlan{}, x
+			}
+			p.SHA, p.Kind, p.Base = v, "created", base
+		}
+	case o.From != "":
+		if v, x := resolve("refs/heads/" + o.From); x == nil {
+			p.SHA, p.Kind, p.Mod.Branch = v, "branch", o.From
+		} else if v, x := resolve(o.From); x == nil {
+			p.SHA, p.Kind = v, "headless"
+		} else {
+			return repoPlan{}, x
+		}
+	default:
+		v, x := resolve("refs/heads/" + headBranch)
+		if x != nil {
+			return repoPlan{}, x
+		}
+		p.SHA, p.Kind, p.Mod.Branch = v, "default", headBranch
+	}
+	mode := o.Mode
+	if mode == "" {
+		switch {
+		case o.Branch != "":
+			mode = "work"
+		case p.Kind == "headless":
+			mode = "pin"
+		default:
+			mode = "follow"
+		}
+	}
+	if mode == "pin" {
+		p.Mod.Branch = ""
+	} else if p.Mod.Branch == "" {
+		return repoPlan{}, ValidationError{fmt.Sprintf("mode %s requires a branch", mode)}
+	}
+	p.Mod.Name, p.Mod.Path, p.Mod.URL, p.Mod.Mode = o.Name, o.Name, o.URL, mode
+	return p, nil
+}
+
+// checkoutPlan puts a fresh clone of the cache on the state planRepo chose,
+// so the checkout path records exactly the gitlink and keys the definition
+// path would.
+func (a App) checkoutPlan(ctx context.Context, g interface {
+	Run(context.Context, string, map[string]string, ...string) (string, string, error)
+}, dest string, p repoPlan) error {
+	if p.Mod.Mode == "pin" {
+		_, _, e := g.Run(ctx, dest, nil, "checkout", "--detach", p.SHA)
+		return e
+	}
+	branch := p.Mod.Branch
+	if _, _, e := g.Run(ctx, dest, nil, "show-ref", "--verify", "--quiet", "refs/heads/"+branch); e == nil {
+		_, _, e = g.Run(ctx, dest, nil, "checkout", branch)
+		return e
+	}
+	if _, _, e := g.Run(ctx, dest, nil, "show-ref", "--verify", "--quiet", "refs/remotes/origin/"+branch); e == nil {
+		_, _, e = g.Run(ctx, dest, nil, "checkout", "-b", branch, "--track", "origin/"+branch)
+		return e
+	}
+	_, _, e := g.Run(ctx, dest, nil, "checkout", "-b", branch, p.SHA)
+	return e
+}
+
+func (a App) resolveDefinitionRepo(ctx context.Context, o AddOptions) (module, string, error) {
+	o, e := a.resolveAddOptions(o)
+	if e != nil {
+		return module{}, "", e
+	}
+	g := a.Git.WithDefaults()
+	mgr, e := cacheManager(g)
 	if e != nil {
 		return module{}, "", e
 	}
@@ -150,75 +299,11 @@ func (a App) resolveDefinitionRepo(ctx context.Context, o AddOptions) (module, s
 	if e != nil {
 		return module{}, "", e
 	}
-	g := a.Git.WithDefaults()
-	resolve := func(ref string) (string, error) {
-		v, _, x := git(ctx, g, cp, "rev-parse", ref+"^{commit}")
-		return strings.TrimSpace(v), x
+	p, e := a.planRepo(ctx, g, cp, o)
+	if e != nil {
+		return module{}, "", e
 	}
-	headBranch, _, _ := git(ctx, g, cp, "symbolic-ref", "--short", "HEAD")
-	headBranch = strings.TrimSpace(strings.TrimPrefix(headBranch, "refs/heads/"))
-	if headBranch == "" {
-		headBranch = "main"
-	}
-	var sha, branch, kind string
-	if o.Branch != "" {
-		branch = o.Branch
-		if v, x := resolve("refs/heads/" + o.Branch); x == nil {
-			sha = v
-			kind = "branch"
-		} else {
-			base := o.From
-			if base == "" {
-				base = headBranch
-			}
-			if v, x = resolveRefInCache(ctx, g, cp, base); x != nil {
-				return module{}, "", x
-			} else {
-				sha = v
-			}
-			kind = "created"
-		}
-	}
-	if o.Branch == "" && o.From != "" {
-		if v, x := resolve("refs/heads/" + o.From); x == nil {
-			sha = v
-			branch = o.From
-			kind = "branch"
-		} else if v, x := resolveRefInCache(ctx, g, cp, o.From); x == nil {
-			sha = v
-			kind = "headless"
-		} else {
-			return module{}, "", x
-		}
-	}
-	if o.Branch == "" && o.From == "" {
-		v, x := resolve("refs/heads/" + headBranch)
-		if x != nil {
-			return module{}, "", x
-		}
-		sha = v
-		branch = headBranch
-		kind = "default"
-	}
-	mode := o.Mode
-	if mode == "" {
-		if o.Branch != "" {
-			mode = "work"
-		} else if kind == "headless" {
-			mode = "pin"
-		} else {
-			mode = "follow"
-		}
-	}
-	if mode != "work" && mode != "follow" && mode != "pin" {
-		return module{}, "", ValidationError{fmt.Sprintf("invalid mode %q", mode)}
-	}
-	if mode == "pin" {
-		branch = ""
-	} else if branch == "" {
-		return module{}, "", ValidationError{fmt.Sprintf("mode %s requires a branch", mode)}
-	}
-	return module{Name: o.Name, Path: o.Name, URL: o.URL, Branch: branch, Mode: mode}, sha, nil
+	return p.Mod, p.SHA, nil
 }
 func resolveRefInCache(ctx context.Context, g interface {
 	Run(context.Context, string, map[string]string, ...string) (string, string, error)

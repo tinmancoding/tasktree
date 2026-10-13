@@ -666,22 +666,15 @@ func (a App) Add(ctx context.Context, id, root string, o AddOptions) (AddResult,
 	if err := validateRootIdentity(id, root); err != nil {
 		return r, err
 	}
-	if o.Mode != "" && o.Mode != "follow" && o.Mode != "work" && o.Mode != "pin" {
-		return r, ValidationError{fmt.Sprintf("invalid mode %q", o.Mode)}
+	if err := validateAddMode(o.Mode); err != nil {
+		return r, err
 	}
 	store := repoalias.NewStore(a.Home.AliasesPath())
-	if u, ok, e := store.Resolve(o.URL); e != nil {
-		return r, e
-	} else if ok {
-		o.URL = u
-	}
-	if o.Name == "" {
-		o.Name = deriveName(o.URL)
+	o, err := a.resolveAddOptions(o)
+	if err != nil {
+		return r, err
 	}
 	r.Name = o.Name
-	if o.Name == "" || strings.ContainsAny(o.Name, "/\\") {
-		return r, fmt.Errorf("invalid repository name %q", o.Name)
-	}
 	dest := filepath.Join(root, o.Name)
 	if _, e := os.Stat(dest); !os.IsNotExist(e) {
 		return r, fmt.Errorf("destination %s exists", dest)
@@ -692,6 +685,12 @@ func (a App) Add(ctx context.Context, id, root string, o AddOptions) (AddResult,
 		return r, e
 	}
 	cp, e := mgr.Ensure(ctx, o.URL)
+	if e != nil {
+		return r, e
+	}
+	// K2 (M28): the same resolver decides branch, mode and gitlink here and
+	// for definition edits without a checkout.
+	plan, e := a.planRepo(ctx, g, cp, o)
 	if e != nil {
 		return r, e
 	}
@@ -718,68 +717,10 @@ func (a App) Add(ctx context.Context, id, root string, o AddOptions) (AddResult,
 	if e = g.RemoteSetURL(ctx, dest, "origin", o.URL); e != nil {
 		return r, e
 	}
-	def, e := g.DefaultBranch(ctx, dest)
-	if e != nil {
+	if e = a.checkoutPlan(ctx, g, dest, plan); e != nil {
 		return r, e
 	}
-	branch, pathKind, effectiveFrom, ignoredFrom := o.Branch, "", "", ""
-	if branch != "" {
-		local, _ := g.BranchExists(ctx, dest, branch)
-		if local {
-			e = g.Checkout(ctx, dest, branch)
-			pathKind = "local"
-			ignoredFrom = o.From
-		} else if _, _, x := git(ctx, g, dest, "show-ref", "--verify", "--quiet", "refs/remotes/origin/"+branch); x == nil {
-			e = g.CreateTrackingBranch(ctx, dest, branch, "origin/"+branch)
-			pathKind = "remote"
-			ignoredFrom = o.From
-		} else {
-			base := o.From
-			if base == "" {
-				base = def
-			}
-			effectiveFrom = base
-			if _, x := g.ResolveCommit(ctx, dest, base); x != nil {
-				return r, x
-			}
-			e = g.Checkout(ctx, dest, base)
-			if e == nil {
-				e = g.CreateBranch(ctx, dest, branch)
-			}
-			pathKind = "created"
-		}
-	} else if o.From != "" {
-		if _, x := g.ResolveCommit(ctx, dest, o.From); x == nil {
-			e = g.Checkout(ctx, dest, o.From)
-			pathKind = "headless"
-		} else if _, _, x := git(ctx, g, dest, "show-ref", "--verify", "--quiet", "refs/remotes/origin/"+o.From); x == nil {
-			e = g.CreateTrackingBranch(ctx, dest, o.From, "origin/"+o.From)
-			branch = o.From
-			pathKind = "remote"
-		} else {
-			return r, x
-		}
-	} else {
-		branch = def
-		e = g.Checkout(ctx, dest, def)
-		pathKind = "default"
-	}
-	if e != nil {
-		return r, e
-	}
-	mode := o.Mode
-	if mode == "" {
-		if o.Branch != "" {
-			mode = "work"
-		} else if o.From != "" && pathKind == "headless" {
-			mode = "pin"
-		} else {
-			mode = "follow"
-		}
-	}
-	if mode != "follow" && mode != "work" && mode != "pin" {
-		return r, ValidationError{fmt.Sprintf("invalid mode %q", mode)}
-	}
+	branch, mode := plan.Mod.Branch, plan.Mod.Mode
 	_, _, e = rootGit(ctx, g, a.Home, id, root, "-c", "protocol.file.allow=always", "submodule", "add", "--force", o.URL, o.Name)
 	if e != nil {
 		return r, e
@@ -809,22 +750,8 @@ func (a App) Add(ctx context.Context, id, root string, o AddOptions) (AddResult,
 	cleanup = false
 	r.Mode = mode
 	r.Branch = branch
-	var resolution string
-	switch pathKind {
-	case "local", "default":
-		resolution = fmt.Sprintf("Using existing local branch %q", branch)
-	case "remote":
-		resolution = fmt.Sprintf("Using existing remote branch %q from origin", branch)
-	case "created":
-		resolution = fmt.Sprintf("Creating new branch %q from %q", branch, effectiveFrom)
-	case "headless":
-		resolution = fmt.Sprintf("Checking out %q without creating a branch", o.From)
-	}
-	if ignoredFrom != "" {
-		resolution += fmt.Sprintf("; ignoring --from %q", ignoredFrom)
-	}
-	if resolution != "" {
-		r.Messages = append(r.Messages, resolution+".")
+	if resolution := plan.message(); resolution != "" {
+		r.Messages = append(r.Messages, resolution)
 	}
 	return r, nil
 }

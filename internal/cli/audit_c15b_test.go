@@ -356,3 +356,87 @@ func TestTemplateJSON(t *testing.T) {
 	}
 	expectCode(t, 3, "not found", "template", "show", "nope", "--json")
 }
+
+// M28: checkout add and definition add -t share one K2 resolver, so every
+// flag combination records the same .gitmodules and gitlink on both paths.
+func TestK2ResolverIsIdenticalForCheckoutAndDefinition(t *testing.T) {
+	home, tasks, origin := setupDefinitionTest(t)
+	work := filepath.Join(t.TempDir(), "work")
+	gitRun(t, "", "clone", origin, work)
+	gitRun(t, work, "config", "user.email", "t@example.com")
+	gitRun(t, work, "config", "user.name", "T")
+	v1 := gitRun(t, work, "rev-parse", "HEAD")
+	gitRun(t, work, "tag", "v1")
+	writeFile(t, filepath.Join(work, "next"), "next\n")
+	gitRun(t, work, "add", ".")
+	gitRun(t, work, "commit", "-m", "next")
+	gitRun(t, work, "push", "origin", "main")
+	gitRun(t, work, "checkout", "-b", "develop")
+	writeFile(t, filepath.Join(work, "dev"), "dev\n")
+	gitRun(t, work, "add", ".")
+	gitRun(t, work, "commit", "-m", "develop")
+	gitRun(t, work, "push", "origin", "develop", "v1")
+
+	hubDir := filepath.Join(home, "git")
+	cases := []struct {
+		name string
+		args []string
+	}{
+		{"default", nil},
+		{"new branch", []string{"--branch", "feature/x"}},
+		{"existing branch", []string{"--branch", "develop"}},
+		{"existing default branch", []string{"--branch", "main"}},
+		{"new branch from tag", []string{"--branch", "hotfix", "--from", "v1"}},
+		{"new branch from branch", []string{"--branch", "off-dev", "--from", "develop"}},
+		{"existing branch ignores from", []string{"--branch", "develop", "--from", "v1"}},
+		{"from remote branch", []string{"--from", "develop"}},
+		{"from default branch name", []string{"--from", "main"}},
+		{"from tag", []string{"--from", "v1"}},
+		{"from sha", []string{"--from", strings.TrimSpace(v1)}},
+		{"mode pin on default", []string{"--mode", "pin"}},
+		{"mode follow with branch", []string{"--branch", "develop", "--mode", "follow"}},
+		{"mode pin with branch", []string{"--branch", "develop", "--mode", "pin"}},
+		{"mode work from branch", []string{"--from", "develop", "--mode", "work"}},
+		{"mode follow from tag fails", []string{"--from", "v1", "--mode", "follow"}},
+		{"mode work from tag fails", []string{"--from", "v1", "--mode", "work"}},
+		{"invalid mode fails", []string{"--mode", "sideways"}},
+	}
+	for i, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			handle := "k2-" + strings.Repeat("x", i%3) + string(rune('a'+i))
+			checkoutID := newID(t, handle+" checkout")
+			defID := newID(t, handle+" definition")
+			rootOut, _, err := run(t, "open", checkoutID, "--path", filepath.Join(tasks, handle))
+			if err != nil {
+				t.Fatal(err)
+			}
+			root := strings.TrimSpace(rootOut)
+			base := []string{"add", origin, "--name", "repo"}
+			_, _, errCheckout := run(t, append(append([]string{}, base...), append(c.args, "-t", checkoutID)...)...)
+			// Force the definition path: a task without a checkout.
+			_, _, errDef := run(t, append(append([]string{}, base...), append(c.args, "-t", defID)...)...)
+			if (errCheckout == nil) != (errDef == nil) {
+				t.Fatalf("paths disagree: checkout=%v definition=%v", errCheckout, errDef)
+			}
+			if errCheckout != nil {
+				if codeOf(errCheckout) != 2 || codeOf(errDef) != 2 {
+					t.Fatalf("want usage errors, got checkout=%v definition=%v", errCheckout, errDef)
+				}
+				return
+			}
+			_ = root
+			gm := func(id string) string {
+				return gitRun(t, hubDir, "show", "task/"+id+":.gitmodules")
+			}
+			link := func(id string) string {
+				return gitRun(t, hubDir, "rev-parse", "task/"+id+":repo")
+			}
+			if a, b := gm(checkoutID), gm(defID); a != b {
+				t.Fatalf(".gitmodules differ\ncheckout:\n%s\ndefinition:\n%s", a, b)
+			}
+			if a, b := link(checkoutID), link(defID); a != b {
+				t.Fatalf("gitlinks differ: checkout=%s definition=%s", a, b)
+			}
+		})
+	}
+}
