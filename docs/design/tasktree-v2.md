@@ -1,6 +1,6 @@
 # Design: tasktree V2
 
-Status: **Accepted** (design interview, decisions D1–D54)
+Status: **Accepted** (design interview, decisions D1–D55)
 Supersedes: the workspace-centric V1 model (`Tasktree.yml` + plain folders + registry)
 
 V2 turns tasktree into a single personal tool for **task management + multi-repo workspace
@@ -437,13 +437,13 @@ Targeting: inside a tasktree, commands act on its task (see target resolution); 
 | Code | Behavior |
 |---|---|
 | S1 | `tt2 config set remote <url>` adds `origin` to the hub and pushes `main` + all `task/*`; `config set remote ""` removes it. `tt2 setup --remote <url>` on a machine without a hub clones it (D51). |
-| S2 | `sync` inside a tasktree: pull `main` (semantic merge) → pull `task/<id>` (fast-forward only) → apply pulled gitlinks to clean submodules → update repos by mode (D14) → auto-commit tool-caused gitlink moves → push → report. `--no-repos` skips the repo steps. |
+| S2 | `sync` inside a tasktree: pull `main` (semantic merge) → pull `task/<id>` (fast-forward only) → apply pulled gitlinks to clean submodules → update repos by mode (D14) → auto-commit tool-caused gitlink moves → push → report. `--no-repos` skips only the D14 upstream updates (origin fetch + fast-forward of follow/work branches) and their auto-commit; applying a pulled definition (S6) always runs, because skipping it would let a later `tt2 commit` silently revert the other machine's gitlinks. |
 | S3 | `sync --all` (and `sync` outside a tasktree): sync `main` + every `task/*` ref; never touches checkouts; reports checkouts that are behind and checkouts of closed tasks. |
 | S4 | Semantic merge of `main` per `tasks/<id>.md`: log = union by entry id (timestamp order); labels/refs 3-way set merge; scalars + description 3-way, conflicts per D52; other files on `main` use git's 3-way merge (conflict stops the sync); delete vs modify keeps the modified version. Merge commit `sync: merge <machine>`. |
 | S5 | Fetch outside the hub lock; merge and update refs inside it; push with `--force-with-lease` against the fetched ref; a rejected push retries the sync up to 3 times. |
 | S6 | Gitlink apply: a submodule whose gitlink moved, clean and on its `.gitmodules` branch → fetch from `origin` and fast-forward to the gitlink; commit not on `origin` → skip and report. |
 | S7 | Repo updates use bounded parallel fetch (`sync.jobs`, default 4); a failing repo is reported and the rest continue; exit 1 at the end if anything failed. |
-| S8 | `task/<id>` divergence: stop, show both commit lists and differing paths; `tt2 resolve [--take local\|remote] [path…]` (all paths when none given; gitlinks are paths) → merge commit + push. |
+| S8 | `task/<id>` divergence: stop, show both commit lists and differing paths; `tt2 resolve [--take local\|remote] [path…]` (all paths when none given; gitlinks are paths) → merge commit + push. Repo branches are never reset: a clean repo whose branch is ahead of / diverged from the chosen gitlink keeps its tip and the mismatch is reported (the root then shows the gitlink as modified until reconciled). |
 | S9 | `--allow-unrelated` required for the first merge of `main` histories with no common commit. |
 | S10 | `doctor`: `remote-unreachable`, `main-behind`/`main-ahead`, `conflict-flag` (warnings). |
 
@@ -605,3 +605,4 @@ Checked against git 2.53.0:
 | D52 | Description and scalar-field conflicts keep the local value, log the remote value as a `comment` entry, and set frontmatter `conflict: <field>` (shown by list/info/doctor; cleared by `info edit`/`info set`); labels and refs merge as 3-way sets |
 | D53 | Only `open` (fetch `task/<id>` + `main` when missing/behind) and closing (push `task/<id>` + `main`) touch the remote implicitly, best-effort; all other writes wait for `sync`; `sync` outside a tasktree = `sync --all` |
 | D54 | M5 spec S1–S10 (remote config/join, sync steps, `--all`, semantic merge, lease + retry, gitlink apply, parallel repo updates, `resolve`, `--allow-unrelated`, doctor checks) as recorded in the M5 design section |
+| D55 | Sync conflict comments identify the remote side by the last remote commit touching the file (`commit <sha> by <author> at <date>`); no machine metadata is persisted; `sync: merge <machine>` names the local machine. `--no-repos` and `resolve` semantics as refined in S2/S8 |
