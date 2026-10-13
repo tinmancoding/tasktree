@@ -84,7 +84,7 @@ func NewRoot(out, errOut io.Writer) *cobra.Command {
 	root.PersistentFlags().StringVarP(&o.chdir, "chdir", "C", "", "run as if started in this directory")
 	root.PersistentFlags().BoolVarP(&o.verbose, "verbose", "v", false, "print git commands")
 	root.PersistentFlags().StringVar(&o.author, "author", "", "author for log entries")
-	root.AddCommand(setupCmd(o), configCmd(o), newCmd(o), listCmd(o), infoCmd(o), noteCmd(o), markCmd(o), refCmd(o), labelCmd(o), historyCmd(o), openCmd(o), addCmd(o), removeCmd(o), modeCmd(o), bootstrapCmd(o), focusCmd(o), pushCmd(o), commitCmd(o), importCmd(o), rootCmd(o))
+	root.AddCommand(setupCmd(o), configCmd(o), newCmd(o), listCmd(o), infoCmd(o), noteCmd(o), markCmd(o), refCmd(o), labelCmd(o), historyCmd(o), openCmd(o), addCmd(o), removeCmd(o), modeCmd(o), bootstrapCmd(o), focusCmd(o), pushCmd(o), commitCmd(o), importCmd(o), moveCmd(o), doctorCmd(o), rootCmd(o))
 	return root
 }
 func (o *options) application() (app.App, error) {
@@ -871,6 +871,76 @@ func commitCmd(o *options) *cobra.Command {
 	c.Flags().StringVarP(&msg, "message", "m", "", "commit message")
 	return c
 }
+
+type doctorFindingsError struct{}
+
+func (doctorFindingsError) Error() string { return "doctor found errors" }
+
+func doctorCmd(o *options) *cobra.Command {
+	var fix, jsonOut bool
+	c := &cobra.Command{Use: "doctor", Short: "Check tasktree state and safely repair known problems", Args: exact(0), RunE: func(cmd *cobra.Command, args []string) error {
+		a, e := o.application()
+		if e != nil {
+			return e
+		}
+		r, e := a.Doctor(cmd.Context(), fix)
+		if e != nil {
+			return e
+		}
+		if jsonOut {
+			enc := json.NewEncoder(o.out)
+			enc.SetEscapeHTML(false)
+			if e = enc.Encode(r); e != nil {
+				return e
+			}
+		} else {
+			fmt.Fprintln(o.out, "SEVERITY\tCODE\tSUBJECT\tMESSAGE")
+			fixable := 0
+			for _, f := range r.Findings {
+				state := ""
+				if f.Fixed {
+					state = " (fixed)"
+				}
+				fmt.Fprintf(o.out, "%s\t%s\t%s\t%s%s\n", strings.ToUpper(f.Severity), f.Code, f.Subject, f.Message, state)
+				if f.Fixable && !f.Fixed {
+					fixable++
+				}
+			}
+			fmt.Fprintf(o.out, "%d errors, %d warnings, %d fixable\n", r.Errors, r.Warnings, fixable)
+		}
+		if r.Errors > 0 {
+			return doctorFindingsError{}
+		}
+		return nil
+	}}
+	c.Flags().BoolVar(&fix, "fix", false, "apply safe repairs and check again")
+	c.Flags().BoolVar(&jsonOut, "json", false, "print JSON")
+	return c
+}
+
+func moveCmd(o *options) *cobra.Command {
+	var ref string
+	c := &cobra.Command{Use: "move <new-path>", Short: "Relocate a tasktree checkout atomically", Args: exact(1), RunE: func(cmd *cobra.Command, args []string) error {
+		a, e := o.application()
+		if e != nil {
+			return e
+		}
+		id, root, e := requireTree(a, ref)
+		if e != nil {
+			return e
+		}
+		p, e := a.Move(cmd.Context(), id, root, args[0])
+		if e != nil {
+			return e
+		}
+		fmt.Fprintln(o.out, p)
+		fmt.Fprintln(o.err, "hint: open shells keep the old $PWD; cd to the new path")
+		return nil
+	}}
+	c.Flags().StringVarP(&ref, "task", "t", "", "task handle or id")
+	return c
+}
+
 func rootCmd(o *options) *cobra.Command {
 	var ref string
 	c := &cobra.Command{Use: "root", Short: "Print the tasktree root path", Args: exact(0), RunE: func(cmd *cobra.Command, args []string) error {
