@@ -138,8 +138,15 @@ func (a App) RenderTemplate(name string, args []string) (RenderedTemplate, error
 	if e = record.ValidateStatus(rendered.Task.Status); e != nil {
 		return RenderedTemplate{}, ValidationError{e.Error()}
 	}
-	if rendered.Task.Handle != "" && !handlePattern.MatchString(rendered.Task.Handle) {
-		return RenderedTemplate{}, ValidationError{fmt.Sprintf("invalid handle %q", rendered.Task.Handle)}
+	if rendered.Task.Handle != "" {
+		if e = ValidateHandle(rendered.Task.Handle); e != nil {
+			return RenderedTemplate{}, e
+		}
+	}
+	if rendered.Task.Jira != "" {
+		if e = ValidateHandle(rendered.Task.Jira); e != nil {
+			return RenderedTemplate{}, e
+		}
 	}
 	if e = record.ValidateDescription(rendered.Task.Description); e != nil {
 		return RenderedTemplate{}, ValidationError{e.Error()}
@@ -237,6 +244,9 @@ func (a App) NewFromTemplate(ctx context.Context, o TemplateApplyOptions) (recor
 		} else {
 			handle = Slug(s.Task.Title)
 		}
+	}
+	if e = ValidateHandle(handle); e != nil {
+		return record.Task{}, e
 	}
 	docs, e := a.Hub.ReadAll()
 	if e != nil {

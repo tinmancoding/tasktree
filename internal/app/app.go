@@ -230,6 +230,14 @@ func (a App) NewTask(ctx context.Context, o NewOptions) (record.Task, error) {
 	if o.Handle == "" {
 		return record.Task{}, fmt.Errorf("could not derive a handle; pass --handle")
 	}
+	if err := ValidateHandle(o.Handle); err != nil {
+		return record.Task{}, err
+	}
+	if o.Jira != "" {
+		if err := ValidateHandle(o.Jira); err != nil {
+			return record.Task{}, err
+		}
+	}
 	docs, err := a.Hub.ReadAll()
 	if err != nil {
 		return record.Task{}, err
@@ -387,6 +395,16 @@ func (a App) Info(ref string) (record.Task, error) {
 }
 
 var handlePattern = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
+
+// ValidateHandle applies the single handle rule (M16) everywhere a handle, or
+// a Jira key that becomes one, enters the system.
+func ValidateHandle(value string) error {
+	if !handlePattern.MatchString(value) {
+		return ValidationError{fmt.Sprintf("invalid handle %q (expected [A-Za-z0-9._-], max 64 characters)", value)}
+	}
+	return nil
+}
+
 var labelPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
 var prPattern = regexp.MustCompile(`^[^/[:space:]]+/[^/#[:space:]]+#[1-9][0-9]*$`)
 
@@ -434,8 +452,8 @@ func (a App) SetInfo(ctx context.Context, ref, field, value string, clear bool) 
 		}
 		summary = "title updated"
 	case "handle":
-		if !handlePattern.MatchString(value) {
-			return record.Task{}, false, ValidationError{fmt.Sprintf("invalid handle %q (expected [A-Za-z0-9._-], max 64 characters)", value)}
+		if err := ValidateHandle(value); err != nil {
+			return record.Task{}, false, err
 		}
 		if current.Handle == value && !hasConflict(current, "handle") {
 			return current, false, nil

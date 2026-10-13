@@ -1269,6 +1269,11 @@ func importCmd(o *options) *cobra.Command {
 		if !all && len(args) != 1 {
 			return usageError{product.Name + " import accepts one path or --all"}
 		}
+		if cmd.Flags().Changed("handle") {
+			if e := app.ValidateHandle(x.Handle); e != nil {
+				return usageError{e.Error()}
+			}
+		}
 		if all && (cmd.Flags().Changed("handle") || cmd.Flags().Changed("status")) {
 			return usageError{"--handle and --status cannot be used with --all"}
 		}
