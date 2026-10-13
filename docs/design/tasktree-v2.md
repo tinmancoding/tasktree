@@ -1,6 +1,6 @@
 # Design: tasktree V2
 
-Status: **Accepted** (design interview, decisions D1–D55)
+Status: **Accepted** (design interview, decisions D1–D56)
 Supersedes: the workspace-centric V1 model (`Tasktree.yml` + plain folders + registry)
 
 V2 turns tasktree into a single personal tool for **task management + multi-repo workspace
@@ -606,3 +606,4 @@ Checked against git 2.53.0:
 | D53 | Only `open` (fetch `task/<id>` + `main` when missing/behind) and closing (push `task/<id>` + `main`) touch the remote implicitly, best-effort; all other writes wait for `sync`; `sync` outside a tasktree = `sync --all` |
 | D54 | M5 spec S1–S10 (remote config/join, sync steps, `--all`, semantic merge, lease + retry, gitlink apply, parallel repo updates, `resolve`, `--allow-unrelated`, doctor checks) as recorded in the M5 design section |
 | D55 | Sync conflict comments identify the remote side by the last remote commit touching the file (`commit <sha> by <author> at <date>`); no machine metadata is persisted; `sync: merge <machine>` names the local machine. `--no-repos` and `resolve` semantics as refined in S2/S8 |
+| D56 | `resolve` is 3-way against the merge base: one-sided changes merge automatically, `--take` decides only paths changed on both sides. Pulled `pin` gitlinks apply as a detached checkout; previously skipped gitlinks are re-applied by the next `sync`. `commit` and close refuse to move a gitlink backwards (`--allow-rewind` / `mark --force` override). Network calls are bounded by timeouts and never prompt |
