@@ -15,6 +15,12 @@ management**, using git for all state:
 
 Decision codes (`Dn`, `Kn`, `Xn`, `Rn`, …) refer to the [decision log](#decision-log).
 
+This document records the design as accepted and then amended by later decisions (the log is
+append-only; a later decision supersedes an earlier one). Sections describing current behavior
+were brought in line with the implementation on branch `v2` and use the final binary name,
+`tasktree` (D58). The generated [CLI reference](../reference/cli/tasktree.md) is the authority for
+commands and flags.
+
 ---
 
 ## Goals and non-goals
@@ -63,7 +69,7 @@ Decision codes (`Dn`, `Kn`, `Xn`, `Rn`, …) refer to the [decision log](#decisi
 
 ~/Library/Caches/tasktree/repos/<sha256-of-url>   # bare clone cache, unchanged from V1 (L2)
 
-~/Developer/tasks/<handle>/       # tasktree working dirs, flat (L1), no .git at root
+~/Developer/tasks/<handle>/       # tasktree working dirs (default tasksRoot), flat (L1), no .git at root
   .tasktree/config.yml            # committed marker + config (D12)
   .tasktree/task.md               # gitignored, generated record view (AG4)
   .gitmodules
@@ -154,15 +160,15 @@ One file per task: `tasks/<id>.md` on `main`. Three sections with distinct write
 ```markdown
 ---
 id: k7x2mq
-handle: DSA-8946
-title: AI board member prod admin
+handle: PROJ-123
+title: Payments retry for the client
 status: active
 parent: null
-labels: [aibm]
+labels: [payments]
 refs:
-  - jira: DSA-8946
-  - pr: DiligentCorp/boardroom-ai#123
-  - url: https://diligentbrands.atlassian.net/wiki/spaces/X/pages/123
+  - jira: PROJ-123
+  - pr: myorg/api#123
+  - url: https://example.com/wiki/spaces/X/pages/123
 createdAt: 2026-10-12T09:00:00Z
 updatedAt: 2026-10-12T10:03:00Z
 ---
@@ -173,10 +179,10 @@ What and why. Replaced as a whole by `tasktree info edit`.
 
 ## Log
 
-### 2026-10-12T10:03:00Z note laci@mbp-work {#e-01jab3}
+### 2026-10-12T10:03:00Z note alice@laptop {#e-01jab3}
 Retry budget = 3, backoff 200ms.
 
-### 2026-10-12T11:20:00Z decision pi@mbp-work {#e-01jab9}
+### 2026-10-12T11:20:00Z decision agent@laptop {#e-01jab9}
 Use the existing client wrapper instead of a new SDK.
 ```
 
@@ -199,13 +205,19 @@ Use the existing client wrapper instead of a new SDK.
   (`jira.baseUrl`). No external API calls (D25).
 - Subtasks are ordinary records with `parent: <id>` (D4). No directory nesting.
 
-### Semantic merge (M5, D8)
+### Semantic merge (M5, D8, M33)
 
-When `main` diverges across machines, merge per file:
+When `main` diverges across machines, merge per file against the common ancestor (S4):
 
-- Log: union of entries by entry ID.
-- Frontmatter: 3-way merge per field.
-- Description: 3-way text merge; on a real conflict keep both versions and flag the task.
+- Log: union of entries by entry ID. Entries are ordered by timestamp, then ID. Local entries keep
+  their bytes; remote entries that interleave in time are inserted in order.
+- `labels` and `refs`: three-way set merge.
+- Scalar frontmatter fields (and unknown keys): three-way. A change on one side wins. A change to
+  different values on both sides keeps the local value, logs the remote value as a `comment`
+  entry and sets `conflict: [field]` (D52).
+- Description: three-way on the whole text, with the same conflict rule.
+- Delete versus modify keeps the modified version. Other files on `main` use git's merge, and a
+  conflict there stops the sync.
 
 ### Local state (D17, D30)
 
@@ -214,7 +226,7 @@ When `main` diverges across machines, merge per file:
 ```yaml
 checkouts:
   k7x2mq:
-    path: /Users/landrasi/Developer/tasks/DSA-8946
+    path: /Users/alice/Developer/tasks/PROJ-123
     focus: p3n8wd        # optional focused subtask (D30)
 ```
 
@@ -237,7 +249,7 @@ what git cannot express.
 # .gitmodules
 [submodule "api"]
     path = api
-    url = git@github.com:DiligentCorp/api.git
+    url = git@github.com:myorg/api.git
     branch = feature/payments
     tasktree-mode = work
 ```
@@ -289,45 +301,64 @@ branches by mode (D39):
 | `work`, `follow` | local branch named after `.gitmodules` `branch`, at the gitlink SHA; upstream `origin/<branch>` if it exists |
 | `pin` | detached at the gitlink SHA |
 
-`open` never resets a local branch that already exists.
+A fresh checkout starts the branch at the gitlink (`checkout -B`, so a same-named branch in the
+cache clone cannot put it ahead). After that, neither `sync` nor a repeated `open` ever resets a
+repository: `open` on an existing checkout only prints its path (DN6).
 
 ### Commit and sync (D13′, C1–C4)
 
-- **`commit [-m]`** stages root files and current gitlinks and commits on `task/<id>`. It
-  never commits inside submodules and warns about dirty ones.
-- **`sync`** (M5), in order:
+- **`commit [-m]`** stages root files and current gitlinks, commits on `task/<id>` and pushes the
+  branch to the hub. It never commits inside submodules and warns about dirty ones. It refuses to
+  record a gitlink older than the one already recorded unless `--allow-rewind` is given (D56).
+- **`sync`** (M5, S2), in order:
   1. Pull tasktree state: `main` (semantic merge) and `task/<id>` (fast-forward only; on
-     divergence stop and hand over to `resolve`).
-  2. Apply gitlinks pulled from the other machine to clean submodules on their branch.
+     divergence stop with exit 5 and hand over to `resolve`).
+  2. Apply gitlinks pulled from the other machine to clean submodules on their branch (S6).
   3. Update repos by mode (D14).
   4. Auto-commit gitlink moves caused by step 3.
-  5. Push tasktree state.
-  6. Report dirty, diverged, and unpushed (gitlinks not reachable from `origin`, D13 O1).
-- **`sync --no-repos`** skips steps 2–4: just move your files and records.
+  5. Push tasktree state with a lease; a rejected lease retries the sync up to 3 times.
+  6. Report dirty, diverged, skipped and unpushed (gitlinks not reachable from `origin`, D13 O1).
+- **`sync` refuses a dirty root** (M20). If the root has uncommitted changes, it stops with exit 5
+  and asks for `tasktree commit` first. It never commits implicitly. A repository left behind by a
+  skipped gitlink (S6) is not counted as an uncommitted change.
+- **`sync --no-repos`** (M21) skips only step 3 and its auto-commit (step 4): the fetch and
+  fast-forward of `follow`/`work` repos from `origin`. Step 2 always runs, because skipping it
+  would let a later `commit` silently revert the other machine's gitlinks.
 - **`sync --all`** syncs `main` and every `task/*` ref between hub and remote; it never touches
-  open clones' working trees and reports which are behind.
+  open clones' working trees and reports which are behind. Outside a tasktree, `sync` is
+  `sync --all` (D53).
 - **`sync` never pushes code to `origin`.** Only `tasktree push` does (C4, Q14).
-- `sync` does not commit implicitly; it warns about an uncommitted root.
 
-### Cross-machine guarantee (D13 O1)
+### Cross-machine guarantee (D13 O1, DN5)
 
-Only pushed work reproduces. A gitlink unreachable from `origin` falls back to the
-`.gitmodules` branch tip on the other machine and is reported. Dirty state never crosses
+Only pushed work reproduces. When a gitlink is not available on the other machine, `open` and
+`sync` do **not** fall back to the tip of the `.gitmodules` branch (M22, DN5). The repository is
+left uninitialized (a new checkout) or unchanged (an existing one), and the gitlink is reported
+under "unpushed gitlinks". The next `sync` or `open` retries it. Dirty state never crosses
 machines.
 
-### Lifecycle and close (D18)
+### Lifecycle and close (D18, M25)
 
 `mark done|dropped` on a checked-out task:
 
-1. **Gate:** refuse if any submodule is dirty or has commits unreachable from `origin` (they
-   would be destroyed with the clone git dir). `--force` lists the loss and proceeds.
-2. Auto-commit the root (`close: done`).
-3. Sync `task/<id>` and `main` (`--no-repos`; hub-only until a remote exists).
-4. Delete the working dir, the clone git dir, and the `local.yml` entry.
+1. **Gate:** refuse if the task has open subtasks (ST1), or if any of these hold (D46). Each cause
+   is listed, and `--force` lists the loss and proceeds (it does not override open subtasks):
+   - a submodule has uncommitted changes (including untracked files),
+   - a submodule has commits, on `HEAD` or any local branch, that are not reachable from `origin`
+     (tags are not counted),
+   - a submodule has a stash,
+   - the root has ignored, untracked files (other than `.DS_Store` and `.tasktree/task.md`),
+   - the root contains an unregistered nested git repository,
+   - a submodule's `HEAD` is older than its recorded gitlink (a rewind, D56).
+2. Commit the root (`close: done`) and push the branch to the hub.
+3. Record the status. If a remote is configured, push `main` and `task/<id>` to it, fast-forward
+   only and best effort within the short implicit-call limit (D53, D59). A failure is a warning,
+   because the hub already holds everything. Close does not run `sync` and never merges.
+4. Re-run the loss gate, then delete the working dir, the clone git dir, and the `local.yml` entry.
 5. Keep `task/<id>` forever. Reopen + `open` re-materializes.
 
 `--keep` changes status without teardown. Other machines' checkouts of closed tasks are
-reported by `sync --all` and removed only on request.
+reported by `sync --all` and removed only on request (`tasktree mark <status> -t <handle>`).
 
 ---
 
@@ -343,8 +374,8 @@ A subtask is a full task with `parent: <id>`. Like every task it has 0..1 tasktr
   subtask) creates its own tasktree.
 
 ```bash
-cd ~/Developer/tasks/DSA-8946
-tasktree new --parent DSA-8946 "Add retry to client"   # handle: add-retry
+cd ~/Developer/tasks/PROJ-123
+tasktree new --parent PROJ-123 "Add retry to client"   # handle: add-retry
 tasktree focus add-retry
 tasktree note "retry budget = 3"     # → "note added to add-retry"
 tasktree mark done
@@ -378,7 +409,7 @@ Isolated subtask work returns via `origin` only: `tasktree push` in the subtask,
 base `<parent-branch>` (manual `gh pr create`; no PR automation in V2.0).
 
 `push` checks that `origin/<parent-branch>` contains the subtask's fork point. If not, it warns
-("push DSA-8946's api first, or the PR will include 4 parent commits") and prints the matching
+("push PROJ-123's api first, or the PR will include 4 parent commits") and prints the matching
 `gh pr create --base … --head …` line.
 
 ### Status rules (D34)
@@ -418,15 +449,30 @@ Targeting: inside a tasktree, commands act on its task (see target resolution); 
 | X16 | `list` tree, `info` subtasks | Hierarchy and progress |
 | X17 | `mark … --cascade` | Close a parent with its subtasks |
 | X18 | `info set parent <h>` / `--clear` | Reparent |
+| X19 | `alias add <alias> <url>`, `alias rm <alias>`, `alias list [--json]` | Manage repository aliases (X11, built with D58) |
+| X20 | `list --ref <jira\|pr\|url>:<value>` | Find tasks by an exact reference (X3, built with D58) |
+| X21 | `bootstrap [run]`, `bootstrap add <name> <run> [--workdir] [--env K=V]`, `bootstrap rm <name>`, `bootstrap list [--json]` | Manage and run bootstrap steps; also with `-t` on a definition (D47, D58) |
+| X22 | `info ack <field>` | Clear a sync conflict flag without changing the field (D52, D58) |
+| X23 | `template list\|show --json`, `template validate` | Machine-readable templates (D58); `new --template <name\|file>` |
+| X24 | `sync [--no-repos] [--all] [--allow-unrelated] [--json]`, `resolve [--take local\|remote] [path…] [--json]` | Remote sync and divergence handling (X9, X10, M5) |
+| X25 | `push [repo…]`, `focus <h>\|--clear`, `move <path>`, `doctor [--fix] [--json]`, `import <path>\|--all\|--recover` | As X9, X14, X12 |
+| X26 | `gen-docs <dir>` (hidden) | Writes the CLI reference pages. Run it with `make docs-cli`. |
+| X27 | `completion <shell>` | Generated by Cobra |
+
+The generated [CLI reference](../reference/cli/tasktree.md) lists every command and flag with its help
+text; this table keeps the decision codes.
 
 ### Agent integration (D26)
 
 - **AG1:** every read command supports `--json` with a documented, stable shape; distinct
   exit codes for not-in-tasktree, conflict, gate-refused, not-found.
 - **AG2:** author = `--author` → `TASKTREE_AUTHOR` → `config.yml` `author`; machine from config.
-- **AG3:** the tool never edits user-owned files. The default template writes a starter root
-  `AGENTS.md` once ("use `tasktree info`/`note`/`ref add`; never git in the root"). The pi
-  `tasktree` skill is rewritten for V2.
+- **AG3:** the tool never edits user-owned files after creating them (M36). It writes a starter
+  root `AGENTS.md` once, in the first commit of a tasktree ("use `tasktree info`/`note`; never git
+  in the root"): when `open` or a definition edit creates the branch, when a template creates it
+  (unless the template supplies its own `AGENTS.md`), and when `import` finds none. It is never
+  rewritten. An isolated subtask's file also names the parent task. The pi `tasktree` skill is
+  rewritten for V2.
 - **AG4:** `.tasktree/task.md` is regenerated on `open`, `sync`, and every record write in
   that tasktree.
 
@@ -436,14 +482,14 @@ Targeting: inside a tasktree, commands act on its task (see target resolution); 
 
 | Code | Behavior |
 |---|---|
-| S1 | `tt2 config set remote <url>` adds `origin` to the hub and pushes `main` + all `task/*`; `config set remote ""` removes it. `tt2 setup --remote <url>` on a machine without a hub clones it (D51). |
-| S2 | `sync` inside a tasktree: pull `main` (semantic merge) → pull `task/<id>` (fast-forward only) → apply pulled gitlinks to clean submodules → update repos by mode (D14) → auto-commit tool-caused gitlink moves → push → report. `--no-repos` skips only the D14 upstream updates (origin fetch + fast-forward of follow/work branches) and their auto-commit; applying a pulled definition (S6) always runs, because skipping it would let a later `tt2 commit` silently revert the other machine's gitlinks. |
+| S1 | `tasktree config set remote <url>` adds `origin` to the hub and pushes `main` + all `task/*`; `config set remote ""` removes it. `tasktree setup --remote <url>` on a machine without a hub clones it (D51). |
+| S2 | `sync` inside a tasktree: pull `main` (semantic merge) → pull `task/<id>` (fast-forward only) → apply pulled gitlinks to clean submodules → update repos by mode (D14) → auto-commit tool-caused gitlink moves → push → report. `--no-repos` skips only the D14 upstream updates (origin fetch + fast-forward of follow/work branches) and their auto-commit; applying a pulled definition (S6) always runs, because skipping it would let a later `tasktree commit` silently revert the other machine's gitlinks. |
 | S3 | `sync --all` (and `sync` outside a tasktree): sync `main` + every `task/*` ref; never touches checkouts; reports checkouts that are behind and checkouts of closed tasks. |
 | S4 | Semantic merge of `main` per `tasks/<id>.md`: log = union by entry id (timestamp order); labels/refs 3-way set merge; scalars + description 3-way, conflicts per D52; other files on `main` use git's 3-way merge (conflict stops the sync); delete vs modify keeps the modified version. Merge commit `sync: merge <machine>`. |
 | S5 | Fetch outside the hub lock; merge and update refs inside it; push with `--force-with-lease` against the fetched ref; a rejected push retries the sync up to 3 times. |
 | S6 | Gitlink apply: a submodule whose gitlink moved, clean and on its `.gitmodules` branch → fetch from `origin` and fast-forward to the gitlink; commit not on `origin` → skip and report. |
 | S7 | Repo updates use bounded parallel fetch (`sync.jobs`, default 4); a failing repo is reported and the rest continue; exit 1 at the end if anything failed. |
-| S8 | `task/<id>` divergence: stop, show both commit lists and differing paths; `tt2 resolve [--take local\|remote] [path…]` (all paths when none given; gitlinks are paths) → merge commit + push. Repo branches are never reset: a clean repo whose branch is ahead of / diverged from the chosen gitlink keeps its tip and the mismatch is reported (the root then shows the gitlink as modified until reconciled). |
+| S8 | `task/<id>` divergence: stop, show both commit lists and differing paths; `tasktree resolve [--take local\|remote] [path…]` (all paths when none given; gitlinks are paths) → merge commit + push. Repo branches are never reset: a clean repo whose branch is ahead of / diverged from the chosen gitlink keeps its tip and the mismatch is reported (the root then shows the gitlink as modified until reconciled). |
 | S9 | `--allow-unrelated` required for the first merge of `main` histories with no common commit. |
 | S10 | `doctor`: `remote-unreachable`, `main-behind`/`main-ahead`, `conflict-flag` (warnings). |
 
@@ -469,9 +515,9 @@ Targeting: inside a tasktree, commands act on its task (see target resolution); 
 
 - Same repo, Go, module `github.com/tinmancoding/tasktree/v2` on `main`; V1 frozen on a `v1`
   branch for fixes. Released as `v2.0.0` via release-please (`feat!:`); same binary name.
-- **During development the V2 binary is `tt2`** (`cmd/tt2`), installed alongside V1 `tasktree`
-  and its `tt` alias, so existing V1 workspaces keep working until `import` (M3). It takes the
-  `tasktree` name at `v2.0.0` (D37, D42).
+- **The binary is `tasktree`** (`cmd/tasktree`). `make install` also creates `tt` and `tt2`
+  symlinks to it (D58). During development it was called `tt2`, installed beside V1 so that
+  existing V1 workspaces kept working until `import` (D37, D42); the rename happened with D58.
 - Development happens on branch `v2`; V1 is frozen on branch `v1`; `v2` merges to `main` at
   `v2.0.0`.
 - Rewrite `domain`, `app`, `cli` (~79% of V1 non-test code).
@@ -491,7 +537,11 @@ Targeting: inside a tasktree, commands act on its task (see target resolution); 
    branches, unpushed commits, dirty state, and stashes are preserved. Branch and mode come from
    the checkout's **current** state, not the V1 spec (D43): on the default branch → `follow`,
    on another branch → `work`, detached → `pin`.
-4. Commit root artifacts; convert `local` sources to symlinks; remove `Tasktree.yml`.
+4. Commit root artifacts and remove `Tasktree.yml` (its full text is quoted in the first log
+   entry). Non-git sources (`local`, `static`, `http`, `archive`) are not converted (M37): their
+   files and symlinks are committed as they are, symlink targets unchanged, so an absolute target
+   stays machine-specific. The plan lists the symlinks. A nested git repository that
+   `Tasktree.yml` does not declare is a refusal.
 5. Verify `git status --porcelain` and `HEAD` per repo before/after; any difference rolls back.
 
 The folder stays in place (path in `local.yml`) unless `--move` relocates it to
@@ -499,14 +549,15 @@ The folder stays in place (path in `local.yml`) unless `--move` relocates it to
 
 ## Milestones (D28, D35)
 
-| Milestone | Scope |
-|---|---|
-| **S — Walking skeleton** (D41) | Hub, `setup`, `new` (incl. `--parent` for shared subtasks), `list`, `info`, `note`, `mark` (incl. close flow), `open`, `add` (aliases, modes, K2), `remove`, `commit`, `root`, `-t` targeting, `--json` for `list`/`info`. Record syntax (D38), `open` branch rules (D39), git env/path rules (D40). Binary `tt2`. Backup of `~/.tasktree` in place (R4). |
-| **M1 — Records** | `info edit`, `info set` (incl. reparent), `ref`, `label`, `history`, `list` tree, `mark --cascade`, starter `AGENTS.md`. |
-| **M2 — Tasktrees + isolated subtasks** | `mode`, `bootstrap`, `focus` (D36), full target resolution (`TASKTREE_TASK`, focus), `.tasktree/task.md`, pi skill rewrite, `--isolated`, promotion, `parent` remote, `push` + fork-point check. |
-| **M3 — Import** | `import` (D24); stop using V1 day to day. |
-| **M4 — Polish** | Retargeted templates, `doctor` (incl. orphan cleanup, moved from M2), `move`. |
-| **M5 — Remote** | `sync`, `sync --all`, `resolve`, semantic merge. |
+| Milestone | Scope | Status |
+|---|---|---|
+| **S — Walking skeleton** (D41) | Hub, `setup`, `new` (incl. `--parent` for shared subtasks), `list`, `info`, `note`, `mark` (incl. close flow), `open`, `add` (aliases, modes, K2), `remove`, `commit`, `root`, `-t` targeting, `--json` for `list`/`info`. Record syntax (D38), `open` branch rules (D39), git env/path rules (D40). Developed as `tt2` (D42). Backup of `~/.tasktree` in place (R4). | Implemented on `v2` |
+| **M1 — Records** | `info edit`, `info set` (incl. reparent), `ref`, `label`, `history`, `list` tree, `mark --cascade`, starter `AGENTS.md`. | Implemented on `v2` |
+| **M2 — Tasktrees + isolated subtasks** | `mode`, `bootstrap`, `focus` (D36), full target resolution (`TASKTREE_TASK`, focus), `.tasktree/task.md`, pi skill rewrite, `--isolated`, promotion, `parent` remote, `push` + fork-point check. | Implemented on `v2` |
+| **M3 — Import** | `import` (D24); stop using V1 day to day. | Implemented on `v2` |
+| **M4 — Polish** | Retargeted templates, `doctor` (incl. orphan cleanup, moved from M2), `move`. | Implemented on `v2` |
+| **M5 — Remote** | `sync`, `sync --all`, `resolve`, semantic merge. | Implemented on `v2` |
+| **Audit follow-ups** (D58) | X11 `alias add\|rm\|list` and `list --ref` (listed in X3 and X11 but built late), `bootstrap add\|rm\|list`, `info ack`, JSON for `template list\|show`. | Implemented on `v2` with D58 |
 
 ## Deferred
 
@@ -570,7 +621,7 @@ Checked against git 2.53.0:
 | D17 | Checkout state is per machine in `~/.tasktree/local.yml`, never on `main` |
 | D18 | Close flow: gate, auto-commit root, sync, teardown, keep branch; `--keep`, `--force` |
 | D19 | Remote is configuration (`setup`, `config set remote`); none is valid |
-| D20 | Laci's instance starts local-only |
+| D20 | The first instance starts local-only |
 | D21 | Layout: `~/.tasktree` (L3, `TASKTREE_HOME`), cache in OS cache dir (L2), flat task dirs (L1) |
 | D22 | V1 carry-over table K1–K13 |
 | D23 | Rewrite in the same repo as Go module `/v2`; port leaf packages |
@@ -600,7 +651,7 @@ Checked against git 2.53.0:
 | D47 | Three concepts: **task** (record on `main`), **tasktree** (definition: the `task/<id>` branch with sources, modes, files; may exist without a checkout), **checkout** (materialization on one machine). Tasks never hold sources. Definition edits (`add/remove/mode -t`, templates) work without a checkout by writing the hub branch directly (hub lock, temporary index, `commit-tree`, compare-and-swap `update-ref`); base commits resolve from the bare cache (fetch, no clone). With a local checkout, the checkout path is used |
 | D48 | `tt2 new` creates only a record (plus optional `--open`); repos come from `add -t` or a template |
 | D49 | Template = `task:` (record fields) + optional `tasktree:` (`repos`, `symlinks`, `files`, `bootstrap`) → record + tasktree definition; V1 parameters and `{{var}}` syntax kept |
-| D50 | Templates TP1–TP6: only `~/.tasktree/templates/` + builtins (`bugfix`, `feature`, `investigation`; user overrides builtin); `aibm-general` converted by hand; `template list/show/validate`; V1 variable precedence, provenance in the first log entry; `--template` with `--parent` only for record-only templates |
+| D50 | Templates TP1–TP6: only `~/.tasktree/templates/` + builtins (`bugfix`, `feature`, `investigation`; user overrides builtin); a private template converted by hand; `template list/show/validate`; V1 variable precedence, provenance in the first log entry; `--template` with `--parent` only for record-only templates |
 | D51 | A second machine can always join: `setup --remote` clones the hub when none exists; the first merge of unrelated `main` histories requires `sync --allow-unrelated`, then the semantic merge applies (random ids → no file collisions; duplicate handles reported by `doctor`) |
 | D52 | Description and scalar-field conflicts keep the local value, log the remote value as a `comment` entry, and set frontmatter `conflict: <field>` (shown by list/info/doctor; cleared by `info edit`/`info set`); labels and refs merge as 3-way sets |
 | D53 | Only `open` (fetch `task/<id>` + `main` when missing/behind) and closing (push `task/<id>` + `main`) touch the remote implicitly, best-effort; all other writes wait for `sync`; `sync` outside a tasktree = `sync --all` |
