@@ -16,6 +16,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/tinmancoding/tasktree/v2/internal/app"
+	"github.com/tinmancoding/tasktree/v2/internal/bootstrap"
 	"github.com/tinmancoding/tasktree/v2/internal/home"
 	"github.com/tinmancoding/tasktree/v2/internal/hub"
 	"github.com/tinmancoding/tasktree/v2/internal/output"
@@ -1329,7 +1330,7 @@ func modeCmd(o *options) *cobra.Command {
 }
 func bootstrapCmd(o *options) *cobra.Command {
 	var ref string
-	c := &cobra.Command{Use: "bootstrap", Short: "Run the tasktree bootstrap steps", Args: exact(0), RunE: func(cmd *cobra.Command, args []string) error {
+	runSteps := func(cmd *cobra.Command, args []string) error {
 		a, e := o.application()
 		if e != nil {
 			return e
@@ -1339,8 +1340,93 @@ func bootstrapCmd(o *options) *cobra.Command {
 			return e
 		}
 		return a.Bootstrap(cmd.Context(), id, root, o.err)
+	}
+	c := &cobra.Command{Use: "bootstrap", Short: "Run, add, remove, or list the tasktree bootstrap steps", Args: exact(0), RunE: runSteps}
+	c.PersistentFlags().StringVarP(&ref, "task", "t", "", "task handle or id")
+	// target resolves a structural command to a checkout or, with -t, a
+	// definition without one (D45, D47).
+	target := func(a app.App) (string, string, error) {
+		id, root, e := a.ResolveTreeTarget(ref, "")
+		if e != nil {
+			if errors.Is(e, os.ErrNotExist) {
+				return "", "", notInTasktreeError{}
+			}
+			return "", "", e
+		}
+		if root == "" && ref == "" {
+			return "", "", notInTasktreeError{}
+		}
+		return id, root, nil
+	}
+	run := &cobra.Command{Use: "run", Short: "Run the tasktree bootstrap steps", Args: exact(0), RunE: runSteps}
+	var workdir string
+	var envPairs []string
+	add := &cobra.Command{Use: "add <name> <run>", Short: "Add a bootstrap step and commit it", Args: exact(2), RunE: func(cmd *cobra.Command, args []string) error {
+		env, e := app.ParseEnvAssignments(envPairs)
+		if e != nil {
+			return e
+		}
+		step := bootstrap.Step{Name: args[0], Run: args[1], Workdir: workdir, Env: env}
+		if e = app.ValidateBootstrapStep(step); e != nil {
+			return e
+		}
+		a, e := o.application()
+		if e != nil {
+			return e
+		}
+		id, root, e := target(a)
+		if e != nil {
+			return e
+		}
+		if e = a.BootstrapAdd(cmd.Context(), id, root, step); e != nil {
+			return e
+		}
+		fmt.Fprintf(o.out, "added bootstrap step %s\n", args[0])
+		return nil
 	}}
-	c.Flags().StringVarP(&ref, "task", "t", "", "task handle or id")
+	add.Flags().StringVar(&workdir, "workdir", "", "working directory relative to the tasktree root")
+	add.Flags().StringArrayVar(&envPairs, "env", nil, "environment variable KEY=VALUE (repeatable)")
+	rm := &cobra.Command{Use: "rm <name>", Short: "Remove a bootstrap step and commit the change", Args: exact(1), RunE: func(cmd *cobra.Command, args []string) error {
+		a, e := o.application()
+		if e != nil {
+			return e
+		}
+		id, root, e := target(a)
+		if e != nil {
+			return e
+		}
+		if e = a.BootstrapRemove(cmd.Context(), id, root, args[0]); e != nil {
+			return e
+		}
+		fmt.Fprintf(o.out, "removed bootstrap step %s\n", args[0])
+		return nil
+	}}
+	var j bool
+	list := &cobra.Command{Use: "list", Short: "List bootstrap steps", Args: exact(0), RunE: func(cmd *cobra.Command, args []string) error {
+		a, e := o.application()
+		if e != nil {
+			return e
+		}
+		id, root, e := target(a)
+		if e != nil {
+			return e
+		}
+		steps, e := a.BootstrapSteps(cmd.Context(), id, root)
+		if e != nil {
+			return e
+		}
+		if j {
+			return json.NewEncoder(o.out).Encode(steps)
+		}
+		tw := newTable(o.out)
+		fmt.Fprintln(tw, "NAME\tWORKDIR\tRUN")
+		for _, s := range steps {
+			fmt.Fprintf(tw, "%s\t%s\t%s\n", s.Name, s.Workdir, s.Run)
+		}
+		return tw.Flush()
+	}}
+	list.Flags().BoolVar(&j, "json", false, "emit JSON")
+	c.AddCommand(run, add, rm, list)
 	return c
 }
 func focusCmd(o *options) *cobra.Command {

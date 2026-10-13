@@ -508,3 +508,98 @@ task:
 	expectCode(t, 2, "", "new", "--template", tpl, "n=bad", "--jira", "bad key")
 	expectCode(t, 2, "cannot be used with --template", "new", "--template", tpl, "n=bad", "--parent", "plain-two", "--isolated")
 }
+
+// DN4: bootstrap add/rm/list on a checkout (structural commit + hub push) and
+// on a definition without a checkout (plumbing write); run still works.
+func TestBootstrapAddRmListBothPaths(t *testing.T) {
+	f := newCloseFixture(t)
+	_, id, root := createAndOpen(t, "Boot", filepath.Join(f.tasks, "boot"))
+	hubDir := filepath.Join(f.home, "git")
+	if err := os.Chdir(root); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := run(t, "bootstrap", "add", "greet", "echo hi > greeted && echo \"$WHO\" > who", "--env", "WHO=world", "--env", "EQ=a=b"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := run(t, "bootstrap", "add", "second", "true"); err != nil {
+		t.Fatal(err)
+	}
+	cfg := gitRun(t, hubDir, "show", "task/"+id+":.tasktree/config.yml")
+	if !strings.Contains(cfg, "name: greet") || !strings.Contains(cfg, "EQ: a=b") || !strings.Contains(cfg, "taskId: "+id) {
+		t.Fatalf("hub config:\n%s", cfg)
+	}
+	if subject := gitRun(t, hubDir, "log", "-1", "--format=%s", "task/"+id); !strings.Contains(subject, "bootstrap add second") {
+		t.Fatalf("subject=%q", subject)
+	}
+	out, _, err := run(t, "bootstrap", "list", "--json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var steps []map[string]any
+	if err = json.Unmarshal([]byte(out), &steps); err != nil || len(steps) != 2 || steps[0]["name"] != "greet" || steps[1]["workdir"] != "" {
+		t.Fatalf("list: %v %s", err, out)
+	}
+	if env, _ := steps[0]["env"].(map[string]any); env["WHO"] != "world" {
+		t.Fatalf("env: %s", out)
+	}
+	// Both the bare command and `run` execute the steps.
+	for _, args := range [][]string{{"bootstrap"}, {"bootstrap", "run"}} {
+		os.Remove(filepath.Join(root, "greeted"))
+		if _, _, err = run(t, args...); err != nil {
+			t.Fatal(err)
+		}
+		if b, e := os.ReadFile(filepath.Join(root, "who")); e != nil || strings.TrimSpace(string(b)) != "world" {
+			t.Fatalf("%v: %v %q", args, e, b)
+		}
+	}
+	// Validation.
+	expectCode(t, 2, "already exists", "bootstrap", "add", "greet", "true")
+	expectCode(t, 2, "inside the tasktree root", "bootstrap", "add", "x", "true", "--workdir", "../out")
+	expectCode(t, 2, "relative", "bootstrap", "add", "x", "true", "--workdir", "/tmp")
+	expectCode(t, 2, "invalid --env", "bootstrap", "add", "x", "true", "--env", "1BAD=v")
+	expectCode(t, 2, "invalid --env", "bootstrap", "add", "x", "true", "--env", "NOEQUALS")
+	expectCode(t, 3, "not found", "bootstrap", "rm", "missing")
+	if _, _, err = run(t, "bootstrap", "rm", "second"); err != nil {
+		t.Fatal(err)
+	}
+	if cfg = gitRun(t, hubDir, "show", "task/"+id+":.tasktree/config.yml"); strings.Contains(cfg, "second") {
+		t.Fatalf("rm not committed:\n%s", cfg)
+	}
+
+	// Definition path: no checkout, -t required.
+	if err = os.Chdir(f.base); err != nil {
+		t.Fatal(err)
+	}
+	out, _, err = run(t, "new", "Defined boot", "--handle", "defined-boot")
+	if err != nil {
+		t.Fatal(err)
+	}
+	did := strings.Fields(out)[1]
+	expectCode(t, 4, "", "bootstrap", "add", "x", "true")
+	if _, _, err = run(t, "bootstrap", "add", "deps", "make deps", "--workdir", "api", "-t", "defined-boot"); err != nil {
+		t.Fatal(err)
+	}
+	if cfg = gitRun(t, hubDir, "show", "task/"+did+":.tasktree/config.yml"); !strings.Contains(cfg, "name: deps") || !strings.Contains(cfg, "workdir: api") {
+		t.Fatalf("definition config:\n%s", cfg)
+	}
+	if out, _, err = run(t, "bootstrap", "list", "-t", "defined-boot"); err != nil || !strings.Contains(out, "deps") || !strings.Contains(out, "make deps") {
+		t.Fatalf("definition list: %v %s", err, out)
+	}
+	if _, _, err = run(t, "bootstrap", "rm", "deps", "-t", "defined-boot"); err != nil {
+		t.Fatal(err)
+	}
+	if out, _, _ = run(t, "bootstrap", "list", "-t", "defined-boot", "--json"); out != "[]\n" {
+		t.Fatalf("empty list: %q", out)
+	}
+	// Opening materializes the definition's steps (workdir must exist, so use none).
+	if _, _, err = run(t, "bootstrap", "add", "mark", "echo ok > opened", "-t", "defined-boot"); err != nil {
+		t.Fatal(err)
+	}
+	opened, _, err := run(t, "open", "defined-boot", "--path", filepath.Join(f.tasks, "defined-boot"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = os.Stat(filepath.Join(strings.TrimSpace(opened), "opened")); err != nil {
+		t.Fatalf("definition bootstrap step did not run on open: %v", err)
+	}
+}
