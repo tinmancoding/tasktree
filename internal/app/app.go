@@ -311,6 +311,30 @@ func (a App) List(all bool, statuses []string) ([]record.Task, error) {
 // ListFiltered returns matching tasks with direct-subtask progress derived from
 // all records, rather than just the filtered result set.
 func (a App) ListFiltered(all bool, statuses, labels []string) ([]record.Task, error) {
+	return a.ListFilteredRefs(all, statuses, labels, nil)
+}
+
+// ParseRefFilter parses a --ref <type>:<value> filter (DN2). The value is
+// everything after the first colon, so URLs keep theirs.
+func ParseRefFilter(s string) (record.Ref, error) {
+	typ, value, ok := strings.Cut(s, ":")
+	if !ok || value == "" || (typ != "jira" && typ != "pr" && typ != "url") {
+		return record.Ref{}, ValidationError{fmt.Sprintf("invalid --ref %q (expected jira:<key>, pr:<owner/repo#N>, or url:<url>)", s)}
+	}
+	return record.Ref{Type: typ, Value: value}, nil
+}
+
+// ListFilteredRefs is ListFiltered plus exact --ref matches; every label and
+// every ref must match (AND).
+func (a App) ListFilteredRefs(all bool, statuses, labels, refs []string) ([]record.Task, error) {
+	wantedRefs := make([]record.Ref, 0, len(refs))
+	for _, r := range refs {
+		parsed, err := ParseRefFilter(r)
+		if err != nil {
+			return nil, err
+		}
+		wantedRefs = append(wantedRefs, parsed)
+	}
 	docs, err := a.Hub.ReadAll()
 	if err != nil {
 		return nil, err
@@ -333,6 +357,19 @@ func (a App) ListFiltered(all bool, statuses, labels []string) ([]record.Task, e
 			found := false
 			for _, have := range d.Task.Labels {
 				if have == label {
+					found = true
+					break
+				}
+			}
+			if !found {
+				include = false
+				break
+			}
+		}
+		for _, want := range wantedRefs {
+			found := false
+			for _, have := range d.Task.Refs {
+				if have.Type == want.Type && have.Value == want.Value {
 					found = true
 					break
 				}

@@ -280,13 +280,13 @@ func newCmd(o *options) *cobra.Command {
 }
 func listCmd(o *options) *cobra.Command {
 	var all, j bool
-	var statuses, labels []string
+	var statuses, labels, refs []string
 	c := &cobra.Command{Use: "list", Short: "List tasks (open tasks by default)", Long: "List tasks and local definition/checkout state. A ! suffix on STATUS marks unacknowledged sync conflicts; info shows their fields. Acknowledge a field with info ack <field>; info set and info edit also clear the field they change.", Args: exact(0), RunE: func(cmd *cobra.Command, args []string) error {
 		a, e := o.application()
 		if e != nil {
 			return e
 		}
-		tasks, e := a.ListFiltered(all, statuses, labels)
+		tasks, e := a.ListFilteredRefs(all, statuses, labels, refs)
 		if e != nil {
 			return e
 		}
@@ -370,6 +370,7 @@ func listCmd(o *options) *cobra.Command {
 	c.Flags().BoolVar(&all, "all", false, "include closed tasks")
 	c.Flags().StringSliceVar(&statuses, "status", nil, "filter by status (repeatable)")
 	c.Flags().StringSliceVar(&labels, "label", nil, "filter by label (repeatable, AND)")
+	c.Flags().StringArrayVar(&refs, "ref", nil, "filter by exact ref <jira|pr|url>:<value> (repeatable, AND)")
 	c.Flags().BoolVar(&j, "json", false, "emit JSON")
 	return c
 }

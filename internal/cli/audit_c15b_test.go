@@ -1,6 +1,7 @@
 package cli_test
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -210,5 +211,53 @@ func TestAliasCommands(t *testing.T) {
 	o, _, _ := run(t, "alias", "list", "--json")
 	if !strings.HasPrefix(o, "[") {
 		t.Fatal(o)
+	}
+}
+
+// DN2: list --ref filters by exact typed ref, repeatable, AND.
+func TestListRefFilter(t *testing.T) {
+	setupRecords(t)
+	newRecord(t, "One", "one", "--jira", "ABC-1")
+	newRecord(t, "Two", "two", "--jira", "ABC-2")
+	newRecord(t, "Three", "three")
+	if _, _, err := run(t, "ref", "add", "pr", "org/repo#7", "-t", "one"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := run(t, "ref", "add", "url", "https://example.com/a,b?x=1", "-t", "two"); err != nil {
+		t.Fatal(err)
+	}
+	handles := func(args ...string) string {
+		t.Helper()
+		out, _, err := run(t, append([]string{"list", "--json"}, args...)...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var rows []struct{ Handle string }
+		if err = json.Unmarshal([]byte(out), &rows); err != nil {
+			t.Fatal(err)
+		}
+		var hs []string
+		for _, r := range rows {
+			hs = append(hs, r.Handle)
+		}
+		return strings.Join(hs, ",")
+	}
+	for _, c := range []struct {
+		want string
+		args []string
+	}{
+		{"one", []string{"--ref", "jira:ABC-1"}},
+		{"one", []string{"--ref", "jira:ABC-1", "--ref", "pr:org/repo#7"}},
+		{"", []string{"--ref", "jira:ABC-2", "--ref", "pr:org/repo#7"}},
+		{"two", []string{"--ref", "url:https://example.com/a,b?x=1"}},
+		{"", []string{"--ref", "jira:ABC"}}, // exact, not prefix
+		{"", []string{"--ref", "pr:ABC-1"}}, // type matters
+	} {
+		if got := handles(c.args...); got != c.want {
+			t.Errorf("%v → %q, want %q", c.args, got, c.want)
+		}
+	}
+	for _, bad := range []string{"ABC-1", "jira:", "ticket:ABC-1", ":x"} {
+		expectCode(t, 2, "invalid --ref", "list", "--ref", bad)
 	}
 }
