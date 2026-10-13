@@ -180,7 +180,7 @@ func (a App) editBootstrap(ctx context.Context, id, root, summary string, edit f
 		if err = a.writeRootConfig(root, cfg); err != nil {
 			return err
 		}
-		return a.commitRoot(ctx, id, root, message)
+		return a.commitRoot(ctx, id, root, message, ".tasktree/config.yml")
 	}
 	return a.editDefinition(ctx, id, message, func(ms []module, f map[string]string) ([]module, map[string]string, error) {
 		cfg, _, err := a.definitionConfig(ctx, id)

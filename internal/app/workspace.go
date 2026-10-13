@@ -829,7 +829,7 @@ func (a App) Add(ctx context.Context, id, root string, o AddOptions) (AddResult,
 	}
 	git(ctx, g, "", "config", "-f", gm, "submodule."+o.Name+".tasktree-mode", mode)
 	registerAliases(store, o.URL, &r)
-	if e = a.commitRoot(ctx, id, root, fmt.Sprintf("tasktree(%s): add %s", id, o.Name)); e != nil {
+	if e = a.commitRoot(ctx, id, root, fmt.Sprintf("tasktree(%s): add %s", id, o.Name), ".gitmodules", o.Name); e != nil {
 		// If commit succeeded but push failed, preserve the committed submodule.
 		if _, _, committedErr := rootGit(ctx, g, a.Home, id, root, "cat-file", "-e", "HEAD:"+o.Name); committedErr == nil {
 			cleanup = false
@@ -903,9 +903,16 @@ func (a App) commitRootMessage(ctx context.Context, id, root, msg string) error 
 	return err
 }
 
-func (a App) commitRoot(ctx context.Context, id, root, msg string) error {
+// commitRoot records a structural change made by the tool. Only the paths the
+// tool changed are staged, so unrelated user edits in the root are never swept
+// into a tool commit (the tool commits what it changed; D13′, D14).
+func (a App) commitRoot(ctx context.Context, id, root, msg string, paths ...string) error {
 	g := a.Git.WithDefaults()
-	if _, _, e := rootGit(ctx, g, a.Home, id, root, "add", "-A"); e != nil {
+	if len(paths) == 0 {
+		return fmt.Errorf("internal error: structural commit without paths")
+	}
+	args := append([]string{"add", "-A", "--"}, paths...)
+	if _, _, e := rootGit(ctx, g, a.Home, id, root, args...); e != nil {
 		return e
 	}
 	if e := a.commitRootMessage(ctx, id, root, msg); e != nil {
@@ -1313,7 +1320,7 @@ func (a App) Mode(ctx context.Context, id, root, name, mode string) error {
 	if _, _, err = git(ctx, g, "", "config", "-f", gm, "submodule."+name+".tasktree-mode", mode); err != nil {
 		return err
 	}
-	return a.commitRoot(ctx, id, root, fmt.Sprintf("tasktree(%s): mode %s %s", id, name, mode))
+	return a.commitRoot(ctx, id, root, fmt.Sprintf("tasktree(%s): mode %s %s", id, name, mode), ".gitmodules")
 }
 
 func (a App) Focus(root, ref string, clear bool) (record.Task, error) {
