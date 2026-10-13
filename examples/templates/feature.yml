@@ -1,0 +1,17 @@
+# yaml-language-server: $schema=../../schema/template.schema.json
+apiVersion: tasktree.dev/v2
+kind: Template
+metadata:
+  name: feature
+  description: Single-repository feature tasktree
+parameters:
+  - {name: feature_name, required: true, description: Feature name}
+  - {name: repo, required: true, description: Repository alias or URL}
+  - {name: base_branch, default: main, description: Base branch}
+task:
+  title: "{{feature_name}}"
+  handle: "feature-{{feature_name}}"
+  labels: [feature]
+tasktree:
+  repos:
+    - {repo: "{{repo}}", branch: "feature/{{feature_name}}", from: "{{base_branch}}"}

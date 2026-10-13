@@ -1,34 +1,17 @@
-apiVersion: tasktree.dev/v1
+# yaml-language-server: $schema=../../schema/template.schema.json
+apiVersion: tasktree.dev/v2
 kind: Template
-
 metadata:
   name: investigation
-  description: Single-repo investigation workspace (read-only)
-
+  description: Single-repository investigation tasktree
 parameters:
-  - name: ticket_number
-    required: true
-    description: Investigation ticket
-  - name: repo
-    required: true
-    description: Repository to investigate
-  - name: ref
-    default: main
-    description: Branch/tag/commit to investigate
-
-template:
-  metadata:
-    name: "investigate-{{ticket_number}}"
-    annotations:
-      ticket: "{{ticket_number}}"
-      type: investigation
-      readonly: "true"
-
-  spec:
-    sources:
-      - name: repo
-        type: git
-        git:
-          url: "{{repo}}"
-          ref: "{{ref}}"
-          # No branch - detached HEAD for investigation
+  - {name: ticket_number, required: true, description: Investigation ticket}
+  - {name: repo, required: true, description: Repository alias or URL}
+  - {name: ref, default: main, description: "Branch, tag, or commit"}
+task:
+  title: "Investigate {{ticket_number}}"
+  handle: "investigate-{{ticket_number}}"
+  labels: [investigation]
+tasktree:
+  repos:
+    - {repo: "{{repo}}", from: "{{ref}}"}

@@ -13,6 +13,7 @@ import (
 	"github.com/santhosh-tekuri/jsonschema/v6"
 	"github.com/tinmancoding/tasktree/v2/internal/app"
 	"github.com/tinmancoding/tasktree/v2/internal/bootstrap"
+	"github.com/tinmancoding/tasktree/v2/internal/home"
 	"github.com/tinmancoding/tasktree/v2/internal/record"
 	"github.com/tinmancoding/tasktree/v2/internal/template"
 	"gopkg.in/yaml.v3"
@@ -183,5 +184,53 @@ func TestGeneratedConfigValidates(t *testing.T) {
 func TestV1SchemaRemoved(t *testing.T) {
 	if _, err := os.Stat(filepath.Join("..", "..", "schema", "tasktree.schema.json")); !os.IsNotExist(err) {
 		t.Fatalf("V1 Tasktree.yml schema must be deleted: %v", err)
+	}
+}
+
+// The files in examples/templates are what the docs point at: they must pass
+// the JSON Schema and the tool's own validation and rendering, and the three
+// that mirror a built-in must stay in step with it.
+func TestExampleTemplates(t *testing.T) {
+	schema := compile(t, "template.schema.json")
+	dir := filepath.Join("..", "..", "examples", "templates")
+	files, err := filepath.Glob(filepath.Join(dir, "*.yml"))
+	if err != nil || len(files) != 4 {
+		t.Fatalf("example templates: %v (%d files)", err, len(files))
+	}
+	builtins := map[string]template.Spec{}
+	all, err := template.New(t.TempDir()).List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range all {
+		builtins[s.Metadata.Name] = s
+	}
+	store := template.New(t.TempDir())
+	for _, f := range files {
+		s, err := store.Load(f)
+		if err != nil {
+			t.Errorf("%s: %v", f, err)
+			continue
+		}
+		if err = schema.Validate(jsonValue(t, s.Raw)); err != nil {
+			t.Errorf("%s: schema: %v", f, err)
+		}
+		if err = template.Validate(s); err != nil {
+			t.Errorf("%s: %v", f, err)
+		}
+		if b, ok := builtins[s.Metadata.Name]; ok {
+			body := strings.TrimPrefix(string(s.Raw), strings.SplitAfterN(string(s.Raw), "\n", 2)[0])
+			if body != string(b.Raw) {
+				t.Errorf("%s differs from the built-in %s template", f, s.Metadata.Name)
+			}
+		}
+	}
+	a := app.App{Home: home.Home{Root: t.TempDir()}}
+	r, err := a.RenderTemplate(filepath.Join(dir, "fullstack-feature.yml"), []string{"feature_name=export"})
+	if err != nil {
+		t.Fatalf("render fullstack-feature: %v", err)
+	}
+	if r.Spec.Task.Handle != "feature-export" || len(r.Spec.Tasktree.Repos) != 2 || len(r.Spec.Tasktree.Symlinks) != 1 || len(r.Spec.Tasktree.Files) != 2 || len(r.Spec.Tasktree.Bootstrap) != 2 {
+		t.Fatalf("unexpected rendering: %+v", r.Spec)
 	}
 }
