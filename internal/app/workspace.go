@@ -829,48 +829,46 @@ func (a App) Add(ctx context.Context, id, root string, o AddOptions) (AddResult,
 	return r, nil
 }
 func registerAliases(s repoalias.Store, url string, r *AddResult) {
-	f, e := s.Load()
-	if e != nil {
-		return
-	}
-	base := deriveName(url)
-	owner := strings.TrimSuffix(strings.TrimRight(url, "/"), ".git")
-	parts := strings.FieldsFunc(owner, func(x rune) bool { return x == '/' || x == ':' })
-	aliases := []string{base}
-	if len(parts) > 1 {
-		aliases = append(aliases, parts[len(parts)-2]+"-"+base)
-	}
-	for _, alias := range aliases {
-		conflict := ""
-		idx := -1
-		for i, x := range f.Repos {
-			if x.URL == url {
-				idx = i
-			}
-			for _, a := range x.Aliases {
-				if a == alias && x.URL != url {
-					conflict = x.URL
+	_ = s.Update(func(f *repoalias.File) error {
+		base := deriveName(url)
+		owner := strings.TrimSuffix(strings.TrimRight(url, "/"), ".git")
+		parts := strings.FieldsFunc(owner, func(x rune) bool { return x == '/' || x == ':' })
+		aliases := []string{base}
+		if len(parts) > 1 {
+			aliases = append(aliases, parts[len(parts)-2]+"-"+base)
+		}
+		for _, alias := range aliases {
+			conflict := ""
+			idx := -1
+			for i, x := range f.Repos {
+				if x.URL == url {
+					idx = i
+				}
+				for _, a := range x.Aliases {
+					if a == alias && x.URL != url {
+						conflict = x.URL
+					}
 				}
 			}
+			if conflict != "" {
+				r.Messages = append(r.Messages, fmt.Sprintf("alias %s conflicts with %s", alias, conflict))
+				continue
+			}
+			if idx < 0 {
+				f.Repos = append(f.Repos, repoalias.Repo{URL: url})
+				idx = len(f.Repos) - 1
+			}
+			found := false
+			for _, a := range f.Repos[idx].Aliases {
+				found = found || a == alias
+			}
+			if !found {
+				f.Repos[idx].Aliases = append(f.Repos[idx].Aliases, alias)
+				r.Messages = append(r.Messages, "registered alias "+alias)
+			}
 		}
-		if conflict != "" {
-			r.Messages = append(r.Messages, fmt.Sprintf("alias %s conflicts with %s", alias, conflict))
-			continue
-		}
-		if idx < 0 {
-			f.Repos = append(f.Repos, repoalias.Repo{URL: url})
-			idx = len(f.Repos) - 1
-		}
-		found := false
-		for _, a := range f.Repos[idx].Aliases {
-			found = found || a == alias
-		}
-		if !found {
-			f.Repos[idx].Aliases = append(f.Repos[idx].Aliases, alias)
-			r.Messages = append(r.Messages, "registered alias "+alias)
-		}
-	}
-	_ = s.Save(f)
+		return nil
+	})
 }
 
 // commitRootMessage commits with an identity resolved in the root clone's

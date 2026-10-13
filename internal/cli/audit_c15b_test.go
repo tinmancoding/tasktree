@@ -162,3 +162,53 @@ func TestInfoAckAndStatusRemovedFromInfoSet(t *testing.T) {
 		t.Fatalf("after set: %+v", got)
 	}
 }
+
+// DN1: alias add/rm/list with V1 semantics.
+func TestAliasCommands(t *testing.T) {
+	setupRecords(t)
+	if out, _, err := run(t, "alias", "list", "--json"); err != nil || out != "[]\n" {
+		t.Fatalf("empty list: %v %q", err, out)
+	}
+	if _, _, err := run(t, "alias", "add", "api", "git@example.com:org/api.git"); err != nil {
+		t.Fatal(err)
+	}
+	// Same alias → same URL is a no-op.
+	out, _, err := run(t, "alias", "add", "api", "git@example.com:org/api.git")
+	if err != nil || !strings.Contains(out, "unchanged") {
+		t.Fatalf("repeat add: %v %q", err, out)
+	}
+	// Alias used by another URL → conflict (5).
+	expectCode(t, 5, "already used", "alias", "add", "api", "git@example.com:org/other.git")
+	expectCode(t, 2, "", "alias", "add", "a/b", "git@example.com:org/x.git")
+	expectCode(t, 3, "not found", "alias", "rm", "missing")
+	if _, _, err = run(t, "alias", "add", "web", "git@example.com:org/web.git"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err = run(t, "alias", "add", "api2", "git@example.com:org/api.git"); err != nil {
+		t.Fatal(err)
+	}
+	out, _, err = run(t, "alias", "list", "--json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `[{"alias":"api","url":"git@example.com:org/api.git"},{"alias":"api2","url":"git@example.com:org/api.git"},{"alias":"web","url":"git@example.com:org/web.git"}]` + "\n"
+	if out != want {
+		t.Fatalf("list --json:\n%s\nwant\n%s", out, want)
+	}
+	if _, _, err = run(t, "alias", "rm", "api2"); err != nil {
+		t.Fatal(err)
+	}
+	out, _, _ = run(t, "alias", "list")
+	if strings.Contains(out, "api2") || !strings.Contains(out, "ALIAS") || !strings.Contains(out, "web") {
+		t.Fatalf("list:\n%s", out)
+	}
+	b, err := os.ReadFile(filepath.Join(os.Getenv("TASKTREE_HOME"), "aliases.yml"))
+	if err != nil || strings.Contains(string(b), "api2") {
+		t.Fatalf("aliases.yml: %v\n%s", err, b)
+	}
+	// An alias resolves for add.
+	o, _, _ := run(t, "alias", "list", "--json")
+	if !strings.HasPrefix(o, "[") {
+		t.Fatal(o)
+	}
+}

@@ -93,7 +93,7 @@ func NewRoot(out, errOut io.Writer) *cobra.Command {
 	root.PersistentFlags().StringVarP(&o.chdir, "chdir", "C", "", "run as if started in this directory")
 	root.PersistentFlags().BoolVarP(&o.verbose, "verbose", "v", false, "print git commands")
 	root.PersistentFlags().StringVar(&o.author, "author", "", "author for log entries")
-	root.AddCommand(setupCmd(o), configCmd(o), newCmd(o), listCmd(o), infoCmd(o), noteCmd(o), markCmd(o), refCmd(o), labelCmd(o), historyCmd(o), openCmd(o), addCmd(o), removeCmd(o), modeCmd(o), bootstrapCmd(o), focusCmd(o), pushCmd(o), commitCmd(o), importCmd(o), moveCmd(o), doctorCmd(o), templateCmd(o), rootCmd(o), syncCmd(o), resolveCmd(o))
+	root.AddCommand(setupCmd(o), configCmd(o), newCmd(o), listCmd(o), infoCmd(o), noteCmd(o), markCmd(o), refCmd(o), labelCmd(o), historyCmd(o), openCmd(o), addCmd(o), removeCmd(o), modeCmd(o), bootstrapCmd(o), focusCmd(o), pushCmd(o), commitCmd(o), importCmd(o), moveCmd(o), doctorCmd(o), templateCmd(o), aliasCmd(o), rootCmd(o), syncCmd(o), resolveCmd(o))
 	for _, c := range root.Commands() {
 		requireKnownSubcommand(c)
 	}
@@ -1184,6 +1184,61 @@ func templateCmd(o *options) *cobra.Command {
 			fmt.Fprintf(o.out, "template %s is valid\n", s.Metadata.Name)
 			return nil
 		}})
+	return root
+}
+
+func aliasCmd(o *options) *cobra.Command {
+	root := &cobra.Command{Use: "alias", Short: "Manage repository aliases"}
+	root.AddCommand(&cobra.Command{Use: "add <alias> <url>", Short: "Register a repository alias", Args: exact(2), RunE: func(cmd *cobra.Command, args []string) error {
+		a, e := o.application()
+		if e != nil {
+			return e
+		}
+		changed, e := a.AddAlias(args[0], args[1])
+		if e != nil {
+			return e
+		}
+		if changed {
+			fmt.Fprintf(o.out, "added alias %s -> %s\n", args[0], args[1])
+		} else {
+			fmt.Fprintf(o.out, "alias %s -> %s unchanged\n", args[0], args[1])
+		}
+		return nil
+	}}, &cobra.Command{Use: "rm <alias>", Short: "Remove a repository alias", Args: exact(1), RunE: func(cmd *cobra.Command, args []string) error {
+		a, e := o.application()
+		if e != nil {
+			return e
+		}
+		if e = a.RemoveAlias(args[0]); e != nil {
+			return e
+		}
+		fmt.Fprintf(o.out, "removed alias %s\n", args[0])
+		return nil
+	}})
+	var j bool
+	list := &cobra.Command{Use: "list", Short: "List repository aliases", Args: exact(0), RunE: func(cmd *cobra.Command, args []string) error {
+		a, e := o.application()
+		if e != nil {
+			return e
+		}
+		aliases, e := a.ListAliases()
+		if e != nil {
+			return e
+		}
+		if j {
+			enc := json.NewEncoder(o.out)
+			enc.SetEscapeHTML(false)
+			return enc.Encode(aliases)
+		}
+		tw := newTable(o.out)
+		fmt.Fprintln(tw, "ALIAS\tURL")
+		for _, x := range aliases {
+			fmt.Fprintf(tw, "%s\t%s\n", x.Alias, x.URL)
+		}
+		return tw.Flush()
+	}}
+	list.Flags().BoolVar(&j, "json", false, "emit JSON")
+	root.AddCommand(list)
 	return root
 }
 

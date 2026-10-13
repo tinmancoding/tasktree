@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 
 	"gopkg.in/yaml.v3"
 
@@ -81,6 +82,32 @@ func (s Store) Save(file File) error {
 	return fsx.AtomicWriteFile(s.path, contents, 0o644)
 }
 
+// Update runs a read-modify-write of the alias file under an exclusive lock
+// so concurrent commands cannot lose each other's changes. The lock is
+// released by the kernel if the process dies.
+func (s Store) Update(update func(*File) error) error {
+	if err := os.MkdirAll(filepath.Dir(s.path), 0o755); err != nil {
+		return fmt.Errorf("create repo alias config dir: %w", err)
+	}
+	lock, err := os.OpenFile(s.path+".lock", os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
+	if err = syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+		return err
+	}
+	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+	file, err := s.Load()
+	if err != nil {
+		return err
+	}
+	if err = update(&file); err != nil {
+		return err
+	}
+	return s.Save(file)
+}
+
 func (s Store) Resolve(name string) (string, bool, error) {
 	file, err := s.Load()
 	if err != nil {
@@ -128,6 +155,9 @@ func (f *File) normalize() {
 	}
 	cleaned := make([]Repo, 0, len(byURL))
 	for url, aliases := range byURL {
+		if len(aliases) == 0 {
+			continue
+		}
 		cleaned = append(cleaned, Repo{URL: url, Aliases: aliases})
 	}
 	sort.Slice(cleaned, func(i, j int) bool {
