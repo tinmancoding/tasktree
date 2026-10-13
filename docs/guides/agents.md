@@ -90,7 +90,7 @@ The full list is in [Exit codes](../reference/exit-codes.md).
    printf 'The login page loops when the return URL is encoded.\n' | tasktree info edit --stdin
    ```
 
-6. **Push code with `tasktree push`**, or with git inside the repository on a branch that is not `main`, `master` or `release/*`. `tasktree sync` publishes records and the root, never repository code.
+6. **Push code with `tasktree push`**, or with git inside the repository on a branch that is not `main`, `master`, `release/*` or the remote's default branch. `tasktree sync` publishes records and the root, never repository code.
 7. **Record decisions as they happen.** A `--kind decision` note costs one command and saves the next session from rediscovering it.
 
 ## Several agents at once

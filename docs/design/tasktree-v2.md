@@ -67,7 +67,9 @@ commands and flags.
   templates/                      # user templates (K5)
   aliases.yml                     # repo aliases (K1)
 
-~/Library/Caches/tasktree/repos/<sha256-of-url>   # bare clone cache, unchanged from V1 (L2)
+~/Library/Caches/tasktree/repos/<sha256-of-url>   # bare clone cache in the OS user cache dir (L2)
+                                                  # macOS: ~/Library/Caches/tasktree/repos
+                                                  # Linux: ~/.cache/tasktree/repos
 
 ~/Developer/tasks/<handle>/       # tasktree working dirs (default tasksRoot), flat (L1), no .git at root
   .tasktree/config.yml            # committed marker + config (D12)
@@ -135,8 +137,11 @@ is the only regenerable data and stays in the OS cache directory.
 - `id`: immutable, random, 6-char Crockford base32 (e.g. `k7x2mq`). Used for branch
   `task/<id>`, clone dir, and `parent` references. Collision-free across offline machines.
 - `handle`: mutable, human-facing — the Jira key if given, otherwise a slug of the title.
-  Used for directory names and CLI arguments. Duplicate handles (e.g. after sync) are a soft
-  conflict: the CLI disambiguates and `doctor` reports them.
+  Used for directory names and CLI arguments. Creating or renaming a task to a handle that
+  already exists is refused (exit 5, with a suggested free handle such as `PROJ-123-2`).
+  Duplicates can still appear after a sync merges records created on two machines; a lookup by
+  such a handle fails with exit 5 and lists the matching ids, so the task is addressed by id,
+  and `doctor` reports `duplicate-handle`.
 
 ### Statuses (D16′)
 
@@ -439,7 +444,7 @@ Targeting: inside a tasktree, commands act on its task (see target resolution); 
 | X6 | `mark <status> [--keep] [--force] [--cascade]` | Set status; closed status runs the close flow (D18, ST1) |
 | X7 | `open <handle> [--path]`, `root` | Materialize here or print path (`cd "$(tasktree open x)"`) |
 | X8 | `add`, `remove`, `mode <repo> <mode>`, `bootstrap` | Tasktree structure; `remove` uses the D18 gate |
-| X9 | `commit [-m]`, `sync [--no-repos] [--all]`, `push [repo…]` | Record and move state; `push` refuses protected branches (`main`, `master`, `release/*`) |
+| X9 | `commit [-m]`, `sync [--no-repos] [--all]`, `push [repo…]` | Record and move state; `push` refuses protected branches (`main`, `master`, `release/*`) and the remote's default branch (`origin/HEAD`) |
 | X10 | `resolve [--take local\|remote <path>]` | Root divergence across machines (replaces git in the root, P1) |
 | X11 | `alias add\|rm\|list`, `template list\|show\|validate` | Aliases and templates |
 | X12 | `import`, `move <path>`, `doctor [--fix]` | Migration, relocation (R1), health checks (R1, R2, R4, handle collisions) |
