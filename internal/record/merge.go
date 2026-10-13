@@ -80,13 +80,20 @@ func frontValues(d *Document) map[string]any {
 // order, rather than appended out of order. This is also the tie-break for
 // equal timestamps and makes subsequent fast-forwards byte-identical.
 func Merge(base, local, remote []byte, author, machine, remoteSource string) ([]byte, error) {
-	if author == "" {
+	if author == "" || strings.ContainsAny(author, "@ \t\r\n") {
 		author = "tasktree"
 	}
-	if machine == "" {
+	if machine == "" || strings.ContainsAny(machine, " \t\r\n") {
 		machine = "localhost"
 	}
 	if bytes.Equal(local, remote) {
+		return append([]byte(nil), local...), nil
+	}
+	// Preserve one-sided edits verbatim before parsing, even malformed records.
+	if bytes.Equal(local, base) {
+		return append([]byte(nil), remote...), nil
+	}
+	if bytes.Equal(remote, base) {
 		return append([]byte(nil), local...), nil
 	}
 	if local == nil {
@@ -136,14 +143,11 @@ func Merge(base, local, remote []byte, author, machine, remoteSource string) ([]
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
-	conflicts := append([]string(nil), l.Task.Conflict...)
 	baseConflicts := []string(nil)
 	if b != nil {
 		baseConflicts = b.Task.Conflict
 	}
-	if reflect.DeepEqual(l.Task.Conflict, baseConflicts) {
-		conflicts = append([]string(nil), r.Task.Conflict...)
-	}
+	conflicts := mergeSet(baseConflicts, l.Task.Conflict, r.Task.Conflict)
 	occupied := map[string]Entry{}
 	for _, e := range r.Task.Log {
 		occupied[e.ID] = e
@@ -202,9 +206,7 @@ func Merge(base, local, remote []byte, author, machine, remoteSource string) ([]
 		if reflect.DeepEqual(lv, bv) {
 			value = rv
 		} else if !reflect.DeepEqual(rv, bv) && !reflect.DeepEqual(lv, rv) {
-			if k == "title" || k == "handle" || k == "status" || k == "parent" {
-				conflict(k, rv)
-			}
+			conflict(k, rv)
 		}
 		if reflect.DeepEqual(lv, value) {
 			continue
@@ -294,8 +296,14 @@ func Merge(base, local, remote []byte, author, machine, remoteSource string) ([]
 		raw = append(raw, chunks[e.ID]...)
 	}
 	raw = replaceFront(raw, "updatedAt", at.Format("2006-01-02T15:04:05Z07:00"))
-	if _, err = Parse(raw); err != nil {
+	parsed, err := Parse(raw)
+	if err != nil {
 		return nil, err
+	}
+	// Parsing accepts hand-written preambles; generated comments must actually
+	// be recognized as entries, not silently become part of that preamble.
+	if len(parsed.Task.Log) != len(entries) {
+		return nil, fmt.Errorf("sync generated an invalid log entry header")
 	}
 	return raw, nil
 }

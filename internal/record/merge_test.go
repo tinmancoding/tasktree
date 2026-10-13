@@ -119,8 +119,8 @@ func TestSemanticUnknownFrontmatterAndCRLF(t *testing.T) {
 	if !reflect.DeepEqual(frontValues(d)["custom"], frontValues(l)["custom"]) {
 		t.Fatal("unknown conflict did not keep local")
 	}
-	if len(d.Task.Conflict) != 0 {
-		t.Fatal("unknown key should not be a flagged scalar conflict")
+	if !reflect.DeepEqual(d.Task.Conflict, []string{"custom"}) || len(d.Task.Log) != 3 {
+		t.Fatal("unknown key conflict should be flagged and audited")
 	}
 	remoteOnly := replaceFront(base, "extra", "remote")
 	result, e = Merge(base, base, remoteOnly, "a", "A", "B")
