@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/tinmancoding/tasktree/v2/internal/home"
 	"github.com/tinmancoding/tasktree/v2/internal/record"
@@ -90,6 +91,25 @@ func (a App) doctorFindings(ctx context.Context) ([]Finding, error) {
 	if cfg.Remote == "" {
 		add("no-remote", "warning", a.Home.Root, "no remote configured; ~/.tasktree is the only copy; make a backup", nil)
 	}
+	if cfg.Remote != "" && a.Hub.IsSetup() {
+		short, cancel := context.WithTimeout(ctx, 3*time.Second)
+		_, _, e := a.Git.Run(short, a.Home.GitPath(), map[string]string{"GIT_TERMINAL_PROMPT": "0"}, "ls-remote", "origin", "refs/heads/main")
+		cancel()
+		if e != nil {
+			add("remote-unreachable", "warning", cfg.Remote, "hub remote is unreachable: "+e.Error(), nil)
+		}
+		counts, _, e := git(ctx, a.Git.WithDefaults(), a.Home.GitPath(), "rev-list", "--left-right", "--count", "main...refs/remotes/origin/main")
+		if e == nil {
+			var ahead, behind int
+			fmt.Sscanf(counts, "%d %d", &ahead, &behind)
+			if ahead > 0 {
+				add("main-ahead", "warning", "main", fmt.Sprintf("%d commit(s) ahead of last fetched origin/main", ahead), nil)
+			}
+			if behind > 0 {
+				add("main-behind", "warning", "main", fmt.Sprintf("%d commit(s) behind last fetched origin/main", behind), nil)
+			}
+		}
+	}
 	if a.Hub.IsSetup() {
 		status, _, e := git(ctx, a.Git.WithDefaults(), a.Home.GitPath(), "status", "--porcelain")
 		if e != nil {
@@ -123,6 +143,9 @@ func (a App) doctorFindings(ctx context.Context) ([]Finding, error) {
 			continue
 		}
 		docs = append(docs, d)
+		if len(d.Task.Conflict) > 0 {
+			add("conflict-flag", "warning", d.Task.Handle, "unacknowledged sync conflicts: "+strings.Join(d.Task.Conflict, ", "), nil)
+		}
 	}
 	byID := map[string]*record.Document{}
 	byHandle := map[string][]string{}

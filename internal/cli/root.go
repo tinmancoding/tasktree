@@ -86,7 +86,7 @@ func NewRoot(out, errOut io.Writer) *cobra.Command {
 	root.PersistentFlags().StringVarP(&o.chdir, "chdir", "C", "", "run as if started in this directory")
 	root.PersistentFlags().BoolVarP(&o.verbose, "verbose", "v", false, "print git commands")
 	root.PersistentFlags().StringVar(&o.author, "author", "", "author for log entries")
-	root.AddCommand(setupCmd(o), configCmd(o), newCmd(o), listCmd(o), infoCmd(o), noteCmd(o), markCmd(o), refCmd(o), labelCmd(o), historyCmd(o), openCmd(o), addCmd(o), removeCmd(o), modeCmd(o), bootstrapCmd(o), focusCmd(o), pushCmd(o), commitCmd(o), importCmd(o), moveCmd(o), doctorCmd(o), templateCmd(o), rootCmd(o))
+	root.AddCommand(setupCmd(o), configCmd(o), newCmd(o), listCmd(o), infoCmd(o), noteCmd(o), markCmd(o), refCmd(o), labelCmd(o), historyCmd(o), openCmd(o), addCmd(o), removeCmd(o), modeCmd(o), bootstrapCmd(o), focusCmd(o), pushCmd(o), commitCmd(o), importCmd(o), moveCmd(o), doctorCmd(o), templateCmd(o), rootCmd(o), syncCmd(o), resolveCmd(o))
 	return root
 }
 func (o *options) application() (app.App, error) {
@@ -162,7 +162,7 @@ func configCmd(o *options) *cobra.Command {
 		if e != nil {
 			return e
 		}
-		return a.ConfigSet(args[0], args[1])
+		return a.ConfigSetContext(cmd.Context(), args[0], args[1])
 	}})
 	return root
 }
@@ -254,7 +254,7 @@ func newCmd(o *options) *cobra.Command {
 func listCmd(o *options) *cobra.Command {
 	var all, j bool
 	var statuses, labels []string
-	c := &cobra.Command{Use: "list", Short: "List tasks (open tasks by default)", Args: exact(0), RunE: func(cmd *cobra.Command, args []string) error {
+	c := &cobra.Command{Use: "list", Short: "List tasks (open tasks by default)", Long: "List tasks and local definition/checkout state. A ! suffix on STATUS marks unacknowledged sync conflicts; info shows their fields. Acknowledge a field with info set, or description with info edit.", Args: exact(0), RunE: func(cmd *cobra.Command, args []string) error {
 		a, e := o.application()
 		if e != nil {
 			return e
@@ -324,7 +324,11 @@ func listCmd(o *options) *cobra.Command {
 					treeState = "here"
 				}
 			}
-			rows = append(rows, output.TaskRow{Handle: strings.Repeat("  ", depth) + t.Handle, Status: t.Status, Title: t.Title, ID: t.ID, Parent: parent, Progress: progress, Tree: treeState})
+			status := t.Status
+			if len(t.Conflict) > 0 {
+				status += "!"
+			}
+			rows = append(rows, output.TaskRow{Handle: strings.Repeat("  ", depth) + t.Handle, Status: status, Title: t.Title, ID: t.ID, Parent: parent, Progress: progress, Tree: treeState})
 			for _, child := range children[t.ID] {
 				visit(child, depth+1)
 			}
@@ -569,7 +573,7 @@ func infoEditCmd(o *options) *cobra.Command {
 func infoSetCmd(o *options) *cobra.Command {
 	var ref string
 	var clear bool
-	c := &cobra.Command{Use: "set <field> [value]", Short: "Set a task title, handle, or parent", Args: func(cmd *cobra.Command, args []string) error {
+	c := &cobra.Command{Use: "set <field> [value]", Short: "Set a task title, handle, status, or parent (acknowledging conflicts)", Args: func(cmd *cobra.Command, args []string) error {
 		if len(args) < 1 || len(args) > 2 {
 			return usageError{"info set accepts a field and optional value"}
 		}
@@ -784,6 +788,9 @@ func pathWithin(path, root string) bool {
 
 func writeInfo(w io.Writer, t record.Task, parent string, children []record.Task, jiraBase, focus string) {
 	fmt.Fprintf(w, "ID: %s\nHandle: %s\nTitle: %s\nStatus: %s\n", t.ID, t.Handle, t.Title, t.Status)
+	if len(t.Conflict) > 0 {
+		fmt.Fprintf(w, "Conflict: %s\n", strings.Join(t.Conflict, ", "))
+	}
 	if focus != "" {
 		fmt.Fprintf(w, "Focus: %s\n", focus)
 	}

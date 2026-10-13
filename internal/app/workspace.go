@@ -358,6 +358,7 @@ type OpenOptions struct {
 }
 
 func (a App) Open(ctx context.Context, ref string, o OpenOptions, progress interface{ Write([]byte) (int, error) }) (string, error) {
+	a.pullOpenRemote(ctx, ref)
 	t, err := a.Info(ref)
 	if err != nil {
 		return "", err
@@ -566,6 +567,9 @@ func (a App) materialize(ctx context.Context, id, root string, progress interfac
 	if err != nil {
 		return err
 	}
+	return a.materializeModules(ctx, id, root, ms, progress)
+}
+func (a App) materializeModules(ctx context.Context, id, root string, ms []module, progress interface{ Write([]byte) (int, error) }) error {
 	g := a.Git.WithDefaults()
 	mgr, e := cacheManager(g)
 	if e != nil {

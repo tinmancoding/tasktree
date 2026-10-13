@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -95,8 +96,28 @@ func (a App) Setup(ctx context.Context, o SetupOptions) (home.Config, error) {
 	if err := a.Home.SaveConfig(c); err != nil {
 		return c, err
 	}
-	if err := a.Hub.Init(ctx, c.Author, c.Machine); err != nil {
-		return c, err
+	if !a.Hub.IsSetup() && c.Remote != "" {
+		if err := a.Hub.Clone(ctx, c.Remote); err != nil {
+			return c, err
+		}
+		refs, err := a.Hub.Refs(ctx, "refs/remotes/origin/task/")
+		if err != nil {
+			return c, err
+		}
+		for ref, sha := range refs {
+			if err := a.Hub.MoveRef(ctx, strings.Replace(ref, "refs/remotes/origin/", "refs/heads/", 1), sha, ""); err != nil {
+				return c, err
+			}
+		}
+	} else {
+		if err := a.Hub.Init(ctx, c.Author, c.Machine); err != nil {
+			return c, err
+		}
+		if o.RemoteSet {
+			if err := a.Hub.ConfigureRemote(ctx, c.Remote); err != nil {
+				return c, err
+			}
+		}
 	}
 	return c, nil
 }
@@ -116,17 +137,25 @@ func (a App) ConfigGet(key string) (string, error) {
 		return c.Machine, nil
 	case "jira.baseUrl":
 		return c.Jira.BaseURL, nil
+	case "sync.jobs":
+		return strconv.Itoa(c.Sync.Jobs), nil
 	default:
 		return "", fmt.Errorf("unknown config key %q", key)
 	}
 }
 func (a App) ConfigSet(key, value string) error {
+	return a.ConfigSetContext(context.Background(), key, value)
+}
+func (a App) ConfigSetContext(ctx context.Context, key, value string) error {
 	c, err := a.Home.LoadConfig()
 	if err != nil {
 		return err
 	}
 	switch key {
 	case "remote":
+		if err := a.Hub.ConfigureRemote(ctx, value); err != nil {
+			return err
+		}
 		c.Remote = value
 	case "tasksRoot":
 		c.TasksRoot = value
@@ -136,10 +165,22 @@ func (a App) ConfigSet(key, value string) error {
 		c.Machine = value
 	case "jira.baseUrl":
 		c.Jira.BaseURL = value
+	case "sync.jobs":
+		jobs, err := strconv.Atoi(value)
+		if err != nil || jobs < 1 {
+			return ValidationError{"sync.jobs must be a positive integer"}
+		}
+		c.Sync.Jobs = jobs
 	default:
 		return fmt.Errorf("unknown config key %q", key)
 	}
-	return a.Home.SaveConfig(c)
+	if err := a.Home.SaveConfig(c); err != nil {
+		return err
+	}
+	if key == "remote" && value != "" {
+		return a.pushInitialRemote(ctx)
+	}
+	return nil
 }
 
 var nonSlug = regexp.MustCompile(`[^a-z0-9]+`)
@@ -345,14 +386,19 @@ func (a App) EditDescription(ctx context.Context, ref, text string) (record.Task
 	if err != nil {
 		return record.Task{}, false, err
 	}
-	if current.Description == text {
+	if current.Description == text && !hasConflict(current, "description") {
 		return current, false, nil
 	}
 	author, machine, err := a.author()
 	if err != nil {
 		return record.Task{}, false, err
 	}
-	t, err := a.Hub.UpdateWithPostCommit(ctx, current.ID, "description updated", author, machine, func(d *record.Document) error { return d.SetDescription(text, a.Now().UTC()) }, func(task record.Task, raw []byte) { a.writeGeneratedTaskRecord(task.ID, raw) })
+	t, err := a.Hub.UpdateWithPostCommit(ctx, current.ID, "description updated", author, machine, func(d *record.Document) error {
+		if err := d.ClearConflict("description"); err != nil {
+			return err
+		}
+		return d.SetDescription(text, a.Now().UTC())
+	}, func(task record.Task, raw []byte) { a.writeGeneratedTaskRecord(task.ID, raw) })
 	return t, err == nil, err
 }
 
@@ -371,7 +417,7 @@ func (a App) SetInfo(ctx context.Context, ref, field, value string, clear bool) 
 		if value == "" {
 			return record.Task{}, false, ValidationError{"title must not be empty"}
 		}
-		if current.Title == value {
+		if current.Title == value && !hasConflict(current, "title") {
 			return current, false, nil
 		}
 		summary = "title updated"
@@ -379,7 +425,7 @@ func (a App) SetInfo(ctx context.Context, ref, field, value string, clear bool) 
 		if !handlePattern.MatchString(value) {
 			return record.Task{}, false, ValidationError{fmt.Sprintf("invalid handle %q (expected [A-Za-z0-9._-], max 64 characters)", value)}
 		}
-		if current.Handle == value {
+		if current.Handle == value && !hasConflict(current, "handle") {
 			return current, false, nil
 		}
 		for _, d := range docs {
@@ -388,6 +434,14 @@ func (a App) SetInfo(ctx context.Context, ref, field, value string, clear bool) 
 			}
 		}
 		summary = "handle updated"
+	case "status":
+		if err := record.ValidateStatus(value); err != nil {
+			return record.Task{}, false, ValidationError{err.Error()}
+		}
+		if current.Status == value && !hasConflict(current, "status") {
+			return current, false, nil
+		}
+		summary = "status acknowledged"
 	case "parent":
 		var parent *string
 		if !clear {
@@ -420,7 +474,7 @@ func (a App) SetInfo(ctx context.Context, ref, field, value string, clear bool) 
 			}
 			parent = &p.Task.ID
 		}
-		if (current.Parent == nil && parent == nil) || (current.Parent != nil && parent != nil && *current.Parent == *parent) {
+		if !hasConflict(current, "parent") && ((current.Parent == nil && parent == nil) || (current.Parent != nil && parent != nil && *current.Parent == *parent)) {
 			return current, false, nil
 		}
 		if parent == nil {
@@ -429,18 +483,23 @@ func (a App) SetInfo(ctx context.Context, ref, field, value string, clear bool) 
 			summary = "parent set to " + *parent
 		}
 	default:
-		return record.Task{}, false, ValidationError{fmt.Sprintf("unknown info field %q (expected title, handle, or parent)", field)}
+		return record.Task{}, false, ValidationError{fmt.Sprintf("unknown info field %q (expected title, handle, status, or parent)", field)}
 	}
 	author, machine, err := a.author()
 	if err != nil {
 		return record.Task{}, false, err
 	}
 	t, err := a.Hub.UpdateWithPostCommit(ctx, current.ID, summary, author, machine, func(d *record.Document) error {
+		if err := d.ClearConflict(field); err != nil {
+			return err
+		}
 		latest, readErr := a.Hub.ReadAll()
 		if readErr != nil {
 			return readErr
 		}
 		switch field {
+		case "status":
+			return d.SetStatus(value, a.Now().UTC())
 		case "title":
 			return d.SetFrontString(field, value, a.Now().UTC())
 		case "handle":
@@ -811,10 +870,16 @@ func (a App) Mark(ctx context.Context, ref, status string, o MarkOptions) (MarkR
 	checkout, checkedOut := local.Checkouts[task.ID]
 	if !checkedOut {
 		result.Task, err = a.updateStatus(ctx, task.ID, status)
+		if err == nil {
+			a.pushCloseRemote(ctx, task.ID)
+		}
 		return result, err
 	}
 	if st, statErr := os.Stat(checkout.Path); statErr != nil || !st.IsDir() {
 		result.Task, err = a.updateStatus(ctx, task.ID, status)
+		if err == nil {
+			a.pushCloseRemote(ctx, task.ID)
+		}
 		return result, err
 	}
 	result.Loss, err = a.tasktreeLoss(ctx, task.ID, checkout.Path)
@@ -838,6 +903,7 @@ func (a App) Mark(ctx context.Context, ref, status string, o MarkOptions) (MarkR
 	if err != nil {
 		return result, err
 	}
+	a.pushCloseRemote(ctx, task.ID)
 	// Recheck immediately before destructive teardown. A concurrent write after
 	// the close commit must be retained for the user to recover.
 	lateLoss, lateErr := a.tasktreeLoss(ctx, task.ID, checkout.Path)
