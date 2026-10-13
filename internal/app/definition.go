@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"github.com/tinmancoding/tasktree/v2/internal/gitx"
 	"os"
 	"strconv"
 	"strings"
@@ -372,6 +373,7 @@ func putIndexBlob(ctx context.Context, g interface {
 }
 
 func (a App) AddDefined(ctx context.Context, id string, o AddOptions) (AddResult, error) {
+	ctx = gitx.Explicit(ctx) // D59: explicit transfer, stall detection only
 	m, sha, e := a.resolveDefinitionRepo(ctx, o)
 	if e != nil {
 		return AddResult{}, e

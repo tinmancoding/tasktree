@@ -358,6 +358,7 @@ type OpenOptions struct {
 }
 
 func (a App) Open(ctx context.Context, ref string, o OpenOptions, progress interface{ Write([]byte) (int, error) }) (string, error) {
+	ctx = gitx.Explicit(ctx) // D59: explicit transfer, stall detection only
 	a.pullOpenRemote(ctx, ref)
 	t, err := a.Info(ref)
 	if err != nil {
@@ -659,6 +660,7 @@ func deriveName(url string) string {
 	return s
 }
 func (a App) Add(ctx context.Context, id, root string, o AddOptions) (AddResult, error) {
+	ctx = gitx.Explicit(ctx) // D59: explicit transfer, stall detection only
 	r := AddResult{}
 	if err := validateRootIdentity(id, root); err != nil {
 		return r, err
@@ -1714,6 +1716,7 @@ func (a App) addParentRemotes(ctx context.Context, t record.Task, root string) {
 type PushResult struct{ Name, Message, Hint string }
 
 func (a App) Push(ctx context.Context, id, root string, names []string) ([]PushResult, error) {
+	ctx = gitx.Explicit(ctx) // D59: explicit transfer, stall detection only
 	if err := validateRootIdentity(id, root); err != nil {
 		return nil, err
 	}

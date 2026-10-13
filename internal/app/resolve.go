@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"github.com/tinmancoding/tasktree/v2/internal/gitx"
 	"os"
 	"sort"
 	"strings"
@@ -23,6 +24,7 @@ type ResolveResult struct {
 // paths must have a clean git three-way result; it never silently resolves an
 // additional conflict in favor of either side.
 func (a App) Resolve(ctx context.Context, id, root, take string, paths []string) (ResolveResult, error) {
+	ctx = gitx.Explicit(ctx) // D59: explicit transfer, stall detection only
 	result := ResolveResult{LocalCommits: []string{}, RemoteCommits: []string{}, Paths: []string{}, AutoMerged: []string{}, Report: newSyncReport()}
 	if take != "" && take != "local" && take != "remote" {
 		return result, ValidationError{"--take must be local or remote"}

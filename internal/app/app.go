@@ -79,6 +79,7 @@ func (a App) MigrateV1Aliases() (bool, error) {
 }
 
 func (a App) Setup(ctx context.Context, o SetupOptions) (home.Config, error) {
+	ctx = gitx.Explicit(ctx) // D59: explicit transfer, stall detection only
 	c, err := a.Home.LoadConfig()
 	if err != nil {
 		return c, err
@@ -151,6 +152,7 @@ func (a App) ConfigSet(key, value string) error {
 	return a.ConfigSetContext(context.Background(), key, value)
 }
 func (a App) ConfigSetContext(ctx context.Context, key, value string) error {
+	ctx = gitx.Explicit(ctx) // D59: explicit transfer, stall detection only
 	c, err := a.Home.LoadConfig()
 	if err != nil {
 		return err

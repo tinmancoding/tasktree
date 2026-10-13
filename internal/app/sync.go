@@ -8,9 +8,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"time"
-
-	"github.com/tinmancoding/tasktree/v2/internal/gitx"
 
 	"github.com/tinmancoding/tasktree/v2/internal/hub"
 	"github.com/tinmancoding/tasktree/v2/internal/record"
@@ -121,11 +118,9 @@ func (a App) Sync(ctx context.Context, o SyncOptions) (report SyncReport, err er
 	if err != nil {
 		return report, err
 	}
-	timeout, err := networkTimeout(cfg.Sync.Timeout, 60*time.Second)
-	if err != nil {
+	if ctx, err = a.explicitNetworkContext(ctx); err != nil {
 		return report, err
 	}
-	ctx = gitx.WithNetworkTimeout(ctx, timeout)
 	if o.Root == "" {
 		o.All = true
 	}

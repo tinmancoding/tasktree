@@ -84,14 +84,13 @@ func (c Client) RunInput(ctx context.Context, dir string, env map[string]string,
 }
 func (c Client) runInput(ctx context.Context, dir string, env map[string]string, input io.Reader, args ...string) (string, string, error) {
 	cfg := c.withConfig()
+	execArgs := args
 	if command := transportIndex(args); command >= 0 {
-		timeout, ok := ctx.Value(networkTimeoutKey{}).(time.Duration)
-		if !ok || timeout <= 0 {
-			timeout = 10 * time.Second
+		if limit := wallClockLimit(ctx); limit > 0 {
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithTimeout(ctx, limit)
+			defer cancel()
 		}
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, timeout)
-		defer cancel()
 		networkEnv := make(map[string]string, len(env)+2)
 		for k, v := range env {
 			networkEnv[k] = v
@@ -101,12 +100,17 @@ func (c Client) runInput(ctx context.Context, dir string, env map[string]string,
 		_, supplied := env["GIT_SSH_COMMAND"]
 		if !inherited && !supplied {
 			// Respect repository/global SSH configuration, including an explicit
-			// empty command. Otherwise disable interactive SSH authentication.
+			// empty command. Otherwise disable interactive SSH authentication and
+			// detect stalled connections without bounding total transfer time.
 			if _, _, err := c.Run(ctx, dir, env, append(append([]string(nil), args[:command]...), "config", "--get", "core.sshCommand")...); err != nil {
-				networkEnv["GIT_SSH_COMMAND"] = "ssh -o BatchMode=yes"
+				networkEnv["GIT_SSH_COMMAND"] = SSHStallCommand
 			}
 		}
 		env = networkEnv
+		execArgs = make([]string, 0, len(args)+4)
+		execArgs = append(execArgs, args[:command]...)
+		execArgs = append(execArgs, HTTPStallArgs...)
+		execArgs = append(execArgs, args[command:]...)
 	}
 	if cfg.verboseWriter != nil {
 		prefix := "git"
@@ -117,7 +121,7 @@ func (c Client) runInput(ctx context.Context, dir string, env map[string]string,
 		_, _ = fmt.Fprintf(cfg.verboseWriter, "%s %s\n", prefix, formatArgs(args))
 		cfg.verboseMu.Unlock()
 	}
-	cmd := exec.CommandContext(ctx, cfg.binary, args...)
+	cmd := exec.CommandContext(ctx, cfg.binary, execArgs...)
 	// A killed git can leave an SSH/helper child holding the pipes open.
 	// Bound pipe draining as well as the lifetime of the direct process.
 	cmd.WaitDelay = 250 * time.Millisecond

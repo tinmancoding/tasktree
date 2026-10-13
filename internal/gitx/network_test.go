@@ -30,7 +30,7 @@ func TestNetworkNoninteractiveAndSSHOverrides(t *testing.T) {
 	t.Setenv("GIT_TERMINAL_PROMPT", "1")
 	t.Setenv("TEST_CORE_SSH", "")
 	out, _, e := c.Run(context.Background(), "", nil, "fetch", "origin")
-	if e != nil || out != "0\nssh -o BatchMode=yes\n" {
+	if e != nil || out != "0\n"+SSHStallCommand+"\n" {
 		t.Fatalf("defaults=%q %v", out, e)
 	}
 	t.Setenv("GIT_SSH_COMMAND", "custom-ssh")
@@ -53,7 +53,7 @@ func TestNetworkConfiguredTimeout(t *testing.T) {
 	}
 	c := Client{config: &config{binary: binary}}
 	start := time.Now()
-	_, _, e := c.Run(WithNetworkTimeout(context.Background(), 50*time.Millisecond), "", nil, "fetch", "origin")
+	_, _, e := c.Run(BestEffort(context.Background(), 50*time.Millisecond), "", nil, "fetch", "origin")
 	if e == nil || !strings.Contains(e.Error(), "deadline exceeded") || time.Since(start) > time.Second {
 		t.Fatalf("deadline=%v took %s", e, time.Since(start))
 	}
