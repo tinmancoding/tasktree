@@ -33,7 +33,7 @@ The command needs no network, except one `ls-remote` call that is limited to 10 
 | `conflict-flag` | warning | no | A record has unacknowledged sync conflicts. Use `tasktree info ack <field>` or `info set`. |
 | `duplicate-handle` | error | no | Two records share a handle, usually after a sync. Rename one with `tasktree info set handle <new> -t <id>`. |
 | `parent-missing` | error | no | A record's `parent` id has no record. Clear it with `tasktree info set parent --clear -t <handle>`. |
-| `parent-cycle` | error | no | Parent links form a loop. Break it with `info set parent --clear`. |
+| `parent-cycle` | error | no | Parent links form a loop, for example after two machines reparented tasks in opposite directions. Commands that read the task graph, such as `list` and `info`, fail with `task parent cycle detected` until you break it. The CLI cannot do that. Set `parent: null` in one record file in `~/.tasktree/git/tasks/` and commit the change there with git. |
 | `checkout-missing` | error | see below | `local.yml` records a checkout whose directory is gone. |
 | `marker-mismatch` | error | no | The directory in `local.yml` has no `.tasktree/config.yml`, or its `taskId` is another task's. Restore the right directory. |
 | `path-drift` | error | yes | A repository's `.git` file or `core.worktree` does not point at the checkout's current location, typically after the directory moved. `--fix` rewrites both. |
