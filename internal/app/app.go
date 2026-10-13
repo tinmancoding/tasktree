@@ -786,11 +786,15 @@ func (a App) refreshTaskRecord(ctx context.Context, id string) {
 	}
 	a.writeGeneratedTaskRecord(id, d.Render())
 }
-func (a App) mergeIdentity(c home.Config) (string, string) {
-	author := a.AuthorOverride
-	if author == "" {
-		author = os.Getenv("TASKTREE_AUTHOR")
+// explicitAuthor returns the author given by --author or TASKTREE_AUTHOR.
+func (a App) explicitAuthor() string {
+	if a.AuthorOverride != "" {
+		return a.AuthorOverride
 	}
+	return os.Getenv("TASKTREE_AUTHOR")
+}
+func (a App) mergeIdentity(c home.Config) (string, string) {
+	author := a.explicitAuthor()
 	if author == "" {
 		author = c.Author
 	}

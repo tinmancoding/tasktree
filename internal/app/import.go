@@ -935,13 +935,12 @@ func (a App) buildImportRecord(p ImportPlan, o ImportOptions, id string) (record
 	if err != nil {
 		return record.Task{}, nil, "", "", err
 	}
-	name, machine := cfg.Author, cfg.Machine
-	if name == "" {
-		name = "tasktree"
+	// AG2: --author, then TASKTREE_AUTHOR, then config; an explicitly supplied
+	// identity must be valid rather than silently replaced.
+	if explicit := a.explicitAuthor(); explicit != "" && !record.ValidLogIdentity(explicit, cfg.Machine) {
+		return record.Task{}, nil, "", "", ValidationError{"author and machine must be non-empty and contain no spaces or @"}
 	}
-	if machine == "" {
-		machine = "localhost"
-	}
+	name, machine := a.mergeIdentity(cfg)
 	title := p.spec.Metadata.Name
 	if title == "" {
 		title = filepath.Base(p.Path)
