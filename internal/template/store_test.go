@@ -31,3 +31,21 @@ func TestValidateUndeclaredVariable(t *testing.T) {
 		t.Fatal("expected error")
 	}
 }
+
+// A flow-mapping description with commas must be quoted, or YAML splits it
+// into stray keys (found by the M42 schema test).
+func TestInvestigationRefParameterDescription(t *testing.T) {
+	s, err := New(t.TempDir()).Load("investigation")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range s.Parameters {
+		if p.Name == "ref" {
+			if p.Description != "Branch, tag, or commit" {
+				t.Fatalf("description = %q", p.Description)
+			}
+			return
+		}
+	}
+	t.Fatal("ref parameter missing")
+}

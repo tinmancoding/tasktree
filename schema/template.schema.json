@@ -1,192 +1,104 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://tasktree.dev/schema/v1/template.schema.json",
+  "$id": "https://tasktree.dev/schema/v2/template.schema.json",
   "title": "TasktreeTemplate",
-  "description": "A workspace template file (kind: Template). Templates define reusable workspace configurations with variable substitution, reducing repetitive setup for common task patterns.",
+  "description": "A V2 template (kind: Template): a task record plus an optional tasktree definition, with {{variable}} substitution. Every variable used must be declared in parameters.",
   "type": "object",
-  "required": ["apiVersion", "kind", "metadata", "template"],
+  "required": ["apiVersion", "kind", "metadata", "task"],
   "additionalProperties": false,
   "properties": {
-    "apiVersion": {
-      "type": "string",
-      "description": "Schema version identifier. Must be 'tasktree.dev/v1'.",
-      "const": "tasktree.dev/v1"
-    },
-    "kind": {
-      "type": "string",
-      "description": "Resource kind. Must be 'Template'.",
-      "const": "Template"
-    },
+    "apiVersion": { "const": "tasktree.dev/v2" },
+    "kind": { "const": "Template" },
     "metadata": {
       "type": "object",
-      "description": "Template-level metadata.",
       "required": ["name"],
       "additionalProperties": false,
       "properties": {
-        "name": {
-          "type": "string",
-          "description": "Template name used to reference it in CLI commands (e.g., 'tasktree init --from bugfix').",
-          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_\\-]*$",
-          "minLength": 1,
-          "maxLength": 128
-        },
-        "description": {
-          "type": "string",
-          "description": "Human-readable description of the template's purpose.",
-          "maxLength": 1024
-        }
+        "name": { "type": "string", "minLength": 1, "description": "Name used by `tasktree new --template <name>`." },
+        "description": { "type": "string" }
       }
     },
     "parameters": {
       "type": "array",
-      "description": "Declared template parameters. All {{variable}} references in the template body must be listed here.",
-      "items": {
-        "$ref": "#/$defs/ParameterSpec"
-      }
+      "items": { "$ref": "#/$defs/Parameter" }
     },
-    "template": {
+    "task": {
       "type": "object",
-      "description": "The template body. May contain {{variable}} and {{variable | default:value}} references in any string field.",
-      "required": ["metadata"],
+      "description": "Record fields; any string may contain {{variables}}. --jira/--handle/--status on `new` override these.",
       "additionalProperties": false,
       "properties": {
-        "metadata": {
-          "type": "object",
-          "description": "Workspace metadata template. May contain variable references.",
-          "required": ["name"],
-          "additionalProperties": false,
-          "properties": {
-            "name": {
-              "type": "string",
-              "description": "Workspace name template. Variable references like {{ticket_number}} are resolved at init time.",
-              "minLength": 1
-            },
-            "description": {
-              "type": "string",
-              "description": "Optional workspace description template."
-            },
-            "labels": {
-              "type": "object",
-              "description": "Label templates. Values may contain variable references.",
-              "additionalProperties": { "type": "string" }
-            },
-            "annotations": {
-              "type": "object",
-              "description": "Annotation templates. Values may contain variable references.",
-              "additionalProperties": { "type": "string" }
-            }
-          }
-        },
-        "spec": {
-          "type": "object",
-          "description": "Workspace spec template.",
-          "additionalProperties": false,
-          "properties": {
-            "sources": {
-              "type": "array",
-              "description": "Source templates. Fields may contain variable references.",
-              "items": {
-                "$ref": "#/$defs/SourceSpecTemplate"
-              }
-            },
-            "bootstrap": {
-              "type": "array",
-              "description": "Bootstrap step templates. Fields may contain variable references.",
-              "items": {
-                "$ref": "#/$defs/BootstrapStepTemplate"
-              }
-            }
-          }
-        }
+        "title": { "type": "string" },
+        "handle": { "type": "string" },
+        "jira": { "type": "string" },
+        "status": { "type": "string", "description": "incoming, next, active, blocked, done or dropped after rendering." },
+        "labels": { "type": "array", "items": { "type": "string" } },
+        "description": { "type": "string" }
+      }
+    },
+    "tasktree": {
+      "type": "object",
+      "description": "Optional tasktree definition created with the task (no checkout).",
+      "additionalProperties": false,
+      "properties": {
+        "repos": { "type": "array", "items": { "$ref": "#/$defs/Repo" } },
+        "symlinks": { "type": "array", "items": { "$ref": "#/$defs/Symlink" } },
+        "files": { "type": "array", "items": { "$ref": "#/$defs/File" } },
+        "bootstrap": { "type": "array", "items": { "$ref": "#/$defs/BootstrapStep" } }
       }
     }
   },
   "$defs": {
-    "BootstrapStepTemplate": {
+    "Parameter": {
       "type": "object",
-      "description": "A bootstrap step template. String fields may contain variable references.",
-      "required": ["name", "run"],
-      "additionalProperties": false,
-      "properties": {
-        "name": { "type": "string" },
-        "run": { "type": "string" },
-        "workdir": { "type": "string" },
-        "env": {
-          "type": "object",
-          "additionalProperties": { "type": "string" }
-        }
-      }
-    },
-    "ParameterSpec": {
-      "type": "object",
-      "description": "A template parameter declaration.",
       "required": ["name"],
       "additionalProperties": false,
       "properties": {
-        "name": {
-          "type": "string",
-          "description": "Parameter name. Must match [a-z][a-z0-9_]*.",
-          "pattern": "^[a-z][a-z0-9_]*$"
-        },
-        "required": {
-          "type": "boolean",
-          "description": "If true, the parameter must be provided at init time (no default). Defaults to false.",
-          "default": false
-        },
-        "default": {
-          "type": "string",
-          "description": "Default value used when the parameter is not explicitly provided."
-        },
-        "description": {
-          "type": "string",
-          "description": "Human-readable description of this parameter's purpose."
-        }
+        "name": { "type": "string", "minLength": 1 },
+        "required": { "type": "boolean" },
+        "default": { "type": "string" },
+        "description": { "type": "string" }
       }
     },
-    "SourceSpecTemplate": {
+    "Repo": {
       "type": "object",
-      "description": "A source spec within a template. String fields may contain {{variable}} references.",
-      "required": ["name", "type"],
+      "required": ["repo"],
       "additionalProperties": false,
       "properties": {
-        "name": {
-          "type": "string",
-          "description": "Source name (may contain variable references).",
-          "minLength": 1
-        },
-        "type": {
-          "type": "string",
-          "description": "Source type discriminator.",
-          "enum": ["git", "http", "archive", "static", "local"]
-        },
-        "path": {
-          "type": "string",
-          "description": "Relative checkout path (may contain variable references)."
-        },
-        "git": {
-          "$ref": "#/$defs/GitSourceSpecTemplate"
-        }
+        "repo": { "type": "string", "minLength": 1, "description": "Alias or clone URL." },
+        "name": { "type": "string" },
+        "branch": { "type": "string" },
+        "from": { "type": "string" },
+        "mode": { "type": "string", "description": "follow, work or pin after rendering (K2 derives it when absent)." }
       }
     },
-    "GitSourceSpecTemplate": {
+    "File": {
       "type": "object",
-      "description": "Git source configuration within a template. All string fields may contain {{variable}} references.",
-      "required": ["url"],
+      "required": ["path", "content"],
       "additionalProperties": false,
       "properties": {
-        "url": {
-          "type": "string",
-          "description": "Git clone URL or alias (may contain variable references).",
-          "minLength": 1
-        },
-        "ref": {
-          "type": "string",
-          "description": "Ref to check out (may contain variable references)."
-        },
-        "branch": {
-          "type": "string",
-          "description": "Branch name to create or track (may contain variable references)."
-        }
+        "path": { "type": "string", "minLength": 1 },
+        "content": { "type": "string" },
+        "mode": { "type": "string", "description": "0644 or 0755 after rendering." }
+      }
+    },
+    "Symlink": {
+      "type": "object",
+      "required": ["path", "target"],
+      "additionalProperties": false,
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "target": { "type": "string", "minLength": 1 }
+      }
+    },
+    "BootstrapStep": {
+      "type": "object",
+      "required": ["name", "run"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "run": { "type": "string", "minLength": 1 },
+        "workdir": { "type": "string" },
+        "env": { "type": "object", "additionalProperties": { "type": "string" } }
       }
     }
   }

@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tasktree.dev/schema/v2/task-record.schema.json",
+  "title": "TasktreeTaskRecordFrontmatter",
+  "description": "YAML frontmatter of a task record (tasks/<id>.md on the hub's main branch). Unknown keys are preserved by the tool and therefore allowed.",
+  "type": "object",
+  "required": ["id", "handle", "title", "status", "createdAt", "updatedAt"],
+  "additionalProperties": true,
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "Immutable 6-character Crockford base32 id (lowercase, no i, l, o, u).",
+      "pattern": "^[0-9a-hjkmnp-tv-z]{6}$"
+    },
+    "handle": {
+      "type": "string",
+      "description": "Mutable human-facing name used for directories and CLI arguments.",
+      "pattern": "^[A-Za-z0-9._-]{1,64}$"
+    },
+    "title": { "type": "string", "minLength": 1 },
+    "status": {
+      "type": "string",
+      "enum": ["incoming", "next", "active", "blocked", "done", "dropped"]
+    },
+    "parent": {
+      "description": "Id of the parent task, or null.",
+      "oneOf": [{ "type": "null" }, { "type": "string", "pattern": "^[0-9a-hjkmnp-tv-z]{6}$" }]
+    },
+    "labels": {
+      "type": "array",
+      "items": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$" },
+      "uniqueItems": true
+    },
+    "refs": {
+      "type": "array",
+      "description": "Typed references; each item has exactly one key: jira, pr or url.",
+      "items": {
+        "type": "object",
+        "minProperties": 1,
+        "maxProperties": 1,
+        "additionalProperties": false,
+        "properties": {
+          "jira": { "type": "string", "minLength": 1 },
+          "pr": { "type": "string", "pattern": "^[^/\\s]+/[^/#\\s]+#[1-9][0-9]*$" },
+          "url": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "updatedAt": { "type": "string", "format": "date-time" },
+    "conflict": {
+      "type": "array",
+      "description": "Fields with an unacknowledged sync conflict; cleared by `tasktree info ack`.",
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true
+    }
+  }
+}

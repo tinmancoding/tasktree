@@ -6,7 +6,7 @@ metadata:
 parameters:
   - {name: ticket_number, required: true, description: Investigation ticket}
   - {name: repo, required: true, description: Repository alias or URL}
-  - {name: ref, default: main, description: Branch, tag, or commit}
+  - {name: ref, default: main, description: "Branch, tag, or commit"}
 task:
   title: "Investigate {{ticket_number}}"
   handle: "investigate-{{ticket_number}}"

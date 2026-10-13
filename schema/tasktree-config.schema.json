@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tasktree.dev/schema/v2/tasktree-config.schema.json",
+  "title": "TasktreeConfig",
+  "description": "A tasktree's .tasktree/config.yml: the committed root marker plus bootstrap steps.",
+  "type": "object",
+  "required": ["apiVersion", "kind", "taskId"],
+  "additionalProperties": false,
+  "properties": {
+    "apiVersion": { "const": "tasktree.dev/v2" },
+    "kind": { "const": "TasktreeConfig" },
+    "taskId": {
+      "type": "string",
+      "pattern": "^[0-9a-hjkmnp-tv-z]{6}$"
+    },
+    "bootstrap": {
+      "type": "array",
+      "description": "Steps run in order, fail-fast, on open and `tasktree bootstrap`. Names are unique.",
+      "items": { "$ref": "#/$defs/BootstrapStep" }
+    }
+  },
+  "$defs": {
+    "BootstrapStep": {
+      "type": "object",
+      "required": ["name", "run"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "run": { "type": "string", "minLength": 1, "description": "Shell command run with sh -c." },
+        "workdir": { "type": "string", "description": "Directory relative to the tasktree root; must stay inside it." },
+        "env": {
+          "type": "object",
+          "propertyNames": { "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
+          "additionalProperties": { "type": "string" }
+        }
+      }
+    }
+  }
+}
