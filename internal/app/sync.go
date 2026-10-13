@@ -480,6 +480,16 @@ func (a App) applyOneGitlink(ctx context.Context, m module, path, target string,
 		r.UnpushedGitlinks = appendUnique(r.UnpushedGitlinks, m.Name+": gitlink "+target+" is not reachable from origin")
 		return
 	}
+	head, _, e := git(ctx, g, path, "rev-parse", "HEAD")
+	if e != nil {
+		r.Failed = append(r.Failed, m.Name+": "+e.Error())
+		return
+	}
+	head = strings.TrimSpace(head)
+	if _, _, e = git(ctx, g, path, "merge-base", "--is-ancestor", head, target); e != nil {
+		r.Skipped = appendUnique(r.Skipped, fmt.Sprintf("%s: non-fast-forward gitlink; branch tip %s stays unchanged, root records chosen gitlink %s and will show it modified; reconcile inside the repo or run tt2 commit to record the repo tip", m.Name, head, target))
+		return
+	}
 	if _, _, e = git(ctx, g, path, "merge", "--ff-only", target); e != nil {
 		r.Skipped = appendUnique(r.Skipped, m.Name+": non-fast-forward gitlink")
 		return
