@@ -158,10 +158,23 @@ type repoPlan struct {
 	Base        string // created: the ref the new branch starts from
 	IgnoredFrom string
 	From        string
+	Ref         string // the branch, tag or commit the user's request resolved to
+	Pinned      bool   // mode pin: detached at SHA, no branch recorded
 }
 
 func (p repoPlan) message() string {
 	var m string
+	if p.Pinned {
+		sha := p.SHA
+		if len(sha) > 12 {
+			sha = sha[:12]
+		}
+		m = fmt.Sprintf("Pinning %q at commit %s", p.Ref, sha)
+		if p.IgnoredFrom != "" && p.IgnoredFrom != p.Ref {
+			m += fmt.Sprintf("; ignoring --from %q", p.IgnoredFrom)
+		}
+		return m + "."
+	}
 	switch p.Kind {
 	case "default":
 		m = fmt.Sprintf("Using the default branch %q", p.Mod.Branch)
@@ -254,6 +267,15 @@ func (a App) planRepo(ctx context.Context, g interface {
 		}
 	}
 	if mode == "pin" {
+		p.Pinned = true
+		switch {
+		case p.Kind == "created":
+			p.Ref = p.Base
+		case p.Kind == "headless":
+			p.Ref = p.From
+		default:
+			p.Ref = p.Mod.Branch
+		}
 		p.Mod.Branch = ""
 	} else if p.Mod.Branch == "" {
 		return repoPlan{}, ValidationError{fmt.Sprintf("mode %s requires a branch", mode)}

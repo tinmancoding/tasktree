@@ -142,3 +142,20 @@ func TestMarkSameStatusIsNoOp(t *testing.T) {
 		t.Fatalf("no-op mark committed: %s -> %s", before, after)
 	}
 }
+
+// H7: --mode pin records no branch, so the message must name the pinned ref.
+func TestAddFromWithPinModeNamesTheRef(t *testing.T) {
+	f := newCloseFixture(t)
+	handle, _, _ := createAndOpen(t, "Pin message", filepath.Join(f.tasks, "pin"))
+	_, msg, err := run(t, "add", f.upstream, "--name", "pinned", "--from", "main", "--mode", "pin", "-t", handle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(msg, `""`) {
+		t.Fatalf("empty branch name in message: %q", msg)
+	}
+	sha := gitRun(t, f.upstream, "rev-parse", "HEAD")
+	if !strings.Contains(msg, `Pinning "main" at commit `+sha[:12]) {
+		t.Fatalf("message = %q", msg)
+	}
+}

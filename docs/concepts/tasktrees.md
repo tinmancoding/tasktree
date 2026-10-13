@@ -80,7 +80,7 @@ In every mode a dirty repository, or a branch that cannot fast-forward, is skipp
 
 `--mode` overrides the derived mode. `follow` and `work` need a branch. `pin` never records one. `--name` sets the directory name; it defaults to the last part of the URL without `.git`.
 
-When it adds to a checkout, `add` prints which case it used on stderr: `Using the default branch "main".`, `Using existing branch "B".`, `Creating new branch "B" from "main".` or `Checking out "F" without creating a branch.` The argument may be an alias. `add` registers `<name>` and `<owner>-<name>` as aliases for every URL you add. List and manage them with `tasktree alias list|add|rm`.
+When it adds to a checkout, `add` prints which case it used on stderr: `Using the default branch "main".`, `Using existing branch "B".`, `Creating new branch "B" from "main".`, `Checking out "F" without creating a branch.` or, with `--mode pin`, `Pinning "F" at commit <sha>.` The argument may be an alias. `add` registers `<name>` and `<owner>-<name>` as aliases for every URL you add. List and manage them with `tasktree alias list|add|rm`.
 
 ## Opening a tasktree
 
