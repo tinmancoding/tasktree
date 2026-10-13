@@ -14,6 +14,7 @@ type ResolveResult struct {
 	LocalCommits  []string   `json:"localCommits"`
 	RemoteCommits []string   `json:"remoteCommits"`
 	Paths         []string   `json:"paths"`
+	AutoMerged    []string   `json:"autoMerged"`
 	Commit        string     `json:"commit,omitempty"`
 	Report        SyncReport `json:"report"`
 }
@@ -22,7 +23,7 @@ type ResolveResult struct {
 // paths must have a clean git three-way result; it never silently resolves an
 // additional conflict in favor of either side.
 func (a App) Resolve(ctx context.Context, id, root, take string, paths []string) (ResolveResult, error) {
-	result := ResolveResult{LocalCommits: []string{}, RemoteCommits: []string{}, Paths: []string{}, Report: newSyncReport()}
+	result := ResolveResult{LocalCommits: []string{}, RemoteCommits: []string{}, Paths: []string{}, AutoMerged: []string{}, Report: newSyncReport()}
 	if take != "" && take != "local" && take != "remote" {
 		return result, ValidationError{"--take must be local or remote"}
 	}
@@ -81,17 +82,36 @@ func (a App) Resolve(ctx context.Context, id, root, take string, paths []string)
 				result.RemoteCommits = list
 			}
 		}
-		out, _, e := a.Git.Run(ctx, a.Home.GitPath(), nil, "diff", "--name-only", "-z", local, remote)
+		base, _, e := a.Git.Run(ctx, a.Home.GitPath(), nil, "merge-base", local, remote)
 		if e != nil {
-			return e
+			return hub.ConflictError{Message: "task branch histories have no merge base"}
 		}
-		for _, p := range strings.Split(out, "\x00") {
-			if p != "" {
-				result.Paths = append(result.Paths, p)
+		trees := make([]map[string]string, 3)
+		all := map[string]bool{}
+		for i, rev := range []string{strings.TrimSpace(base), local, remote} {
+			out, _, e := a.Git.Run(ctx, a.Home.GitPath(), nil, "ls-tree", "-r", "-z", rev)
+			if e != nil {
+				return e
+			}
+			trees[i] = map[string]string{}
+			for _, entry := range strings.Split(out, "\x00") {
+				metadata, path, ok := strings.Cut(entry, "\t")
+				if ok {
+					trees[i][path] = metadata
+					all[path] = true
+				}
 			}
 		}
-		if take == "" {
-			return hub.ConflictError{Message: "task branch comparison; use resolve --take local|remote [path...]"}
+		for _, p := range sortedBoolKeys(all) {
+			b, l, r := trees[0][p], trees[1][p], trees[2][p]
+			if l == b && r == b {
+				continue
+			}
+			if l != b && r != b && l != r {
+				result.Paths = append(result.Paths, p)
+			} else {
+				result.AutoMerged = append(result.AutoMerged, p)
+			}
 		}
 		selected := map[string]bool{}
 		if len(paths) == 0 {
@@ -105,9 +125,17 @@ func (a App) Resolve(ctx context.Context, id, root, take string, paths []string)
 				}
 			}
 			if !found {
-				return ValidationError{fmt.Sprintf("path %q is not a differing path", p)}
+				return ValidationError{fmt.Sprintf("path %q was not changed on both sides with different results", p)}
 			}
 			selected[p] = true
+		}
+		if take == "" && len(result.Paths) > 0 {
+			return hub.ConflictError{Message: "paths changed on both sides; use resolve --take local|remote [path...]"}
+		}
+		for _, p := range result.Paths {
+			if !selected[p] {
+				return hub.ConflictError{Message: "unresolved path " + p + "; include it in resolve --take"}
+			}
 		}
 		args := []string{"merge-tree", "--write-tree", "-z", "--allow-unrelated-histories", local, remote}
 		out, _, mergeErr := a.Git.Run(ctx, a.Home.GitPath(), nil, args...)

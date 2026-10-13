@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -174,7 +175,10 @@ func TestSyncS8SelectedPathsPreserveCommonMerge(t *testing.T) {
 		t.Fatal(e)
 	}
 	_, e := p.b.Resolve(p.ctx, task.ID, rootB, "remote", []string{"only-A"})
-	requireSyncConflict(t, e)
+	var validation ValidationError
+	if !errors.As(e, &validation) {
+		t.Fatalf("expected usage error for one-sided selection, got %v", e)
+	}
 	result, e := p.b.Resolve(p.ctx, task.ID, rootB, "remote", []string{"conflict"})
 	if e != nil {
 		t.Fatalf("selected resolve: %v %+v", e, result)

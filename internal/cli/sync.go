@@ -93,8 +93,12 @@ func resolveCmd(o *options) *cobra.Command {
 			for _, s := range r.RemoteCommits {
 				fmt.Fprintln(o.out, "  "+s)
 			}
-			fmt.Fprintln(o.out, "Differing paths (files and gitlinks):")
+			fmt.Fprintln(o.out, "Changed on both sides (files and gitlinks):")
 			for _, s := range r.Paths {
+				fmt.Fprintln(o.out, "  "+s)
+			}
+			fmt.Fprintln(o.out, "Auto-merged paths:")
+			for _, s := range r.AutoMerged {
 				fmt.Fprintln(o.out, "  "+s)
 			}
 			if r.Commit != "" {
@@ -104,7 +108,7 @@ func resolveCmd(o *options) *cobra.Command {
 		}
 		return e
 	}}
-	c.Flags().StringVar(&take, "take", "", "take local or remote for selected paths (all differences by default)")
+	c.Flags().StringVar(&take, "take", "", "take local or remote for paths changed on both sides (all such paths by default)")
 	c.Flags().BoolVar(&j, "json", false, "emit comparison and result as JSON")
 	return c
 }
