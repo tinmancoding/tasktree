@@ -1,6 +1,6 @@
 # Design: tasktree V2
 
-Status: **Accepted** (design interview, decisions D1–D59)
+Status: **Accepted** (design interview, decisions D1–D60)
 Supersedes: the workspace-centric V1 model (`Tasktree.yml` + plain folders + registry)
 
 V2 turns tasktree into a single personal tool for **task management + multi-repo workspace
@@ -666,3 +666,4 @@ Checked against git 2.53.0:
 | D57 | V2 documentation replaces the V1 docs on `main`; V1 docs stay on the `v1` branch and the README links to them. V1 design docs move to `docs/design/archive/` |
 | D58 | Audit decisions DN1–DN10: build `alias add/rm/list` and `list --ref`; `--json` for `template list/show` and documented JSON shapes; `bootstrap add/rm/list` (also via `-t`); `open` never falls back to a branch tip for an unavailable gitlink (repo left uninitialized + reported, retried by `sync`/`open`); `open` on an existing checkout only prints its path; `--template <file>` allowed explicitly; `setup --remote` on an existing hub pushes like `config set remote`; at `v2.0.0` the binary is `tasktree` with `tt` and `tt2` installed as symlinks, new text says `tasktree`; `status` removed from `info set` (`mark` is the only status writer) and `info ack <field>` clears conflict flags |
 | D59 | Network policy (fixes M19): explicit transfers (`add`, `open` materialization, `push`, `sync`, `resolve`, `setup`, `config set remote`) have no wall-clock limit and use stall detection (SSH `ConnectTimeout=15`, `ServerAliveInterval=15`, `ServerAliveCountMax=4`; HTTP `lowSpeedLimit=1000`, `lowSpeedTime=60`); implicit best-effort calls (open pre-fetch, close push, doctor) keep a short wall clock (10s); prompts always disabled |
+| D60 | `doctor --fix` never deletes a hidden clone: a clone without a checkout may belong to a folder moved outside doctor's search scope, whose uncommitted files doctor cannot see. Deletion of clones with no committed or stashed work at risk requires `doctor --fix --prune-clones` |

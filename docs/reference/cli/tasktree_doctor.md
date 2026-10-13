@@ -15,9 +15,10 @@ tasktree doctor [flags]
 ### Options
 
 ```
-      --fix    apply the repairs that cannot lose work, then check again
-  -h, --help   help for doctor
-      --json   emit JSON
+      --fix            apply the repairs that cannot lose work, then check again
+  -h, --help           help for doctor
+      --json           emit JSON
+      --prune-clones   with --fix, also delete hidden clones whose checkout folder is gone (uncommitted files of a folder moved elsewhere are lost)
 ```
 
 ### Options inherited from parent commands

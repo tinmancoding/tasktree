@@ -1,11 +1,11 @@
 # Doctor and recovery
 
-`tasktree doctor` checks the tasks repository, the records, every checkout registered on this machine, and the hidden git directories. It reports findings, and with `--fix` it repairs the ones that cannot lose work.
+`tasktree doctor` checks the tasks repository, the records, every checkout registered on this machine, and the hidden git directories. It reports findings, and with `--fix` it repairs the ones that cannot lose work. Deleting a hidden git directory is never part of plain `--fix`; it needs `--fix --prune-clones`.
 
 ```console
 $ tasktree doctor
 SEVERITY  CODE              SUBJECT                MESSAGE
-ERROR     checkout-missing  8qtbp7                 recorded checkout path does not exist; hidden clone has no work at risk
+ERROR     checkout-missing  8qtbp7                 recorded checkout path does not exist; hidden clone has no committed or stashed work at risk; delete it with doctor --fix --prune-clones only if the checkout folder is gone for good
 WARNING   no-remote         /home/alice/.tasktree  no remote configured; ~/.tasktree is the only copy; make a backup
 1 errors, 1 warnings, 1 fixable
 error: doctor found errors
@@ -50,7 +50,7 @@ The command needs no network, except one `ls-remote` call that is limited to 10 
 |---|---|
 | The directory moved: a directory under `tasksRoot` (up to three levels down) or next to the recorded path has a `.tasktree/config.yml` with this task's id | Re-points `local.yml` to that directory and rewrites the repositories' `.git` files and `core.worktree`. Nothing is deleted. |
 | The directory is gone, no hidden git directory exists | Removes the `local.yml` entry |
-| The directory is gone, a hidden git directory exists, and it holds no unpushed commits or stashes | Removes the hidden git directory and the entry |
+| The directory is gone, a hidden git directory exists, and it holds no unpushed commits or stashes | Not repaired by `--fix`. `--fix --prune-clones` removes the hidden git directory and the entry. Use it only when the folder is really gone: if it was moved somewhere doctor does not search, its uncommitted files would lose their repositories. |
 | The directory is gone, and the hidden git directory holds unpushed commits or stashes | Not fixable. The message lists them. Restore the directory, or accept the loss with `open --force`. |
 
 ### `orphan-clone`
@@ -58,7 +58,7 @@ The command needs no network, except one `ls-remote` call that is limited to 10 
 | Situation | `--fix` |
 |---|---|
 | A directory under `tasksRoot` (up to three levels down) has a matching `.tasktree/config.yml` | Registers that directory in `local.yml` |
-| No directory, no unpushed work in the git directory | Removes the hidden git directory |
+| No directory, no unpushed work in the git directory | Not repaired by `--fix`. `--fix --prune-clones` removes the hidden git directory. |
 | No directory, and the git directory holds unpushed commits or stashes | Not fixable. Restore the checkout first. |
 
 ## Recipes
@@ -68,9 +68,9 @@ The command needs no network, except one `ls-remote` call that is limited to 10 
 Closing a task is the right way to remove a checkout. If you deleted the directory anyway:
 
 ```console
-$ tasktree doctor --fix
+$ tasktree doctor --fix --prune-clones
 ...
-ERROR     checkout-missing  s5brtg  recorded checkout path does not exist; hidden clone has no work at risk (fixed)
+ERROR     checkout-missing  s5brtg  recorded checkout path does not exist; hidden clone has no committed or stashed work at risk; delete it with doctor --fix --prune-clones only if the checkout folder is gone for good (fixed)
 ```
 
 If the finding is not fixable because the hidden clone holds unpushed commits, you can still recover them. The repositories live in `~/.tasktree/clones/<id>.git/modules/<name>`; run `git --git-dir=<that path> log --branches --not --remotes=origin` to see them, and push them from there. When you are finished with them, or want the checkout back as it was last committed, reopen it:

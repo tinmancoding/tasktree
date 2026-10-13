@@ -1183,7 +1183,7 @@ type doctorFindingsError struct{}
 func (doctorFindingsError) Error() string { return "doctor found errors" }
 
 func doctorCmd(o *options) *cobra.Command {
-	var fix, jsonOut bool
+	var fix, pruneClones, jsonOut bool
 	c := &cobra.Command{Use: "doctor", Short: "Check tasktree state and safely repair known problems", Long: `Check the tasks repository, records, checkouts and hidden git directories. Each finding has a code, a severity (error or warning) and a flag saying whether --fix can repair it.
 
 --fix applies only repairs that cannot discard work, then checks again. Exits 1 when errors remain; warnings alone exit 0.`, Args: exact(0), RunE: func(cmd *cobra.Command, args []string) error {
@@ -1191,7 +1191,7 @@ func doctorCmd(o *options) *cobra.Command {
 		if e != nil {
 			return e
 		}
-		r, e := a.Doctor(cmd.Context(), fix)
+		r, e := a.DoctorWith(cmd.Context(), fix, pruneClones)
 		if e != nil {
 			return e
 		}
@@ -1226,6 +1226,7 @@ func doctorCmd(o *options) *cobra.Command {
 		return nil
 	}}
 	c.Flags().BoolVar(&fix, "fix", false, "apply the repairs that cannot lose work, then check again")
+	c.Flags().BoolVar(&pruneClones, "prune-clones", false, "with --fix, also delete hidden clones whose checkout folder is gone (uncommitted files of a folder moved elsewhere are lost)")
 	c.Flags().BoolVar(&jsonOut, "json", false, "emit JSON")
 	return c
 }

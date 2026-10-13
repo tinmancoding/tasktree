@@ -22,7 +22,11 @@ type Finding struct {
 	Message  string `json:"message"`
 	Fixable  bool   `json:"fixable"`
 	Fixed    bool   `json:"fixed"`
-	fix      func(context.Context) error
+	// Destructive repairs delete a hidden clone. doctor cannot see files of a
+	// checkout that was moved outside its search scope, so these run only with
+	// --prune-clones, never with plain --fix.
+	Destructive bool `json:"destructive,omitempty"`
+	fix         func(context.Context) error
 }
 
 type DoctorResult struct {
@@ -48,6 +52,12 @@ func (r *DoctorResult) count() {
 // Doctor audits both durable hub state and this machine's checkout registry.
 // With fix it applies only repairs which cannot discard repository work.
 func (a App) Doctor(ctx context.Context, fix bool) (DoctorResult, error) {
+	return a.DoctorWith(ctx, fix, false)
+}
+
+// DoctorWith is Doctor with an explicit opt-in for destructive repairs
+// (deleting hidden clones that have no recorded checkout).
+func (a App) DoctorWith(ctx context.Context, fix, pruneClones bool) (DoctorResult, error) {
 	initial, err := a.doctorFindings(ctx)
 	if err != nil {
 		return DoctorResult{}, err
@@ -59,7 +69,7 @@ func (a App) Doctor(ctx context.Context, fix bool) (DoctorResult, error) {
 	}
 	fixed := []Finding{}
 	for _, f := range initial {
-		if !f.Fixable || f.fix == nil {
+		if !f.Fixable || f.fix == nil || (f.Destructive && !pruneClones) {
 			continue
 		}
 		if err := f.fix(ctx); err != nil {
@@ -83,6 +93,9 @@ func (a App) doctorFindings(ctx context.Context) ([]Finding, error) {
 	var out []Finding
 	add := func(code, severity, subject, message string, fix func(context.Context) error) {
 		out = append(out, Finding{Code: code, Severity: severity, Subject: subject, Message: message, Fixable: fix != nil, fix: fix})
+	}
+	addDestructive := func(code, severity, subject, message string, fix func(context.Context) error) {
+		out = append(out, Finding{Code: code, Severity: severity, Subject: subject, Message: message + "; delete it with doctor --fix --prune-clones only if the checkout folder is gone for good", Fixable: true, Destructive: true, fix: fix})
 	}
 	cfg, err := a.Home.LoadConfig()
 	if err != nil {
@@ -256,7 +269,7 @@ func (a App) doctorFindings(ctx context.Context) ([]Finding, error) {
 					add("checkout-missing", "error", id, strings.Join(loss, "; ")+"; restore the folder or run "+product.Name+" open "+handleFor(byID, id)+" --force", nil)
 				} else {
 					idCopy, cloneCopy := id, clone
-					add("checkout-missing", "error", id, "recorded checkout path does not exist; hidden clone has no work at risk", func(context.Context) error {
+					addDestructive("checkout-missing", "error", id, "recorded checkout path does not exist; hidden clone has no committed or stashed work at risk", func(context.Context) error {
 						if err := os.RemoveAll(cloneCopy); err != nil {
 							return err
 						}
@@ -343,7 +356,7 @@ func (a App) doctorFindings(ctx context.Context) ([]Finding, error) {
 			add("orphan-clone", "error", id, strings.Join(loss, "; ")+"; restore its checkout before removing the clone", nil)
 		} else {
 			cloneCopy := clone
-			add("orphan-clone", "error", id, "hidden clone has no checkout and no work at risk", func(context.Context) error { return os.RemoveAll(cloneCopy) })
+			addDestructive("orphan-clone", "error", id, "hidden clone has no checkout and no committed or stashed work at risk", func(context.Context) error { return os.RemoveAll(cloneCopy) })
 		}
 	}
 	imports := filepath.Join(a.Home.Root, "imports")

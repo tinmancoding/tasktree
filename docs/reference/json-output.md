@@ -181,13 +181,14 @@ $ tasktree resolve --json
 
 ```console
 $ tasktree doctor --json
-{"findings":[{"code":"checkout-missing","severity":"error","subject":"8qtbp7","message":"recorded checkout path does not exist; hidden clone has no work at risk","fixable":true,"fixed":false},{"code":"no-remote","severity":"warning","subject":"/home/alice/.tasktree","message":"no remote configured; ~/.tasktree is the only copy; make a backup","fixable":false,"fixed":false}],"errors":1,"warnings":1}
+{"findings":[{"code":"checkout-missing","severity":"error","subject":"8qtbp7","message":"recorded checkout path does not exist; hidden clone has no committed or stashed work at risk; delete it with doctor --fix --prune-clones only if the checkout folder is gone for good","fixable":true,"fixed":false,"destructive":true},{"code":"no-remote","severity":"warning","subject":"/home/alice/.tasktree","message":"no remote configured; ~/.tasktree is the only copy; make a backup","fixable":false,"fixed":false}],"errors":1,"warnings":1}
 ```
 
 | Key | Type | Meaning |
 |---|---|---|
 | `findings` | array | Findings, errors first. `[]` when there are none. |
 | `errors`, `warnings` | number | Counts of findings that are not fixed |
+| `findings[].destructive` | boolean | Present and `true` when the repair deletes a hidden clone; applied only with `--fix --prune-clones` |
 
 A finding has `code`, `severity` (`error` or `warning`), `subject`, `message`, `fixable` and `fixed` (true after `--fix` repaired it). The codes are listed in [Doctor and recovery](../guides/doctor-and-recovery.md#codes). The exit code is 1 when `errors` is greater than zero.
 

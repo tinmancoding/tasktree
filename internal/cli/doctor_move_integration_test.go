@@ -149,8 +149,14 @@ func TestDoctorHandlesDeletedCheckoutModuleLoss(t *testing.T) {
 	if !fixableClean {
 		t.Fatalf("clean deleted checkout was not fixable: %s", out)
 	}
-	if _, _, err = run(t, "doctor", "--fix", "--json"); err != nil {
-		t.Fatalf("doctor --fix clean checkout: %v", err)
+	// Plain --fix never deletes a hidden clone: doctor cannot see files of a
+	// checkout folder moved outside its search scope.
+	_, _, _ = run(t, "doctor", "--fix", "--json")
+	if _, err := os.Stat(cleanClone); err != nil {
+		t.Fatalf("plain doctor --fix deleted the clean clone: %v", err)
+	}
+	if _, _, err = run(t, "doctor", "--fix", "--prune-clones", "--json"); err != nil {
+		t.Fatalf("doctor --fix --prune-clones clean checkout: %v", err)
 	}
 	if _, err := os.Stat(cleanClone); !os.IsNotExist(err) {
 		t.Fatalf("doctor --fix left clean clone: %v", err)
