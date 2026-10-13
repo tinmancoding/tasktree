@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -54,6 +55,7 @@ type Task struct {
 	UpdatedAt   time.Time `json:"updatedAt"`
 	Description string    `json:"description"`
 	Log         []Entry   `json:"log"`
+	Conflict    []string  `json:"conflict,omitempty"`
 	// Progress is a derived display field and is never persisted in frontmatter.
 	Progress *Progress `json:"progress,omitempty"`
 }
@@ -143,6 +145,7 @@ func Parse(data []byte) (*Document, error) {
 		Refs      []map[string]string `yaml:"refs"`
 		CreatedAt flexibleTime        `yaml:"createdAt"`
 		UpdatedAt flexibleTime        `yaml:"updatedAt"`
+		Conflict  []string            `yaml:"conflict"`
 	}
 	if err := yaml.Unmarshal(fm, &aux); err != nil {
 		return nil, fmt.Errorf("parse frontmatter: %w", err)
@@ -153,7 +156,7 @@ func Parse(data []byte) (*Document, error) {
 	if err := ValidateStatus(aux.Status); err != nil {
 		return nil, err
 	}
-	t := Task{ID: aux.ID, Handle: aux.Handle, Title: aux.Title, Status: aux.Status, Parent: aux.Parent, Labels: aux.Labels, CreatedAt: aux.CreatedAt.Time.UTC(), UpdatedAt: aux.UpdatedAt.Time.UTC()}
+	t := Task{ID: aux.ID, Handle: aux.Handle, Title: aux.Title, Status: aux.Status, Parent: aux.Parent, Labels: aux.Labels, CreatedAt: aux.CreatedAt.Time.UTC(), UpdatedAt: aux.UpdatedAt.Time.UTC(), Conflict: aux.Conflict}
 	if t.Labels == nil {
 		t.Labels = []string{}
 	}
@@ -242,11 +245,12 @@ func New(t Task) (*Document, error) {
 		Refs      []Ref    `yaml:"refs"`
 		CreatedAt string   `yaml:"createdAt"`
 		UpdatedAt string   `yaml:"updatedAt"`
+		Conflict  []string `yaml:"conflict,omitempty,flow"`
 	}
 	var encoded bytes.Buffer
 	enc := yaml.NewEncoder(&encoded)
 	enc.SetIndent(2)
-	if err := enc.Encode(front{t.ID, t.Handle, t.Title, t.Status, t.Parent, t.Labels, t.Refs, t.CreatedAt.Format(time.RFC3339), t.UpdatedAt.Format(time.RFC3339)}); err != nil {
+	if err := enc.Encode(front{t.ID, t.Handle, t.Title, t.Status, t.Parent, t.Labels, t.Refs, t.CreatedAt.Format(time.RFC3339), t.UpdatedAt.Format(time.RFC3339), t.Conflict}); err != nil {
 		return nil, err
 	}
 	_ = enc.Close()
@@ -300,7 +304,7 @@ func (d *Document) SetDescription(description string, at time.Time) error {
 	if err != nil {
 		return fmt.Errorf("rendered record is invalid: %w", err)
 	}
-	d.raw, d.Task = candidate, parsed.Task
+	d.raw, d.Task, d.frontEnd = candidate, parsed.Task, parsed.frontEnd
 	return nil
 }
 
@@ -317,7 +321,7 @@ func (d *Document) SetFrontString(key, value string, at time.Time) error {
 	if err != nil {
 		return fmt.Errorf("rendered record is invalid: %w", err)
 	}
-	d.raw, d.Task = candidate, parsed.Task
+	d.raw, d.Task, d.frontEnd = candidate, parsed.Task, parsed.frontEnd
 	return nil
 }
 
@@ -336,7 +340,7 @@ func (d *Document) SetParent(parent *string, at time.Time) error {
 	if err != nil {
 		return fmt.Errorf("rendered record is invalid: %w", err)
 	}
-	d.raw, d.Task = candidate, parsed.Task
+	d.raw, d.Task, d.frontEnd = candidate, parsed.Task, parsed.frontEnd
 	return nil
 }
 
@@ -359,14 +363,22 @@ func (d *Document) rewriteFront(t Task) error {
 	if err != nil {
 		return err
 	}
+	labelsNode := &yaml.Node{Kind: yaml.SequenceNode, Style: yaml.FlowStyle, Tag: "!!seq"}
+	for _, label := range t.Labels {
+		labelsNode.Content = append(labelsNode.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: label})
+	}
+	labels, err := yaml.Marshal(labelsNode)
+	if err != nil {
+		return err
+	}
 	candidate := replaceFrontBlock(d.raw, "refs", strings.TrimRight(string(refs), "\n"))
-	candidate = replaceFrontBlock(candidate, "labels", "["+strings.Join(t.Labels, ", ")+"]")
+	candidate = replaceFrontBlock(candidate, "labels", strings.TrimSpace(string(labels)))
 	candidate = replaceFront(candidate, "updatedAt", t.UpdatedAt.Format(time.RFC3339))
 	parsed, err := Parse(candidate)
 	if err != nil {
 		return fmt.Errorf("rendered record is invalid: %w", err)
 	}
-	d.raw, d.Task = candidate, parsed.Task
+	d.raw, d.Task, d.frontEnd = candidate, parsed.Task, parsed.frontEnd
 	return nil
 }
 
@@ -383,23 +395,22 @@ func replaceFrontBlock(raw []byte, key, value string) []byte {
 			break
 		}
 	}
-	start := -1
-	for i := 1; i < end; i++ {
-		if strings.HasPrefix(lines[i], key+":") {
-			start = i
-			break
+	start := frontKeyLine(lines, end, key)
+	stop := start + 1
+	if start < 0 {
+		start, stop = end, end
+	} else {
+		for stop < end && (strings.HasPrefix(lines[stop], " ") || strings.HasPrefix(lines[stop], "\t") || strings.HasPrefix(lines[stop], "-")) {
+			stop++
 		}
 	}
-	if start < 0 {
-		return replaceFront(raw, key, value)
+	keyText := key
+	if strings.ContainsAny(key, " \t\r\n:\"'{}[],*&?#|>!%@`") {
+		keyText = strconv.Quote(key)
 	}
-	stop := start + 1
-	for stop < end && (strings.HasPrefix(lines[stop], " ") || strings.HasPrefix(lines[stop], "\t") || strings.HasPrefix(lines[stop], "-")) {
-		stop++
-	}
-	text := key + ": " + value
+	text := keyText + ": " + value
 	if strings.Contains(value, "\n") || strings.HasPrefix(value, "- ") {
-		text = key + ":\n  " + strings.Join(strings.Split(value, "\n"), "\n  ")
+		text = keyText + ":\n  " + strings.Join(strings.Split(value, "\n"), "\n  ")
 	}
 	replacement := strings.Split(text, "\n")
 	result := make([]string, 0, len(lines)-stop+start+len(replacement))
@@ -419,34 +430,22 @@ func (d *Document) SetStatus(status string, at time.Time) error {
 	if err != nil {
 		return fmt.Errorf("rendered record is invalid: %w", err)
 	}
-	d.raw, d.Task = candidate, parsed.Task
+	d.raw, d.Task, d.frontEnd = candidate, parsed.Task, parsed.frontEnd
 	return nil
 }
-func replaceFront(raw []byte, key, value string) []byte {
-	eol := []byte("\n")
-	if bytes.Contains(raw, []byte("\r\n")) {
-		eol = []byte("\r\n")
-	}
-	lines := bytes.Split(raw, eol)
-	prefix := []byte(key + ":")
-	end, found := len(lines), false
-	for i := 1; i < len(lines); i++ {
-		if bytes.Equal(lines[i], []byte("---")) {
-			end = i
-			break
+func frontKeyLine(lines []string, end int, key string) int {
+	var node yaml.Node
+	if err := yaml.Unmarshal([]byte(strings.Join(lines[1:end], "\n")), &node); err == nil && len(node.Content) > 0 {
+		mapping := node.Content[0]
+		for i := 0; i+1 < len(mapping.Content); i += 2 {
+			if mapping.Content[i].Value == key {
+				return mapping.Content[i].Line
+			}
 		}
 	}
-	for i := 1; i < end; i++ {
-		if bytes.HasPrefix(lines[i], prefix) {
-			lines[i], found = []byte(key+": "+value), true
-			break
-		}
-	}
-	if !found && end < len(lines) {
-		lines = append(lines[:end], append([][]byte{[]byte(key + ": " + value)}, lines[end:]...)...)
-	}
-	return bytes.Join(lines, eol)
+	return -1
 }
+func replaceFront(raw []byte, key, value string) []byte { return replaceFrontBlock(raw, key, value) }
 func (d *Document) Append(e Entry) error {
 	if !ValidID(e.ID) {
 		return fmt.Errorf("invalid entry id")
@@ -481,7 +480,7 @@ func (d *Document) Append(e Entry) error {
 	if err != nil {
 		return fmt.Errorf("rendered record is invalid: %w", err)
 	}
-	d.raw, d.Task = candidate, parsed.Task
+	d.raw, d.Task, d.frontEnd = candidate, parsed.Task, parsed.frontEnd
 	return nil
 }
 

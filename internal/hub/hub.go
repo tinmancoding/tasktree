@@ -300,6 +300,10 @@ func (h Hub) rollbackPath(ctx context.Context, rel string) {
 }
 
 func (h Hub) ensureClean(ctx context.Context) error {
+	branch, _, err := h.Git.Run(ctx, h.Path, nil, "symbolic-ref", "--short", "HEAD")
+	if err != nil || strings.TrimSpace(branch) != "main" {
+		return ConflictError{"hub main must be checked out before retrying"}
+	}
 	out, _, err := h.Git.Run(ctx, h.Path, nil, "status", "--porcelain")
 	if err != nil {
 		return err

@@ -14,12 +14,16 @@ import (
 type JiraConfig struct {
 	BaseURL string `yaml:"baseUrl,omitempty" json:"baseUrl"`
 }
+type SyncConfig struct {
+	Jobs int `yaml:"jobs" json:"jobs"`
+}
 type Config struct {
 	Remote    string     `yaml:"remote,omitempty" json:"remote"`
 	TasksRoot string     `yaml:"tasksRoot" json:"tasksRoot"`
 	Author    string     `yaml:"author,omitempty" json:"author"`
 	Machine   string     `yaml:"machine" json:"machine"`
 	Jira      JiraConfig `yaml:"jira,omitempty" json:"jira"`
+	Sync      SyncConfig `yaml:"sync,omitempty" json:"sync"`
 }
 type Checkout struct {
 	Path  string `yaml:"path"`
@@ -54,7 +58,7 @@ func Defaults() Config {
 	if i := strings.IndexByte(host, '.'); i >= 0 {
 		host = host[:i]
 	}
-	return Config{TasksRoot: filepath.Join(u, "Developer", "tasks"), Machine: host}
+	return Config{TasksRoot: filepath.Join(u, "Developer", "tasks"), Machine: host, Sync: SyncConfig{Jobs: 4}}
 }
 func (h Home) LoadConfig() (Config, error) {
 	c := Defaults()
