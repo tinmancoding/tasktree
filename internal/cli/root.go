@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"text/tabwriter"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -466,10 +467,12 @@ func infoCmd(o *options) *cobra.Command {
 		}
 		if definition != nil {
 			fmt.Fprintln(o.out, "Tasktree: defined (not checked out here)")
-			fmt.Fprintln(o.out, "NAME\tMODE\tBRANCH\tGITLINK")
+			tw := newTable(o.out)
+			fmt.Fprintln(tw, "NAME\tMODE\tBRANCH\tGITLINK")
 			for _, r := range definition.Repos {
-				fmt.Fprintf(o.out, "%s\t%s\t%s\t%s\n", r.Name, r.Mode, r.Branch, r.Gitlink)
+				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", r.Name, r.Mode, r.Branch, r.Gitlink)
 			}
+			return tw.Flush()
 		}
 		return nil
 	}}
@@ -758,10 +761,11 @@ func historyCmd(o *options) *cobra.Command {
 		if asJSON {
 			return json.NewEncoder(o.out).Encode(entries)
 		}
+		tw := newTable(o.out)
 		for _, entry := range entries {
-			fmt.Fprintf(o.out, "%s\t%s\t%s\n", entry.Timestamp.Format(time.RFC3339), entry.Author, entry.Subject)
+			fmt.Fprintf(tw, "%s\t%s\t%s\n", entry.Timestamp.Format(time.RFC3339), entry.Author, entry.Subject)
 		}
-		return nil
+		return tw.Flush()
 	}}
 	c.Flags().StringVarP(&ref, "task", "t", "", "task handle or id")
 	c.Flags().BoolVar(&asJSON, "json", false, "emit JSON")
@@ -987,17 +991,21 @@ func doctorCmd(o *options) *cobra.Command {
 				return e
 			}
 		} else {
-			fmt.Fprintln(o.out, "SEVERITY\tCODE\tSUBJECT\tMESSAGE")
+			tw := newTable(o.out)
+			fmt.Fprintln(tw, "SEVERITY\tCODE\tSUBJECT\tMESSAGE")
 			fixable := 0
 			for _, f := range r.Findings {
 				state := ""
 				if f.Fixed {
 					state = " (fixed)"
 				}
-				fmt.Fprintf(o.out, "%s\t%s\t%s\t%s%s\n", strings.ToUpper(f.Severity), f.Code, f.Subject, f.Message, state)
+				fmt.Fprintf(tw, "%s\t%s\t%s\t%s%s\n", strings.ToUpper(f.Severity), f.Code, f.Subject, f.Message, state)
 				if f.Fixable && !f.Fixed {
 					fixable++
 				}
+			}
+			if e = tw.Flush(); e != nil {
+				return e
 			}
 			fmt.Fprintf(o.out, "%d errors, %d warnings, %d fixable\n", r.Errors, r.Warnings, fixable)
 		}
@@ -1045,11 +1053,12 @@ func templateCmd(o *options) *cobra.Command {
 		if e != nil {
 			return e
 		}
-		fmt.Fprintln(o.out, "NAME\tSOURCE\tDESCRIPTION")
+		tw := newTable(o.out)
+		fmt.Fprintln(tw, "NAME\tSOURCE\tDESCRIPTION")
 		for _, s := range all {
-			fmt.Fprintf(o.out, "%s\t%s\t%s\n", s.Metadata.Name, s.Source, s.Metadata.Description)
+			fmt.Fprintf(tw, "%s\t%s\t%s\n", s.Metadata.Name, s.Source, s.Metadata.Description)
 		}
-		return nil
+		return tw.Flush()
 	}},
 		&cobra.Command{Use: "show <name>", Short: "Show template parameters and raw YAML", Args: exact(1), RunE: func(cmd *cobra.Command, args []string) error {
 			a, e := o.application()
@@ -1060,9 +1069,13 @@ func templateCmd(o *options) *cobra.Command {
 			if e != nil {
 				return usageError{e.Error()}
 			}
-			fmt.Fprintln(o.out, "PARAMETER\tREQUIRED\tDEFAULT\tDESCRIPTION")
+			tw := newTable(o.out)
+			fmt.Fprintln(tw, "PARAMETER\tREQUIRED\tDEFAULT\tDESCRIPTION")
 			for _, p := range s.Parameters {
-				fmt.Fprintf(o.out, "%s\t%t\t%s\t%s\n", p.Name, p.Required, p.Default, p.Description)
+				fmt.Fprintf(tw, "%s\t%t\t%s\t%s\n", p.Name, p.Required, p.Default, p.Description)
+			}
+			if e = tw.Flush(); e != nil {
+				return e
 			}
 			fmt.Fprintln(o.out, "---")
 			_, e = o.out.Write(s.Raw)
@@ -1358,4 +1371,9 @@ func Execute(ctx context.Context, args []string, out, errOut io.Writer) error {
 	r := NewRoot(out, errOut)
 	r.SetArgs(args)
 	return r.ExecuteContext(ctx)
+}
+
+// newTable returns an aligned column writer for human-readable tables.
+func newTable(w io.Writer) *tabwriter.Writer {
+	return tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 }

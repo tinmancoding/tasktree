@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -150,7 +151,7 @@ func TestBuiltinTemplateCreatesRecordAndDefinition(t *testing.T) {
 		t.Fatal(gm)
 	}
 	list, _, err := run(t, "template", "list")
-	if err != nil || !strings.Contains(list, "bugfix\tbuiltin") {
+	if err != nil || !regexp.MustCompile(`(?m)^bugfix\s+builtin\s`).MatchString(list) {
 		t.Fatalf("%v %s", err, list)
 	}
 }
