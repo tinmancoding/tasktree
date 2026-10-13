@@ -603,3 +603,35 @@ func TestBootstrapAddRmListBothPaths(t *testing.T) {
 		t.Fatalf("definition bootstrap step did not run on open: %v", err)
 	}
 }
+
+// DN6: open on a live checkout only prints its path; it fetches and merges nothing.
+func TestOpenLiveCheckoutDoesNotFetch(t *testing.T) {
+	a, b, _ := twoMachines(t)
+	a.must("new", "Live", "--handle", "live")
+	a.must("sync")
+	rb := strings.TrimSpace(b.must("open", "live"))
+	// Machine A changes the record and publishes it.
+	a.must("note", "from A", "-t", "live")
+	a.must("sync")
+
+	hub := filepath.Join(b.home, "git")
+	refs := func() string {
+		return gitRun(t, hub, "for-each-ref", "--format=%(refname) %(objectname)")
+	}
+	before := refs()
+	out, errOut, err := b.run("open", "live")
+	if err != nil || strings.TrimSpace(out) != rb {
+		t.Fatalf("open: %v out=%q err=%q", err, out, errOut)
+	}
+	if after := refs(); after != before {
+		t.Fatalf("open on a live checkout touched hub refs:\nbefore:\n%s\nafter:\n%s", before, after)
+	}
+	if got := b.must("info", "-t", "live"); strings.Contains(got, "from A") {
+		t.Fatalf("open merged remote state:\n%s", got)
+	}
+	// sync is what brings the note in.
+	b.must("sync", "--all")
+	if got := b.must("info", "-t", "live"); !strings.Contains(got, "from A") {
+		t.Fatalf("sync did not merge:\n%s", got)
+	}
+}

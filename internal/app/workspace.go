@@ -360,6 +360,20 @@ type OpenOptions struct {
 
 func (a App) Open(ctx context.Context, ref string, o OpenOptions, progress interface{ Write([]byte) (int, error) }) (string, error) {
 	ctx = gitx.Explicit(ctx) // D59: explicit transfer, stall detection only
+	// DN6: a live checkout on this machine is only located, never refreshed
+	// from the remote. The D53 pre-fetch is for materializing a task.
+	if t, err := a.Info(ref); err == nil && recordOpen(t.Status) {
+		local, err := a.Home.LoadLocal()
+		if err != nil {
+			return "", err
+		}
+		if c, ok := local.Checkouts[t.ID]; ok {
+			if st, e := os.Stat(c.Path); e == nil && st.IsDir() {
+				a.refreshTaskRecord(ctx, t.ID)
+				return c.Path, nil
+			}
+		}
+	}
 	a.pullOpenRemote(ctx, ref)
 	t, err := a.Info(ref)
 	if err != nil {
