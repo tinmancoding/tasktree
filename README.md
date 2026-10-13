@@ -1,685 +1,82 @@
 # tasktree
 
-Tasktree is a task-first workspace manager for local development across one or more Git repositories.
+tasktree manages tasks and the multi-repository workspaces for them in one command-line tool. A task is a Markdown record with a status, references and a log. Its workspace is a directory with a full clone of each repository you work on. Both live in git, so one `~/.tasktree` directory holds everything, and a plain git remote syncs it between machines.
 
-It creates a workspace directory with a `Tasktree.yml` file plus one or more normal Git checkouts. Repeated clones stay fast because tasktree keeps deterministic local bare-repo caches under the user cache directory.
+## Install
+
+Requires git 2.40 or later, on Linux or macOS.
+
+```bash
+go install github.com/tinmancoding/tasktree/v2/cmd/tasktree@latest
+```
+
+Or clone this repository and run `make install`, which installs `tasktree` and the `tt` and `tt2` symlinks into `~/.local/bin`. Release archives are on the [releases page](https://github.com/tinmancoding/tasktree/releases). See [Installation](https://tinmancoding.github.io/tasktree/getting-started/installation/) for details.
+
+## Quickstart
+
+```bash
+tasktree setup --author alice --machine laptop
+tasktree new "Fix login redirect" --jira PROJ-123
+tasktree add git@github.com:myorg/api.git --branch fix/PROJ-123 -t PROJ-123
+cd "$(tasktree open PROJ-123)"
+# work in api/ with plain git, then:
+tasktree commit -m "Record the fix"
+tasktree note "Root cause: the return URL was decoded twice"
+tasktree mark done
+```
+
+`mark done` deletes the checkout, after it checks that nothing would be lost. The task and its history stay. The [quickstart](https://tinmancoding.github.io/tasktree/getting-started/quickstart/) walks through this with real output.
 
 ## Features
 
-- Create a dedicated workspace for a task, bug fix, or feature branch
-- Add one or many Git repositories to the same tasktree
-- Clone from a repo's default branch, an existing branch, or a new local branch
-- Reuse cached bare clones for faster subsequent checkouts
-- Run tasktree commands from the workspace root or any nested repo subdirectory
-- Inspect all workspace repositories with `repos` and `status`
-- List all known tasktrees on this machine with `list`
-- Remove stale registry entries with `prune`
-- Remove a checkout without touching the shared bare cache
-- Manage repository aliases in `~/.config/tasktree/repos.yml`
-- Auto-register useful aliases when a repo is added
-- Migrate from the legacy `.tasktree.toml` format with `tasktree migrate`
-- Reproduce a workspace on any machine with `tasktree apply`
-
-## Getting Started
-
-### Install
-
-If you are building from source:
-
-```bash
-go install github.com/tinmancoding/tasktree/cmd/tasktree@latest
-```
-
-Or in this repository:
-
-```bash
-go build ./cmd/tasktree
-```
-
-Make sure the `tasktree` binary is on your `PATH`.
-
-### Basic Workflow
-
-```bash
-mkdir -p ~/ws/feature-payments
-cd ~/ws/feature-payments
-
-tasktree init
-tasktree add git@github.com:myorg/api.git --branch feature/payments
-tasktree add git@github.com:myorg/web.git --branch feature/payments
-
-tasktree repos
-tasktree status
-```
-
-## Tutorial
-
-This walkthrough shows the typical flow for starting work on a feature that touches multiple repositories.
-
-### 1. Create a workspace
-
-```bash
-mkdir -p ~/ws/feature-checkout
-cd ~/ws/feature-checkout
-tasktree init
-```
-
-This creates the tasktree root and writes `Tasktree.yml`.
-
-### 2. Add repositories
-
-Add a repo from its default branch:
-
-```bash
-tasktree add git@github.com:myorg/api.git
-```
-
-Example output:
-
-```text
-Added api at api
-Registered alias api -> git@github.com:myorg/api.git
-Registered alias myorg-api -> git@github.com:myorg/api.git
-```
-
-Add a repo and check out or create a branch:
-
-```bash
-tasktree add git@github.com:myorg/web.git --branch feature/checkout
-```
-
-`--branch` reuses a local branch if it exists, tracks the remote branch if only `origin/<branch>` exists, or creates a new branch from `--from` (or the default branch) if neither exists.
-
-Add a repo from a tag or commit (headless checkout):
-
-```bash
-tasktree add git@github.com:myorg/payments.git --from v1.2.0
-tasktree add git@github.com:myorg/payments.git --from 8f3e2ab
-```
-
-Create a new branch from an explicit base ref:
-
-```bash
-tasktree add git@github.com:myorg/payments.git --branch feature/checkout --from main
-```
-
-Add a repo with a custom checkout directory name:
-
-```bash
-tasktree add git@github.com:myorg/api.git --name api-v2
-```
-
-### 3. See what was created
-
-```bash
-tasktree repos
-tasktree status
-```
-
-Example `tasktree repos` output:
-
-```text
-NAME  PATH  REF               BRANCH
-api   api   feature/checkout  feature/checkout
-web   web   feature/checkout  feature/checkout
-```
-
-Example `tasktree status` output:
-
-```text
-Tasktree: feature-checkout
-Root: /Users/alex/ws/feature-checkout
-
-REPO  PATH  HEAD              STATE
-api   api   feature/checkout  clean
-web   web   feature/checkout  modified
-```
-
-- `repos` shows configured repositories in the current tasktree, including checkout ref and branch
-- `status` shows the tasktree name, root path, current HEAD, and whether each repo is clean or modified
-
-### 4. Use aliases to make future adds shorter
-
-When you add a repo by URL, tasktree automatically tries to register two aliases in `~/.config/tasktree/repos.yml`:
-
-- `repo-name`
-- `owner-repo-name`
-
-For `git@github.com:myorg/api.git`, tasktree will try to register:
-
-- `api`
-- `myorg-api`
-
-If an alias is already used by another repository, tasktree skips it and prints a message explaining why.
-
-Example conflict output:
-
-```text
-Added app at app
-Skipped alias app; already used by git@github.com:someone-else/app.git
-Registered alias myorg-app -> git@github.com:myorg/app.git
-```
-
-After aliases exist, you can add by alias instead of full URL:
-
-```bash
-tasktree add api
-tasktree add myorg-web --branch feature/checkout```
-
-You can also manage aliases explicitly:
-
-```bash
-tasktree repo add-alias payments git@github.com:myorg/payments.git
-tasktree repo aliases
-tasktree repo remove-alias payments
-```
-
-### 5. Remove a checkout you no longer need
-
-```bash
-tasktree remove web
-```
-
-This removes the checkout from the current tasktree and updates metadata. It does not remove the shared bare cache.
-
-### 6. Run commands from anywhere inside the workspace
-
-Tasktree commands resolve the workspace root by walking upward from the current directory, so this works from nested repo paths too:
-
-```bash
-cd ~/ws/feature-checkout/api/internal/server
-tasktree root
-tasktree status
-```
-
-### 7. Share or reproduce a workspace
-
-`Tasktree.yml` is pure desired state — no resolved commit SHAs, no machine-specific paths. It is safe to commit to version control or share with teammates.
-
-To reproduce a workspace on a new machine, copy `Tasktree.yml` to a directory and run `tasktree apply`:
-
-```bash
-mkdir ~/ws/feature-checkout-copy
-cp ~/ws/feature-checkout/Tasktree.yml ~/ws/feature-checkout-copy/
-cd ~/ws/feature-checkout-copy
-tasktree apply
-```
-
-`apply` clones every source in the spec that is not yet present on disk. Sources already present are skipped, so `apply` is safe to run repeatedly.
-
-## CLI Reference
-
-### Global Flags
-
-- `-v, --verbose`: print underlying git commands to stderr
-
-### `tasktree init [path]`
-
-Initialize a tasktree in the current directory or the provided path. Writes `Tasktree.yml`.
-
-Examples:
-
-```bash
-tasktree init
-tasktree init ~/ws/feature-checkout
-```
-
-### `tasktree add <repo-url> [--branch <branch>] [--from <ref>] [--name <name>]`
-
-Add a repository to the current tasktree.
-
-Accepted input:
-
-- a clone URL such as `git@github.com:myorg/api.git`
-- a configured alias such as `api`
-
-Flags:
-
-- `--branch <branch>`: the branch to use. Reuses the branch if it already exists locally, creates a local tracking branch if only `origin/<branch>` exists, or creates a new local branch from `--from` (falling back to the repo default branch) if neither exists.
-- `--from <ref>`: base ref for branch creation when `--branch` is provided but the branch does not yet exist. When `--branch` is omitted, `--from` performs a direct checkout of the given branch, tag, commit, or ref without creating a new branch.
-- `--name <name>`: use a custom checkout directory name
-
-Examples:
-
-```bash
-# Check out default branch
-tasktree add git@github.com:myorg/api.git
-
-# Use an existing local or remote branch
-tasktree add git@github.com:myorg/api.git --branch feature/payments
-
-# Create a new branch from an explicit base
-tasktree add git@github.com:myorg/api.git --branch feature/payments --from main
-
-# Headless checkout of a tag, commit, or ref
-tasktree add git@github.com:myorg/api.git --from v1.2.0
-tasktree add git@github.com:myorg/api.git --from 8f3e2ab
-
-# Custom checkout directory name
-tasktree add git@github.com:myorg/api.git --name api2
-
-# Use an alias
-tasktree add api
-```
-
-What `--branch` does:
-
-1. If the branch already exists locally — check it out; ignore `--from`.
-2. Else if `origin/<branch>` exists — create a local tracking branch; ignore `--from`.
-3. Else — resolve `--from` (or the repo default branch) and create the branch from there.
-
-The command prints which path it took so ignored `--from` values are visible:
-
-```text
-Using existing local branch "feature/x".
-Using existing remote branch "feature/x" from origin; ignoring --from "main".
-Creating new branch "feature/x" from "main".
-Checking out "v1.2.0" without creating a branch.
-```
-
-What `add` does:
-
-- resolves the current tasktree root
-- resolves the input as an alias if one exists
-- uses the shared local bare-repo cache when cloning
-- creates a normal checkout inside the tasktree
-- records the source in `Tasktree.yml` under `spec.sources`
-- attempts to register derived aliases in `repos.yml`
-- prints what aliases were added, already existed, or were skipped due to conflicts
-
-### `tasktree apply [--dry-run] [--skip-bootstrap]`
-
-Materialize all sources declared in `Tasktree.yml` that are not yet present on disk, then run the workspace bootstrap steps.
-
-For each source in `spec.sources`:
-
-- If the destination path already exists — skip it without error
-- If the source type is `git` — populate the bare-clone cache and clone the repo, then apply the declared branch or ref
-- If the source type is not yet supported — skip with a warning
-
-After **all** sources are materialized, the steps in `spec.bootstrap` run sequentially (see [Bootstrap](#bootstrap)).
-
-Flags:
-
-- `--dry-run`: preview what would be done without creating any directories or running any bootstrap step (prints the ordered bootstrap plan instead)
-- `--skip-bootstrap`: materialize sources only; do not run bootstrap steps
-
-Examples:
-
-```bash
-# Reproduce a workspace from Tasktree.yml (sources + bootstrap)
-tasktree apply
-
-# See what would be cloned/run without doing anything
-tasktree apply --dry-run
-
-# Materialize sources only
-tasktree apply --skip-bootstrap
-```
-
-`apply` is idempotent: running it when all sources are already present prints "All sources are already present." and exits cleanly. Bootstrap steps, however, run on **every** apply (see below).
-
-### Bootstrap
-
-`spec.bootstrap` is an optional, ordered list of idempotent setup steps that run **after all sources are materialized**, on **every** `apply`. Use it for `npm ci`, `go mod download`, generating local config, etc.
-
-```yaml
-spec:
-  sources:
-    - name: api
-      type: git
-      git:
-        url: git@github.com:myorg/api.git
-        branch: feature/payments
-  bootstrap:
-    - name: install-api-deps
-      run: npm ci
-      workdir: api
-    - name: generate-config
-      run: ./scripts/gen-local-config.sh
-      workdir: api
-      env:
-        ENVIRONMENT: local
-```
-
-| Field | Description |
-|---|---|
-| `name` | Identifier for the step (used in logs/errors). Required, must be unique. |
-| `run` | Shell command, executed via `sh -c`. Required. |
-| `workdir` | Working directory relative to the workspace root. Must stay within the workspace. Defaults to the root. |
-| `env` | Extra environment variables for this step. Overrides inherited values on collision. |
-
-Behavior:
-
-- **Idempotent, no completion marker** — steps must be safe to re-run; they execute every `apply`.
-- **Sequential, fail-fast** — a non-zero exit aborts `apply` (its exit code is reported); later steps do not run and no rollback is performed. Fix the cause and re-run.
-- **Environment** — steps inherit tasktree's environment plus `TASKTREE_ROOT` (the absolute workspace root); step `env` is overlaid on top.
-- **Working directory** — independent of where you invoke `tasktree apply`; it is always resolved against the workspace root.
-- **Output** — step headers and live command output stream to stderr.
-- **Cancellation** — Ctrl-C (or an engine timeout) terminates the whole step process group.
-
-### `tasktree snapshot [-o <path>] [--include-ignored]`
-
-Capture the workspace's **concrete** state into a single, portable, self-contained `.tar.gz`.
-While `Tasktree.yml` is pure *desired* state (no resolved SHAs), a snapshot is the complement: the
-exact commits and uncommitted edits as they are *right now*, so the working tree can be reproduced
-on another machine or at a later time.
-
-The archive contains a manifest (`snapshot.yaml`), an embedded copy of `Tasktree.yml`, and per-git-source payloads:
-
-- **Base pin** — the resolved base commit (`merge-base` against the remote) plus the remote URL,
-  recorded in the manifest. Always pinned, even for a clean source.
-- **Committed delta** — a `git bundle` of local commits beyond the base (only when present).
-- **Dirty state** — a tar of the working-tree content of changed + untracked files (only when
-  dirty). `.gitignore` is respected by default; `--include-ignored` captures ignored files too.
-
-Non-git sources (`http`, `archive`, `static`, `local`) carry no payload — they are reproduced from
-the embedded spec on restore.
-
-Flags:
-
-- `-o, --output <path>`: where to write the snapshot. Defaults to `./<name>-<UTC-timestamp>.tar.gz`.
-  Use `-o -` to stream the archive to **stdout**.
-- `--include-ignored`: also capture `.gitignore`d files in the dirty archive.
-
-`snapshot` fails if a declared source is not yet materialized (run `tasktree apply` first). A fully
-clean workspace produces a valid snapshot (pins only).
-
-```bash
-# Capture the current workspace
-tasktree snapshot
-
-# Write to a specific file
-tasktree snapshot -o /tmp/feature.tar.gz
-
-# Stream to stdout (e.g. to pipe into restore on another host)
-tasktree snapshot -o -
-```
-
-### `tasktree restore <snapshot> [--into <dir>] [--skip-bootstrap]`
-
-Reproduce the exact working state captured by `snapshot` into a fresh directory: re-materialize
-sources pinned to the recorded commits, replay local commits from the bundle, and restore dirty
-edits. After the working tree is reconstructed, bootstrap steps run (use `--skip-bootstrap` to skip).
-
-Pass `-` to read the snapshot from **stdin**. The target defaults to `./<name>` from the embedded
-spec; use `--into` to choose a directory. The target must be empty or not yet exist.
-
-Restore reconstructs each git source deterministically (clone → ensure base → replay bundle →
-recreate branch/detached HEAD at the recorded SHA → verify → unpack dirty edits), then registers the
-workspace in the global registry.
-
-```bash
-# Restore into ./<name>
-tasktree restore feature.tar.gz
-
-# Restore into a chosen directory
-tasktree restore feature.tar.gz --into ./reproduced
-
-# Pipe straight from another host
-tasktree snapshot -o - | ssh host 'tasktree restore - --into work'
-```
-
-### `tasktree repos`
-
-List repositories configured in the current tasktree.
-
-Output columns:
-
-- `NAME`
-- `PATH`
-- `REF`
-- `BRANCH`
-
-### `tasktree list`
-
-List all tasktrees known to this machine.
-
-Output columns:
-
-- `NAME`
-- `PATH`
-- `STATUS` (omitted when OK; shows `missing` or `invalid` for stale entries)
-
-### `tasktree prune [--dry-run]`
-
-Remove stale entries from the global tasktree registry.
-
-An entry is considered stale when:
-
-- its path no longer exists on disk (`missing`)
-- its path exists but no longer contains a `Tasktree.yml` (`invalid`)
-
-Flags:
-
-- `--dry-run`: preview what would be removed without modifying the registry
-
-Examples:
-
-```bash
-tasktree prune
-tasktree prune --dry-run
-```
-
-### `tasktree status`
-
-Show live status for repositories in the current tasktree.
-
-Output includes:
-
-- tasktree name
-- tasktree root
-- one row per repo with `REPO`, `PATH`, `HEAD`, and `STATE`
-
-### `tasktree remove <name>`
-
-Remove a repository checkout from the current tasktree.
-
-This removes the working checkout and updates `Tasktree.yml`. It does not remove shared cached clones.
-
-### `tasktree migrate [path]`
-
-Convert a legacy `.tasktree.toml` to `Tasktree.yml`.
-
-Run this once in any workspace created with an older version of tasktree:
-
-```bash
-tasktree migrate
-```
-
-What it does:
-
-1. Reads `.tasktree.toml` in the current directory (or `path` if provided)
-2. Maps each `[[repos]]` entry to a `spec.sources` entry of type `git`
-3. Writes `Tasktree.yml`
-4. Renames `.tasktree.toml` to `.tasktree.toml.bak`
-
-Resolved state fields (`resolved_ref`, `commit`) are intentionally discarded — live state is always queried from the Git checkouts directly.
-
-Example output:
-
-```text
-Found .tasktree.toml in current directory.
-
-Converting to Tasktree.yml...
-
-  api          git  git@github.com:myorg/api.git  (branch: feature/checkout)
-  web          git  git@github.com:myorg/web.git  (branch: feature/checkout)
-
-Note: resolved_ref and commit fields are not carried over.
-      Live state is always queried from the Git checkouts directly.
-
-Written: Tasktree.yml
-Renamed: .tasktree.toml → .tasktree.toml.bak
-
-Migration complete. Review Tasktree.yml and commit it to version control.
-```
-
-If tasktree detects a `.tasktree.toml` without a `Tasktree.yml`, all commands (except `migrate`) will prompt you to run `tasktree migrate` first.
-
-### `tasktree root`
-
-Print the resolved root path for the current tasktree.
-
-### `tasktree repo add-alias <alias> <clone-url>`
-
-Add a manual alias for a repository URL.
-
-Rules:
-
-- adding the same alias for the same repo is a no-op
-- adding an alias already used by a different repo fails
-
-Example:
-
-```bash
-tasktree repo add-alias api git@github.com:myorg/api.git
-```
-
-### `tasktree repo remove-alias <alias>`
-
-Remove an alias from the global alias catalog.
-
-Example:
-
-```bash
-tasktree repo remove-alias api
-```
-
-### `tasktree repo aliases`
-
-List all configured aliases and their clone URLs.
-
-Example:
-
-```bash
-tasktree repo aliases
-```
-
-### `tasktree completion <shell>`
-
-Generate shell completion scripts.
-
-Example:
-
-```bash
-tasktree completion bash
-tasktree completion zsh
-```
-
-## Configuration
-
-### Tasktree Metadata (`Tasktree.yml`)
-
-Each workspace stores its desired state in a `Tasktree.yml` file at the workspace root. It uses a Kubernetes-style structure:
-
-```yaml
-apiVersion: tasktree.dev/v1
-kind: Tasktree
-
-metadata:
-  name: feature-checkout
-  createdAt: "2026-03-25T12:00:00Z"
-
-spec:
-  sources:
-    - name: api
-      type: git
-      path: api
-      git:
-        url: "git@github.com:myorg/api.git"
-        branch: feature/checkout
-
-    - name: web
-      type: git
-      git:
-        url: "git@github.com:myorg/web.git"
-        branch: feature/checkout
-```
-
-`Tasktree.yml` is pure desired state — it contains no resolved commit SHAs, no timestamps written by the tool beyond `createdAt`, and no machine-specific paths. It is safe to commit to version control and share with teammates.
-
-The tool appends or removes entries in `spec.sources` on `tasktree add` / `tasktree remove`. It never writes resolved state back into the file.
-
-A JSON Schema for editor validation and autocompletion is available at `schema/tasktree.schema.json` in the tasktree repository.
-
-### Migrating from `.tasktree.toml`
-
-Workspaces created with older versions of tasktree use `.tasktree.toml`. Run `tasktree migrate` once to convert:
-
-```bash
-cd ~/ws/my-old-workspace
-tasktree migrate
-```
-
-See [`tasktree migrate`](#tasktree-migrate-path) for full details.
-
-### Global Tasktree Registry
-
-Tasktree keeps a global registry of all initialized tasktrees at:
-
-```text
-~/.local/state/tasktree/registry.toml
-```
-
-This registry is updated automatically on `tasktree init` and is used by `tasktree list` to show all known workspaces. Stale entries (paths that no longer exist or have lost their `Tasktree.yml`) are reported in the `STATUS` column and can be cleaned up with `tasktree prune`.
-
-### Global Repository Alias Catalog
-
-Tasktree stores repository aliases in the default config directory, usually:
-
-```text
-~/.config/tasktree/repos.yml
-```
-
-Structure:
-
-```yaml
-repos:
-  - url: git@github.com:myorg/api.git
-    aliases:
-      - api
-      - myorg-api
-  - url: git@github.com:myorg/web.git
-    aliases:
-      - web
-      - myorg-web
-```
-
-Notes:
-
-- aliases are global across tasktrees
-- an alias can only point to one repository URL
-- a repo entry may exist even if it currently has no aliases
-
-## How Caching Works
-
-Tasktree keeps a deterministic local bare clone cache under the user cache directory, typically something like:
-
-```text
-~/.cache/tasktree/repos
-```
-
-When you add the same repository again in another tasktree, tasktree refreshes the bare cache and clones from it instead of cloning from the network every time.
+- **Tasks as files.** Each task is a Markdown record with typed fields, an editable description and an append-only log. `tasktree history` is the git history of the record.
+- **Workspaces as tasktrees.** A task has zero or one tasktree: repositories with a mode (`follow`, `work` or `pin`), files, symlinks and bootstrap steps. It is checked out where you want it, and can be defined without a checkout.
+- **Git is the only store.** Records and tasktrees live in a hidden git repository. Every repository in a checkout is a normal full clone, and git works inside it as always.
+- **Safe by default.** Closing or removing something checks for uncommitted changes, unpushed commits and stashes first. Sync never rebases or resets your branches.
+- **Subtasks.** Share the parent's tasktree, or fork an isolated one from the parent's current commit and send it back through a pull request.
+- **Sync between machines.** `tasktree sync` merges records field by field, moves tasktrees and reports conflicts. `resolve` settles diverged tasktrees.
+- **Templates.** Create a task and its repositories, files and bootstrap steps from a short YAML file.
+- **Made for coding agents.** `--json` output, stable exit codes, a generated `AGENTS.md`, per-agent authorship.
+- **Recovery tools.** `doctor` finds and repairs broken checkouts. `move` relocates a checkout atomically.
+
+## Documentation
+
+The documentation is at <https://tinmancoding.github.io/tasktree/>.
+
+- [Getting started](https://tinmancoding.github.io/tasktree/getting-started/installation/): install, quickstart, importing V1 workspaces
+- [Concepts](https://tinmancoding.github.io/tasktree/concepts/model/): the model, task records, tasktrees, subtasks, sync, templates
+- [Guides](https://tinmancoding.github.io/tasktree/guides/agents/): working with agents, two machines, doctor and recovery
+- [Reference](https://tinmancoding.github.io/tasktree/reference/exit-codes/): commands, exit codes, JSON output, configuration, environment, files
+- [Design](https://tinmancoding.github.io/tasktree/design/tasktree-v2/): the decisions behind V2
+
+The same files are in [`docs/`](docs/).
+
+## Migrating from V1
+
+V1 kept a workspace as a folder with a `Tasktree.yml`. `tasktree import` adopts those folders in place, without recloning, and rolls back if anything differs. Read [Importing V1 workspaces](https://tinmancoding.github.io/tasktree/getting-started/importing-v1/) before you replace the V1 binary. The V1 documentation stays on the [`v1` branch](https://github.com/tinmancoding/tasktree/tree/v1/docs).
 
 ## Development
 
 ```bash
+go build ./...
+go vet ./...
 go test ./...
-go run ./cmd/tasktree --help
 ```
+
+The CLI reference in `docs/reference/cli/` is generated from the command definitions. After you change a command, flag or help text, regenerate it, or the test suite fails:
+
+```bash
+make docs-cli
+```
+
+To preview the documentation site, install `mkdocs-material` and run `mkdocs serve`. `mkdocs build --strict` fails on broken links.
+
+Templates for your own use are in [`examples/templates/`](examples/templates/). JSON Schemas for records, tasktree config and templates are in [`schema/`](schema/).
 
 ## Releases
 
-GitHub Actions uses Release Please and GoReleaser to manage version tags, GitHub releases, and downloadable binaries.
+Commits follow [Conventional Commits](https://www.conventionalcommits.org/). [release-please](https://github.com/googleapis/release-please) keeps a release pull request open on `main`. Merging it tags the release, updates `CHANGELOG.md` and starts GoReleaser, which attaches the archives to the GitHub release.
 
-- Merge changes using Conventional Commits such as `feat:`, `fix:`, or `chore:`
-- Release Please opens or updates a release PR with the next version and changelog
-- Merging that PR creates the tag and GitHub release
-- GoReleaser publishes cross-platform archives and `checksums.txt`
+## License
 
-## Notes
-
-- Git operations use the system `git` binary
-- Metadata is written atomically
-- Removing a repo checkout does not remove its local bare cache
+See [LICENSE](LICENSE).

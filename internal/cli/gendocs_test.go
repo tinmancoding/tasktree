@@ -46,3 +46,24 @@ func TestCLIReferenceUpToDate(t *testing.T) {
 		}
 	}
 }
+
+// TestCLIReferenceInNav keeps mkdocs.yml in step with the generated pages.
+func TestCLIReferenceInNav(t *testing.T) {
+	generated := t.TempDir()
+	if err := GenerateCLIDocs(generated); err != nil {
+		t.Fatal(err)
+	}
+	nav, err := os.ReadFile(filepath.Join("..", "..", "mkdocs.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(generated)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if !bytes.Contains(nav, []byte("reference/cli/"+e.Name())) {
+			t.Errorf("mkdocs.yml nav has no entry for reference/cli/%s", e.Name())
+		}
+	}
+}

@@ -1,5 +1,5 @@
 site_name: Tasktree
-site_description: Task-focused multi-repository workspace manager
+site_description: Tasks and multi-repository workspaces in one git-backed tool
 site_url: https://tinmancoding.github.io/tasktree
 repo_url: https://github.com/tinmancoding/tasktree
 repo_name: tinmancoding/tasktree
@@ -32,37 +32,94 @@ markdown_extensions:
   - pymdownx.superfences
   - tables
 
+validation:
+  omitted_files: warn
+  absolute_links: warn
+  unrecognized_links: warn
+  anchors: warn
+
 nav:
   - Home: index.md
-  - Getting Started:
+  - Getting started:
     - Installation: getting-started/installation.md
     - Quickstart: getting-started/quickstart.md
-    - Migrating from .tasktree.toml: getting-started/migration.md
+    - Importing V1 workspaces: getting-started/importing-v1.md
   - Concepts:
-    - Overview: concepts/overview.md
-    - Workspace Spec: concepts/workspace-spec.md
-    - Source Types: concepts/source-types.md
-    - Snapshots: concepts/snapshots.md
-    - Repository Aliases: concepts/repo-aliases.md
-    - Global Registry: concepts/registry.md
-  - CLI Reference:
-    - Overview: cli/overview.md
-    - init: cli/init.md
-    - add: cli/add.md
-    - apply: cli/apply.md
-    - snapshot: cli/snapshot.md
-    - restore: cli/restore.md
-    - remove: cli/remove.md
-    - repos: cli/repos.md
-    - status: cli/status.md
-    - annotate: cli/annotate.md
-    - list: cli/list.md
-    - root: cli/root.md
-    - prune: cli/prune.md
-    - migrate: cli/migrate.md
-    - repo: cli/repo.md
-    - template: cli/template.md
-  - Common Patterns:
-    - Multi-Service Feature Branch: patterns/multi-service-feature.md
-    - Hotfix Workflow: patterns/hotfix-workflow.md
-    - Sharing a Workspace: patterns/applying-from-spec.md
+    - The model: concepts/model.md
+    - Task records: concepts/task-records.md
+    - Tasktrees: concepts/tasktrees.md
+    - Subtasks: concepts/subtasks.md
+    - Sync: concepts/sync.md
+    - Templates: concepts/templates.md
+  - Guides:
+    - Working with agents: guides/agents.md
+    - Using two machines: guides/two-machines.md
+    - Doctor and recovery: guides/doctor-and-recovery.md
+  - Reference:
+    - Exit codes: reference/exit-codes.md
+    - JSON output: reference/json-output.md
+    - Configuration: reference/configuration.md
+    - Environment variables: reference/environment.md
+    - Files: reference/files.md
+    - Commands:
+      - tasktree: reference/cli/tasktree.md
+      - add: reference/cli/tasktree_add.md
+      - alias:
+        - Overview: reference/cli/tasktree_alias.md
+        - add: reference/cli/tasktree_alias_add.md
+        - list: reference/cli/tasktree_alias_list.md
+        - rm: reference/cli/tasktree_alias_rm.md
+      - bootstrap:
+        - Overview: reference/cli/tasktree_bootstrap.md
+        - add: reference/cli/tasktree_bootstrap_add.md
+        - list: reference/cli/tasktree_bootstrap_list.md
+        - rm: reference/cli/tasktree_bootstrap_rm.md
+        - run: reference/cli/tasktree_bootstrap_run.md
+      - commit: reference/cli/tasktree_commit.md
+      - config:
+        - Overview: reference/cli/tasktree_config.md
+        - get: reference/cli/tasktree_config_get.md
+        - set: reference/cli/tasktree_config_set.md
+      - doctor: reference/cli/tasktree_doctor.md
+      - focus: reference/cli/tasktree_focus.md
+      - history: reference/cli/tasktree_history.md
+      - import: reference/cli/tasktree_import.md
+      - info:
+        - Overview: reference/cli/tasktree_info.md
+        - ack: reference/cli/tasktree_info_ack.md
+        - edit: reference/cli/tasktree_info_edit.md
+        - set: reference/cli/tasktree_info_set.md
+      - label:
+        - Overview: reference/cli/tasktree_label.md
+        - add: reference/cli/tasktree_label_add.md
+        - rm: reference/cli/tasktree_label_rm.md
+      - list: reference/cli/tasktree_list.md
+      - mark: reference/cli/tasktree_mark.md
+      - mode: reference/cli/tasktree_mode.md
+      - move: reference/cli/tasktree_move.md
+      - new: reference/cli/tasktree_new.md
+      - note: reference/cli/tasktree_note.md
+      - open: reference/cli/tasktree_open.md
+      - push: reference/cli/tasktree_push.md
+      - ref:
+        - Overview: reference/cli/tasktree_ref.md
+        - add: reference/cli/tasktree_ref_add.md
+        - rm: reference/cli/tasktree_ref_rm.md
+      - remove: reference/cli/tasktree_remove.md
+      - resolve: reference/cli/tasktree_resolve.md
+      - root: reference/cli/tasktree_root.md
+      - setup: reference/cli/tasktree_setup.md
+      - sync: reference/cli/tasktree_sync.md
+      - template:
+        - Overview: reference/cli/tasktree_template.md
+        - list: reference/cli/tasktree_template_list.md
+        - show: reference/cli/tasktree_template_show.md
+        - validate: reference/cli/tasktree_template_validate.md
+  - Design:
+    - tasktree V2 design: design/tasktree-v2.md
+    - Archive:
+      - Overview: design/archive/README.md
+      - Snapshots and bootstrap: design/archive/tasktree-snapshots-and-bootstrap.md
+      - Bootstrap plan: design/archive/bootstrap-implementation-plan.md
+      - Snapshot plan: design/archive/snapshot-implementation-plan.md
+      - Engine: design/archive/tasktree-engine.md
