@@ -37,7 +37,7 @@ An extra hand-edited section.
 
 Loose text before entries.
 
-### 2026-10-12T10:03:00Z note laci@mbp {#e-01jab3}
+### 2026-10-12T10:03:00Z note alice@laptop {#e-01jab3}
 First body.
 `
 
@@ -112,7 +112,7 @@ func TestAppendRejectsRecordBoundaryLines(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, body := range []string{"## Log", "### 2026-10-12T10:03:00Z note laci@mbp {#e-01jab4}"} {
+	for _, body := range []string{"## Log", "### 2026-10-12T10:03:00Z note alice@laptop {#e-01jab4}"} {
 		if err := d.Append(record.Entry{ID: "01jab8", Timestamp: time.Now(), Kind: "note", Author: "a", Machine: "m", Body: body}); err == nil {
 			t.Fatalf("accepted %q", body)
 		}

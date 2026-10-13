@@ -48,11 +48,11 @@ func TestCommandFlowAndExitCodes(t *testing.T) {
 	if !strings.HasPrefix(out, "fix-login ") {
 		t.Fatalf("new: %q", out)
 	}
-	out, _, err = run(t, "new", "Jira work", "--jira", "DSA-8946")
+	out, _, err = run(t, "new", "Jira work", "--jira", "PROJ-123")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(out, "DSA-8946 ") {
+	if !strings.HasPrefix(out, "PROJ-123 ") {
 		t.Fatalf("jira: %q", out)
 	}
 	_, _, err = run(t, "new", "Collision", "--handle", "fix-login")

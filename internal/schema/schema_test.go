@@ -115,9 +115,9 @@ func TestRenderedRecordFrontmatterValidates(t *testing.T) {
 	parent := "k7x2mq"
 	now := time.Date(2026, 10, 12, 9, 0, 0, 0, time.UTC)
 	d, err := record.New(record.Task{
-		ID: "p3n8wd", Handle: "DSA-8946", Title: "AI board member: prod admin", Status: "active", Parent: &parent,
-		Labels: []string{"aibm", "x.y-z"}, CreatedAt: now, UpdatedAt: now,
-		Refs: []record.Ref{{Type: "jira", Value: "DSA-8946"}, {Type: "pr", Value: "DiligentCorp/boardroom-ai#123"}, {Type: "url", Value: "https://example.com/a"}},
+		ID: "p3n8wd", Handle: "PROJ-123", Title: "Payments retry: production admin", Status: "active", Parent: &parent,
+		Labels: []string{"payments", "x.y-z"}, CreatedAt: now, UpdatedAt: now,
+		Refs: []record.Ref{{Type: "jira", Value: "PROJ-123"}, {Type: "pr", Value: "myorg/payments-api#123"}, {Type: "url", Value: "https://example.com/a"}},
 	})
 	if err != nil {
 		t.Fatal(err)

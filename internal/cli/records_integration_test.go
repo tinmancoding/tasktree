@@ -121,7 +121,7 @@ func TestRefsURLsAndHistory(t *testing.T) {
 	if _, _, err := run(t, "config", "set", "jira.baseUrl", "https://jira.example/"); err != nil {
 		t.Fatal(err)
 	}
-	for _, args := range [][]string{{"ref", "add", "jira", "DSA-1", "-t", "refs"}, {"ref", "add", "pr", "owner/repo#12", "-t", "refs"}} {
+	for _, args := range [][]string{{"ref", "add", "jira", "PROJ-1", "-t", "refs"}, {"ref", "add", "pr", "owner/repo#12", "-t", "refs"}} {
 		if _, _, err := run(t, args...); err != nil {
 			t.Fatal(err)
 		}
@@ -130,14 +130,14 @@ func TestRefsURLsAndHistory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out, "https://jira.example/browse/DSA-1") || !strings.Contains(out, "https://github.com/owner/repo/pull/12") {
+	if !strings.Contains(out, "https://jira.example/browse/PROJ-1") || !strings.Contains(out, "https://github.com/owner/repo/pull/12") {
 		t.Fatalf("urls: %s", out)
 	}
 	out, _, err = run(t, "info", "-t", "refs", "--json")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out, `"url":"https://jira.example/browse/DSA-1"`) {
+	if !strings.Contains(out, `"url":"https://jira.example/browse/PROJ-1"`) {
 		t.Fatalf("json refs: %s", out)
 	}
 	out, _, err = run(t, "history", "--json", "-t", "refs")
