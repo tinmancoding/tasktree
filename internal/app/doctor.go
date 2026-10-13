@@ -264,6 +264,9 @@ func (a App) doctorFindings(ctx context.Context) ([]Finding, error) {
 		for _, m := range ms {
 			expectedGit := filepath.Join(clone, "modules", m.Name)
 			expectedWT := filepath.Join(co.Path, m.Path)
+			if _, gitdirErr := os.Stat(expectedGit); os.IsNotExist(gitdirErr) && !moduleInitialized(co.Path, m) {
+				continue // never materialized: its gitlink commit was unavailable (DN5)
+			}
 			dotBytes, dotErr := os.ReadFile(filepath.Join(expectedWT, ".git"))
 			wt, _, wtErr := git(ctx, a.Git.WithDefaults(), "", "config", "--file", filepath.Join(expectedGit, "config"), "--get", "core.worktree")
 			actualGit := strings.TrimSpace(strings.TrimPrefix(string(dotBytes), "gitdir:"))

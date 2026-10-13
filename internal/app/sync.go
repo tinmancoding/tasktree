@@ -382,6 +382,7 @@ func (a App) advanceCheckout(ctx context.Context, id, root string, r *SyncReport
 	next := a.Hub.Ref(ctx, "refs/heads/task/"+id)
 	if next == old {
 		a.applyPendingGitlinks(ctx, id, root, r)
+		a.retryPending(ctx, id, root, r)
 		return nil
 	}
 	if err = a.cleanSyncRoot(ctx, id, root); err != nil {
@@ -396,6 +397,7 @@ func (a App) advanceCheckout(ctx context.Context, id, root string, r *SyncReport
 		return hub.ConflictError{Message: "checkout diverged from hub; run " + product.Name + " resolve"}
 	}
 	a.applyGitlinks(ctx, id, root, old, before, r)
+	a.retryPending(ctx, id, root, r)
 	r.Steps = append(r.Steps, "fast-forwarded task checkout")
 	a.refreshTaskRecord(ctx, id)
 	return nil
@@ -428,12 +430,10 @@ func (a App) applyGitlinks(ctx context.Context, id, root, old string, before []m
 		}
 		path := filepath.Join(root, m.Path)
 		if _, e = os.Stat(filepath.Join(path, ".git")); os.IsNotExist(e) {
-			if e = a.materializeSelected(ctx, id, root, m); e != nil {
-				if strings.Contains(e.Error(), "gitlink commit") {
-					r.UnpushedGitlinks = appendUnique(r.UnpushedGitlinks, m.Name+": "+e.Error())
-				} else {
-					r.Failed = append(r.Failed, m.Name+": "+e.Error())
-				}
+			if u, me := a.materializeSelected(ctx, id, root, m); me != nil {
+				r.Failed = append(r.Failed, m.Name+": "+me.Error())
+			} else if u != nil {
+				r.UnpushedGitlinks = appendUnique(r.UnpushedGitlinks, u.message())
 			} else {
 				r.Steps = append(r.Steps, "materialized "+m.Name)
 			}
@@ -543,17 +543,74 @@ func (a App) applyOneGitlink(ctx context.Context, m module, path, target string,
 
 // materializeSelected reuses the cache and D39 attach path, limited to a new
 // submodule so an existing checkout's branch is never reset by materialize.
-func (a App) materializeSelected(ctx context.Context, id, root string, m module) error {
+// A gitlink commit that is not available leaves the repository uninitialized
+// and is returned instead of failing (DN5).
+func (a App) materializeSelected(ctx context.Context, id, root string, m module) (*unavailableGitlink, error) {
 	path := filepath.Join(root, m.Path)
 	if err := ensureEmpty(path); err != nil {
-		return fmt.Errorf("refuse to overwrite new submodule path: %w", err)
+		return nil, fmt.Errorf("refuse to overwrite new submodule path: %w", err)
 	}
 	if _, err := os.Stat(filepath.Join(a.Home.ClonePath(id), "modules", m.Name)); err == nil {
-		return fmt.Errorf("hidden module directory already exists; run "+product.Name+" doctor before materializing %s", m.Name)
+		return nil, fmt.Errorf("hidden module directory already exists; run "+product.Name+" doctor before materializing %s", m.Name)
 	} else if !os.IsNotExist(err) {
-		return err
+		return nil, err
 	}
-	return a.materializeModules(ctx, id, root, []module{m}, a.WarningWriter)
+	skipped, err := a.materializeModulesReport(ctx, id, root, []module{m}, a.WarningWriter)
+	if err != nil || len(skipped) == 0 {
+		return nil, err
+	}
+	return &skipped[0], nil
+}
+
+// initializePending retries every registered repository that is still
+// uninitialized (its gitlink commit was unavailable earlier, or it was never
+// materialized). It reports what it initialized and what is still waiting
+// for its commit (S6, DN5).
+func (a App) initializePending(ctx context.Context, id, root string) (initialized []string, waiting []unavailableGitlink, failed []string) {
+	ms, err := modules(root)
+	if err != nil {
+		return nil, nil, []string{err.Error()}
+	}
+	g := a.Git.WithDefaults()
+	for _, m := range ms {
+		if !safeModulePath(root, m) || moduleInitialized(root, m) {
+			continue
+		}
+		sha, _, e := rootGit(ctx, g, a.Home, id, root, "rev-parse", "HEAD:"+m.Path)
+		if e != nil {
+			continue // not a committed gitlink yet
+		}
+		if entries, readErr := os.ReadDir(filepath.Join(root, m.Path)); readErr == nil && len(entries) > 0 {
+			continue // user content, never overwritten
+		}
+		if _, statErr := os.Stat(filepath.Join(a.Home.ClonePath(id), "modules", m.Name)); statErr == nil {
+			continue // a hidden git dir exists; doctor owns that state
+		}
+		u, e := a.materializeSelected(ctx, id, root, m)
+		switch {
+		case e != nil:
+			failed = append(failed, m.Name+": "+e.Error())
+		case u != nil:
+			waiting = append(waiting, unavailableGitlink{m, strings.TrimSpace(sha)})
+		default:
+			initialized = append(initialized, m.Name)
+		}
+	}
+	return
+}
+
+// retryPending is the sync side of initializePending.
+func (a App) retryPending(ctx context.Context, id, root string, r *SyncReport) {
+	initialized, waiting, failed := a.initializePending(ctx, id, root)
+	for _, name := range initialized {
+		r.Steps = appendUnique(r.Steps, "materialized "+name)
+	}
+	for _, u := range waiting {
+		r.UnpushedGitlinks = appendUnique(r.UnpushedGitlinks, u.message())
+	}
+	for _, f := range failed {
+		r.Failed = append(r.Failed, f)
+	}
 }
 
 type repoUpdate struct {
@@ -634,6 +691,9 @@ func (a App) updateRepo(ctx context.Context, root string, m module) repoUpdate {
 	if !safeModulePath(root, m) {
 		u.failed = "unsafe submodule path"
 		return u
+	}
+	if !moduleInitialized(root, m) {
+		return u // waiting for its gitlink commit; retryPending reports it
 	}
 	path := filepath.Join(root, m.Path)
 	g := a.Git.WithDefaults()

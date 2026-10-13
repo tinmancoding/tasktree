@@ -761,3 +761,159 @@ func TestEnvTaskSharedSubtaskKeepsTasktreeRoot(t *testing.T) {
 		t.Fatalf("unrelated task root: code=%d err=%v", cli.Code(err), err)
 	}
 }
+
+func makeUpstream(t *testing.T) string {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), "upstream")
+	writeFile(t, filepath.Join(dir, "README"), "initial\n")
+	gitRun(t, dir, "init", "-b", "main")
+	gitRun(t, dir, "add", ".")
+	gitRun(t, dir, "commit", "-m", "initial")
+	gitRun(t, dir, "config", "receive.denyCurrentBranch", "updateInstead")
+	return dir
+}
+
+// pendingFixture: machine A records a gitlink to an unpushed commit; machine B
+// has the tasktree definition but cannot get that commit.
+func pendingFixture(t *testing.T) (a, b *machine, ra, upstream, sha string) {
+	t.Helper()
+	a, b, _ = twoMachines(t)
+	upstream = makeUpstream(t)
+	ra = strings.TrimSpace(a.must("new", "Pend", "--handle", "pend", "--open"))
+	for _, args := range [][]string{{"add", upstream, "--name", "good"}, {"add", upstream, "--name", "pending", "--branch", "topic"}} {
+		if _, _, err := a.inDir(ra, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeFile(t, filepath.Join(ra, "pending", "local-only"), "local\n")
+	gitRun(t, filepath.Join(ra, "pending"), "add", ".")
+	gitRun(t, filepath.Join(ra, "pending"), "commit", "-m", "local only")
+	sha = gitRun(t, filepath.Join(ra, "pending"), "rev-parse", "HEAD")
+	if _, _, err := a.inDir(ra, "commit", "-m", "record local-only commit"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := a.inDir(ra, "sync", "--no-repos"); err != nil {
+		t.Fatal(err)
+	}
+	return
+}
+
+func isPopulated(dir string) bool {
+	_, err := os.Stat(filepath.Join(dir, ".git"))
+	return err == nil
+}
+
+// DN5: an unavailable gitlink leaves that repo uninitialized, never at a
+// branch tip; open still succeeds, and sync/open initialize it later.
+func TestOpenLeavesUnavailableGitlinkUninitialized(t *testing.T) {
+	for _, retry := range []string{"sync", "open"} {
+		t.Run("retry via "+retry, func(t *testing.T) {
+			a, b, ra, _, sha := pendingFixture(t)
+			out, errOut, err := b.run("open", "pend")
+			if err != nil {
+				t.Fatalf("open must not fail: %v\n%s", err, errOut)
+			}
+			rb := strings.TrimSpace(out)
+			want := "pending: gitlink " + sha + " not available; left uninitialized — run tasktree sync or tasktree open again later"
+			if !strings.Contains(errOut, want) {
+				t.Fatalf("warning missing %q in:\n%s", want, errOut)
+			}
+			if !isPopulated(filepath.Join(rb, "good")) {
+				t.Fatal("other repositories must still be materialized")
+			}
+			if isPopulated(filepath.Join(rb, "pending")) {
+				t.Fatal("unavailable gitlink was initialized")
+			}
+			if entries, _ := os.ReadDir(filepath.Join(rb, "pending")); len(entries) != 0 {
+				t.Fatalf("uninitialized repo has content: %v", entries)
+			}
+			if _, statErr := os.Stat(filepath.Join(b.home, "clones")); statErr == nil {
+				mods, _ := filepath.Glob(filepath.Join(b.home, "clones", "*.git", "modules", "pending"))
+				if len(mods) != 0 {
+					t.Fatalf("module git dir left behind: %v", mods)
+				}
+			}
+			// info reports it; commit records no gitlink change.
+			out, _, err = b.inDir(rb, "info")
+			if err != nil || !strings.Contains(out, "uninitialized") {
+				t.Fatalf("info: %v\n%s", err, out)
+			}
+			out, _, err = b.inDir(rb, "info", "--json")
+			if err != nil || !strings.Contains(out, `"uninitialized":true`) {
+				t.Fatalf("info --json: %v\n%s", err, out)
+			}
+			out, _, err = b.inDir(rb, "commit", "-m", "should be empty")
+			if err != nil || !strings.Contains(out, "nothing to commit") {
+				t.Fatalf("commit with uninitialized repo: %v %q", err, out)
+			}
+			// Still unavailable: sync and re-open stay quiet failures-wise.
+			if _, _, err = b.inDir(rb, "sync"); err != nil {
+				t.Fatalf("sync with unavailable gitlink: %v", err)
+			}
+			if _, _, err = b.run("open", "pend"); err != nil {
+				t.Fatalf("re-open: %v", err)
+			}
+			if isPopulated(filepath.Join(rb, "pending")) {
+				t.Fatal("initialized without the commit")
+			}
+			// The commit becomes available.
+			gitRun(t, filepath.Join(ra, "pending"), "push", "origin", "topic")
+			if retry == "sync" {
+				if _, _, err = b.inDir(rb, "sync"); err != nil {
+					t.Fatal(err)
+				}
+			} else if _, _, err = b.run("open", "pend"); err != nil {
+				t.Fatal(err)
+			}
+			pending := filepath.Join(rb, "pending")
+			if !isPopulated(pending) {
+				t.Fatalf("%s did not initialize the repository", retry)
+			}
+			if got := gitRun(t, pending, "rev-parse", "HEAD"); got != sha {
+				t.Fatalf("HEAD=%s want gitlink %s", got, sha)
+			}
+			if got := gitRun(t, pending, "branch", "--show-current"); got != "topic" {
+				t.Fatalf("branch=%q", got)
+			}
+			_ = a
+		})
+	}
+}
+
+// DN5: the close auto-commit and gate cope with an uninitialized repository.
+func TestCloseWithUninitializedRepository(t *testing.T) {
+	_, b, _, _, _ := pendingFixture(t)
+	rb := strings.TrimSpace(b.must("open", "pend"))
+	if _, _, err := b.inDir(rb, "mark", "done"); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	if _, err := os.Stat(rb); !os.IsNotExist(err) {
+		t.Fatal("checkout not removed")
+	}
+	hubDir := filepath.Join(b.home, "git")
+	tree := gitRun(t, hubDir, "ls-tree", strings.Fields(gitRun(t, hubDir, "for-each-ref", "--format=%(refname)", "refs/heads/task/"))[0], "pending")
+	if !strings.Contains(tree, "160000") {
+		t.Fatalf("gitlink lost: %s", tree)
+	}
+}
+
+// DN5: structural and health commands tolerate an uninitialized repository.
+func TestCommandsTolerateUninitializedRepository(t *testing.T) {
+	_, b, _, _, _ := pendingFixture(t)
+	rb := strings.TrimSpace(b.must("open", "pend"))
+	for _, args := range [][]string{{"push"}, {"mode", "pending", "follow"}, {"doctor"}} {
+		if _, errOut, err := b.inDir(rb, args...); err != nil {
+			t.Fatalf("%v with an uninitialized repo: %v\n%s", args, err, errOut)
+		}
+	}
+	if _, _, err := b.inDir(rb, "push", "pending"); cli.Code(err) != 6 {
+		t.Fatalf("explicit push of an uninitialized repo: code=%d err=%v", cli.Code(err), err)
+	}
+	moved := filepath.Join(filepath.Dir(rb), "moved")
+	if _, _, err := b.run("move", moved, "-t", "pend"); err != nil {
+		t.Fatalf("move: %v", err)
+	}
+	if _, _, err := b.run("remove", "pending", "-t", "pend"); err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+}

@@ -35,6 +35,9 @@ func (a App) gitlinkRewindFor(ctx context.Context, id, root string, m module, fe
 	if !safeModulePath(root, m) {
 		return "", "", false, fmt.Errorf("unsafe submodule path: %s", m.Path)
 	}
+	if !moduleInitialized(root, m) {
+		return "", "", false, nil // nothing checked out, so nothing to rewind
+	}
 	g := a.Git.WithDefaults()
 	path := filepath.Join(root, m.Path)
 	out, _, e := rootGit(ctx, g, a.Home, id, root, "rev-parse", "HEAD:"+m.Path)

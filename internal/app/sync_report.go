@@ -15,7 +15,7 @@ func (a App) reportGitlinks(ctx context.Context, id, root string, r *SyncReport)
 		return
 	}
 	for _, m := range ms {
-		if !safeModulePath(root, m) {
+		if !safeModulePath(root, m) || !moduleInitialized(root, m) {
 			continue
 		}
 		target, _, e := rootGit(ctx, a.Git.WithDefaults(), a.Home, id, root, "rev-parse", "HEAD:"+m.Path)

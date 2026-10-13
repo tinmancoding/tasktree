@@ -50,9 +50,15 @@ func (a App) Move(ctx context.Context, id, oldPath, newPath string) (string, err
 	if err = requireSameFilesystem(oldPath, newPath); err != nil {
 		return "", GateError{err.Error()}
 	}
-	ms, err := modules(oldPath)
+	allModules, err := modules(oldPath)
 	if err != nil {
 		return "", err
+	}
+	ms := allModules[:0:0]
+	for _, m := range allModules {
+		if moduleInitialized(oldPath, m) { // an uninitialized repository (DN5) has nothing to relocate
+			ms = append(ms, m)
+		}
 	}
 	for _, m := range ms {
 		gd := filepath.Join(a.Home.ClonePath(id), "modules", m.Name)

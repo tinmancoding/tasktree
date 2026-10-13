@@ -891,6 +891,9 @@ func writeRepoInfo(w io.Writer, tree app.TasktreeInfo) error {
 		if r.Dirty {
 			state = "modified"
 		}
+		if r.Uninitialized {
+			state = "uninitialized"
+		}
 		rows = append(rows, output.RepoRow{Name: r.Name, Mode: r.Mode, Branch: r.Branch, Head: r.Head, State: state, Ahead: r.Ahead, Behind: r.Behind, Unpushed: r.Unpushed})
 	}
 	return output.WriteRepoTable(w, rows)

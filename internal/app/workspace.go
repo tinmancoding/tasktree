@@ -242,6 +242,9 @@ type RepoInfo struct {
 	Ahead    int    `json:"ahead"`
 	Behind   int    `json:"behind"`
 	Unpushed int    `json:"unpushed"`
+	// Uninitialized marks a repository whose gitlink commit was unavailable
+	// when it was materialized (DN5); it has no checkout content yet.
+	Uninitialized bool `json:"uninitialized"`
 }
 type TasktreeInfo struct {
 	Path      string     `json:"path"`
@@ -335,6 +338,10 @@ func (a App) InspectTasktree(ctx context.Context, id, root string) (TasktreeInfo
 	}
 	for _, m := range ms {
 		p := filepath.Join(root, m.Path)
+		if !moduleInitialized(root, m) {
+			result.Repos = append(result.Repos, RepoInfo{Name: m.Name, Path: m.Path, Mode: m.Mode, Branch: m.Branch, Uninitialized: true})
+			continue
+		}
 		branch, _ := g.CurrentBranch(ctx, p)
 		sha, _, _ := git(ctx, g, p, "rev-parse", "--short=12", "HEAD")
 		dirty, _ := g.IsDirty(ctx, p)
@@ -389,6 +396,7 @@ func (a App) Open(ctx context.Context, ref string, o OpenOptions, progress inter
 		if c, ok := local.Checkouts[t.ID]; ok {
 			if st, e := os.Stat(c.Path); e == nil && st.IsDir() {
 				a.refreshTaskRecord(ctx, t.ID)
+				a.initializePendingFor(ctx, t.ID, c.Path, progress)
 				return c.Path, nil
 			}
 		}
@@ -408,6 +416,7 @@ func (a App) Open(ctx context.Context, ref string, o OpenOptions, progress inter
 	if c, ok := local.Checkouts[t.ID]; ok {
 		if st, e := os.Stat(c.Path); e == nil && st.IsDir() {
 			a.refreshTaskRecord(ctx, t.ID)
+			a.initializePendingFor(ctx, t.ID, c.Path, progress)
 			return c.Path, nil
 		}
 	}
@@ -528,6 +537,21 @@ func (a App) Open(ctx context.Context, ref string, o OpenOptions, progress inter
 	return path, nil
 }
 
+// initializePendingFor retries uninitialized repositories of a live checkout
+// when it is opened again, warning about any still waiting (DN5).
+func (a App) initializePendingFor(ctx context.Context, id, root string, progress interface{ Write([]byte) (int, error) }) {
+	_, waiting, failed := a.initializePending(ctx, id, root)
+	if progress == nil {
+		return
+	}
+	for _, u := range waiting {
+		fmt.Fprintln(progress, "warning: "+u.message())
+	}
+	for _, f := range failed {
+		fmt.Fprintln(progress, "warning: "+f)
+	}
+}
+
 func ensureDSStoreExcluded(gitDir string) error {
 	info := filepath.Join(gitDir, "info")
 	if err := os.MkdirAll(info, 0o755); err != nil {
@@ -604,11 +628,42 @@ func (a App) materialize(ctx context.Context, id, root string, progress interfac
 	}
 	return a.materializeModules(ctx, id, root, ms, progress)
 }
+
+// unavailableGitlink is a repository whose recorded gitlink commit cannot be
+// obtained from the cache, origin or parent checkout (DN5).
+type unavailableGitlink struct {
+	Module module
+	SHA    string
+}
+
+func (u unavailableGitlink) message() string {
+	return fmt.Sprintf("%s: gitlink %s not available; left uninitialized — run %s sync or %s open again later", u.Module.Name, u.SHA, product.Name, product.Name)
+}
+
+// moduleInitialized reports whether a registered repository has been
+// materialized: an uninitialized one is an empty directory without .git.
+func moduleInitialized(root string, m module) bool {
+	_, err := os.Stat(filepath.Join(root, m.Path, ".git"))
+	return err == nil
+}
+
+// materializeModules initializes every listed repository. A repository whose
+// gitlink commit is unavailable is left uninitialized and warned about, never
+// fatal and never replaced by a branch tip (DN5).
 func (a App) materializeModules(ctx context.Context, id, root string, ms []module, progress interface{ Write([]byte) (int, error) }) error {
+	skipped, err := a.materializeModulesReport(ctx, id, root, ms, progress)
+	if progress != nil {
+		for _, u := range skipped {
+			fmt.Fprintln(progress, "warning: "+u.message())
+		}
+	}
+	return err
+}
+func (a App) materializeModulesReport(ctx context.Context, id, root string, ms []module, progress interface{ Write([]byte) (int, error) }) (skipped []unavailableGitlink, err error) {
 	g := a.Git.WithDefaults()
 	mgr, e := cacheManager(g)
 	if e != nil {
-		return e
+		return nil, e
 	}
 	var parentID string
 	if task, infoErr := a.Info(id); infoErr == nil && task.Parent != nil && localCheckoutPath(a.Home, *task.Parent) != "" {
@@ -617,14 +672,14 @@ func (a App) materializeModules(ctx context.Context, id, root string, ms []modul
 	for _, m := range ms {
 		gitlink, _, ge := rootGit(ctx, g, a.Home, id, root, "rev-parse", "HEAD:"+m.Path)
 		if ge != nil {
-			return ge
+			return skipped, ge
 		}
 		gitlink = strings.TrimSpace(gitlink)
 		cp, e := mgr.Ensure(ctx, m.URL)
 		if e != nil {
 			cp = mgr.PathForURL(m.URL)
 			if _, st := os.Stat(cp); st != nil {
-				return e
+				return skipped, e
 			}
 			if progress != nil {
 				fmt.Fprintf(progress, "warning: fetch %s failed; using cache\n", m.Name)
@@ -639,19 +694,20 @@ func (a App) materializeModules(ctx context.Context, id, root string, ms []modul
 				}
 			}
 		}
+		if _, _, missing := git(ctx, g, cp, "cat-file", "-e", gitlink+"^{commit}"); missing != nil {
+			skipped = append(skipped, unavailableGitlink{m, gitlink})
+			continue
+		}
 		rootGit(ctx, g, a.Home, id, root, "config", "submodule."+m.Name+".url", cp)
 		_, _, e = rootGit(ctx, g, a.Home, id, root, "-c", "protocol.file.allow=always", "submodule", "update", "--init", "--", m.Path)
 		rootGit(ctx, g, a.Home, id, root, "config", "submodule."+m.Name+".url", m.URL)
 		if e != nil {
-			if _, _, missing := git(ctx, g, cp, "cat-file", "-e", gitlink+"^{commit}"); missing != nil {
-				return fmt.Errorf("repository %s: gitlink commit %s is unavailable from the cache and local parent checkout", m.Name, gitlink)
-			}
-			return e
+			return skipped, e
 		}
 		p := filepath.Join(root, m.Path)
 		g.RemoteSetURL(ctx, p, "origin", m.URL)
 		if err := rewriteSubmodule(a.Home, id, root, m); err != nil {
-			return err
+			return skipped, err
 		}
 		if m.Mode == "pin" || m.Branch == "" {
 			git(ctx, g, p, "checkout", "--detach")
@@ -660,14 +716,14 @@ func (a App) materializeModules(ctx context.Context, id, root string, ms []modul
 		// A cache clone may already have a same-named local branch ahead of the
 		// root gitlink. A freshly materialized checkout must start at the gitlink.
 		if _, _, e = git(ctx, g, p, "checkout", "-B", m.Branch, gitlink); e != nil {
-			return e
+			return skipped, e
 		}
 		remote := "origin/" + m.Branch
 		if _, _, re := git(ctx, g, p, "show-ref", "--verify", "--quiet", "refs/remotes/"+remote); re == nil {
 			_, _, _ = git(ctx, g, p, "branch", "--set-upstream-to", remote, m.Branch)
 		}
 	}
-	return nil
+	return skipped, nil
 }
 func rewriteSubmodule(h home.Home, id, root string, m module) error {
 	gitdir := filepath.Join(h.ClonePath(id), "modules", m.Name)
@@ -883,6 +939,9 @@ func (a App) commitCheckout(ctx context.Context, id, root, msg string, allowRewi
 		}
 	}
 	for _, m := range ms {
+		if !moduleInitialized(root, m) {
+			continue
+		}
 		dirty, _ := g.IsDirty(ctx, filepath.Join(root, m.Path))
 		if dirty {
 			warnings = append(warnings, m.Name+" has uncommitted changes, not recorded")
@@ -1009,7 +1068,14 @@ func (a App) tasktreeLoss(ctx context.Context, id, root string) ([]string, error
 		st, statErr := os.Stat(worktree)
 		var x []string
 		var e error
-		if statErr == nil && st.IsDir() {
+		if !moduleInitialized(root, m) {
+			if _, gitdirErr := os.Stat(gitdir); os.IsNotExist(gitdirErr) {
+				// Never materialized (DN5): nothing to lose, and no repository to ask.
+				seen[filepath.Clean(gitdir)] = true
+				continue
+			}
+		}
+		if statErr == nil && st.IsDir() && moduleInitialized(root, m) {
 			x, e = repoLoss(ctx, g, m.Name, worktree, false)
 		} else {
 			// A missing worktree cannot have dirty files, but its gitdir can still
@@ -1107,13 +1173,19 @@ func (a App) Remove(ctx context.Context, id, root, name string, force bool) ([]s
 	}
 	g := a.Git.WithDefaults()
 	lossPath, bare := p, false
-	if st, statErr := os.Stat(p); statErr != nil || !st.IsDir() {
+	if st, statErr := os.Stat(p); statErr != nil || !st.IsDir() || !moduleInitialized(root, *m) {
 		// The worktree may already have been deleted. Check its module gitdir
 		// for commits and stashes rather than failing before the force gate can
 		// report the work at risk.
 		lossPath, bare = filepath.Join(a.Home.ClonePath(id), "modules", m.Name), true
 	}
-	loss, lossErr := repoLoss(ctx, g, name, lossPath, bare)
+	var loss []string
+	var lossErr error
+	if _, statErr := os.Stat(lossPath); bare && os.IsNotExist(statErr) && !moduleInitialized(root, *m) {
+		// Never materialized (DN5): there is no repository whose work could be lost.
+	} else {
+		loss, lossErr = repoLoss(ctx, g, name, lossPath, bare)
+	}
 	if lossErr != nil && !force {
 		return nil, GateError{lossErr.Error()}
 	}
@@ -1223,9 +1295,13 @@ func (a App) Mode(ctx context.Context, id, root, name, mode string) error {
 	if mode == "pin" {
 		_, _, _ = git(ctx, g, "", "config", "-f", gm, "--unset", "submodule."+name+".branch")
 	} else {
-		branch, err := g.CurrentBranch(ctx, filepath.Join(root, found.Path))
-		if err != nil {
-			return err
+		branch := found.Branch // an uninitialized repository has no HEAD (DN5)
+		if moduleInitialized(root, *found) {
+			var err error
+			branch, err = g.CurrentBranch(ctx, filepath.Join(root, found.Path))
+			if err != nil {
+				return err
+			}
 		}
 		if branch == "" {
 			return fmt.Errorf("repository %s is detached; follow and work require a branch", name)
@@ -1677,6 +1753,9 @@ func (a App) addParentRemotes(ctx context.Context, t record.Task, root string) {
 		if _, e := os.Stat(p); e != nil {
 			continue
 		}
+		if !moduleInitialized(root, m) {
+			continue
+		}
 		rp := filepath.Join(root, m.Path)
 		_, _, _ = git(ctx, g, rp, "remote", "remove", "parent")
 		_, _, _ = git(ctx, g, rp, "remote", "add", "parent", p)
@@ -1724,6 +1803,12 @@ func (a App) Push(ctx context.Context, id, root string, names []string) ([]PushR
 	selected := []module{}
 	for _, m := range ms {
 		if (explicit && wanted[m.Name]) || (!explicit && m.Mode == "work") {
+			if !moduleInitialized(root, m) {
+				if explicit {
+					return nil, GateError{fmt.Sprintf("repository %s is not initialized (its gitlink commit is unavailable); run %s sync first", m.Name, product.Name)}
+				}
+				continue
+			}
 			selected = append(selected, m)
 		}
 	}
