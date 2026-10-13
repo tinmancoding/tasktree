@@ -159,3 +159,18 @@ func TestAddFromWithPinModeNamesTheRef(t *testing.T) {
 		t.Fatalf("message = %q", msg)
 	}
 }
+
+// H8: --version and the version command print the same line.
+func TestVersionFlagAndCommand(t *testing.T) {
+	flagOut, _, err := run(t, "--version")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmdOut, _, err := run(t, "version")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if flagOut != cmdOut || !strings.HasPrefix(flagOut, "tasktree ") || strings.TrimSpace(strings.TrimPrefix(flagOut, "tasktree ")) == "" {
+		t.Fatalf("--version=%q version=%q", flagOut, cmdOut)
+	}
+}

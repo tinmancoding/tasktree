@@ -87,7 +87,7 @@ A task is a Markdown record with a status and a log. A tasktree is the definitio
 
 Most commands act on the task of the tasktree you are in. Use -t <handle|id> to name a task from anywhere. Inside a tasktree, record commands also honor TASKTREE_TASK and the focused subtask.
 
-Exit codes: 0 success; 1 other error; 2 usage or validation error; 3 not found; 4 not in a tasktree, or the task has no checkout; 5 conflict; 6 refused by a safety gate.`, SilenceUsage: true, SilenceErrors: true, PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+Exit codes: 0 success; 1 other error; 2 usage or validation error; 3 not found; 4 not in a tasktree, or the task has no checkout; 5 conflict; 6 refused by a safety gate.`, Version: product.Version(), SilenceUsage: true, SilenceErrors: true, PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 		if o.chdir != "" {
 			if err := os.Chdir(o.chdir); err != nil {
 				return fmt.Errorf("change directory: %w", err)
@@ -97,10 +97,11 @@ Exit codes: 0 success; 1 other error; 2 usage or validation error; 3 not found; 
 	}}
 	root.SetOut(out)
 	root.SetErr(errOut)
+	root.SetVersionTemplate("{{.Name}} {{.Version}}\n")
 	root.PersistentFlags().StringVarP(&o.chdir, "chdir", "C", "", "run as if started in this directory")
 	root.PersistentFlags().BoolVarP(&o.verbose, "verbose", "v", false, "print git commands")
 	root.PersistentFlags().StringVar(&o.author, "author", "", "author for log entries (overrides TASKTREE_AUTHOR and the author config key)")
-	root.AddCommand(setupCmd(o), configCmd(o), newCmd(o), listCmd(o), infoCmd(o), noteCmd(o), markCmd(o), refCmd(o), labelCmd(o), historyCmd(o), openCmd(o), addCmd(o), removeCmd(o), modeCmd(o), bootstrapCmd(o), focusCmd(o), pushCmd(o), commitCmd(o), importCmd(o), moveCmd(o), doctorCmd(o), templateCmd(o), aliasCmd(o), rootCmd(o), syncCmd(o), resolveCmd(o), genDocsCmd(o))
+	root.AddCommand(setupCmd(o), configCmd(o), newCmd(o), listCmd(o), infoCmd(o), noteCmd(o), markCmd(o), refCmd(o), labelCmd(o), historyCmd(o), openCmd(o), addCmd(o), removeCmd(o), modeCmd(o), bootstrapCmd(o), focusCmd(o), pushCmd(o), commitCmd(o), importCmd(o), moveCmd(o), doctorCmd(o), templateCmd(o), aliasCmd(o), rootCmd(o), syncCmd(o), resolveCmd(o), versionCmd(o), genDocsCmd(o))
 	for _, c := range root.Commands() {
 		requireKnownSubcommand(c)
 	}
@@ -740,6 +741,12 @@ The author is --author, else TASKTREE_AUTHOR, else the author config key. It mus
 	c.Flags().StringVarP(&ref, "task", "t", "", "task handle or id")
 	c.Flags().StringVar(&kind, "kind", "note", "entry kind: note, comment, decision or ref")
 	return c
+}
+func versionCmd(o *options) *cobra.Command {
+	return &cobra.Command{Use: "version", Short: "Print the tasktree version", Long: "Print the version of this binary. The same text is printed by --version.", Args: exact(0), RunE: func(cmd *cobra.Command, args []string) error {
+		fmt.Fprintf(o.out, "%s %s\n", product.Name, product.Version())
+		return nil
+	}}
 }
 func markCmd(o *options) *cobra.Command {
 	var ref string

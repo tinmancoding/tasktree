@@ -48,7 +48,10 @@ Each release publishes archives on the [releases page](https://github.com/tinman
 
 ```bash
 tasktree --help
+tasktree --version
 ```
+
+`tasktree --version` (or `tasktree version`) prints the release version. A binary built from a source checkout prints `dev+<revision>`, and one installed with `go install` prints its module version.
 
 ## Shell completion
 

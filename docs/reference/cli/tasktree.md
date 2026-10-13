@@ -49,4 +49,5 @@ Exit codes: 0 success; 1 other error; 2 usage or validation error; 3 not found; 
 * [tasktree setup](tasktree_setup.md)	 - Initialize ~/.tasktree and machine config
 * [tasktree sync](tasktree_sync.md)	 - Synchronize task records, definitions, and repository branches
 * [tasktree template](tasktree_template.md)	 - List, show, or validate task templates
+* [tasktree version](tasktree_version.md)	 - Print the tasktree version
 

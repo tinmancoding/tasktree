@@ -115,6 +115,7 @@ nav:
         - list: reference/cli/tasktree_template_list.md
         - show: reference/cli/tasktree_template_show.md
         - validate: reference/cli/tasktree_template_validate.md
+      - version: reference/cli/tasktree_version.md
   - Design:
     - tasktree V2 design: design/tasktree-v2.md
     - Archive:
