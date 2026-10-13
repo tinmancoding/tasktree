@@ -48,6 +48,7 @@ The command needs no network, except one `ls-remote` call that is limited to 10 
 
 | Situation | `--fix` |
 |---|---|
+| The directory moved: a directory under `tasksRoot` (up to three levels down) or next to the recorded path has a `.tasktree/config.yml` with this task's id | Re-points `local.yml` to that directory and rewrites the repositories' `.git` files and `core.worktree`. Nothing is deleted. |
 | The directory is gone, no hidden git directory exists | Removes the `local.yml` entry |
 | The directory is gone, a hidden git directory exists, and it holds no unpushed commits or stashes | Removes the hidden git directory and the entry |
 | The directory is gone, and the hidden git directory holds unpushed commits or stashes | Not fixable. The message lists them. Restore the directory, or accept the loss with `open --force`. |
@@ -85,12 +86,12 @@ $ tasktree open PROJ-123 --force
 
 ### You moved a checkout directory by hand
 
-The paths are absolute, so a moved directory breaks. The safe order:
+The paths are absolute, so a moved directory breaks. The simplest repair:
 
 1. Move the directory back if you can. Nothing else is needed.
-2. Otherwise, edit `~/.tasktree/local.yml` and set `checkouts.<id>.path` to the new directory. Then run `tasktree doctor --fix`, which reports `path-drift` and rewrites the repository paths.
+2. Otherwise run `tasktree doctor --fix`. It finds the moved directory by its `.tasktree/config.yml` (below `tasksRoot` or next to the old path), re-points `local.yml` to it and rewrites the repository paths. Uncommitted files stay where they are. If you moved it somewhere doctor does not look, edit `~/.tasktree/local.yml`, set `checkouts.<id>.path` to the new directory, then run `tasktree doctor --fix` to repair `path-drift`.
 
-**Do not run `doctor --fix` between the move and the edit.** While `local.yml` still names the old directory, doctor sees a checkout without a directory and, if the repositories have no unpushed commits, offers to delete their hidden git directories. Uncommitted files would survive in the moved directory, but their repositories would lose their git data.
+`doctor --fix` deletes a hidden git directory for a missing checkout only when no directory with the task's marker can be found and the repositories hold no unpushed commits or stashes.
 
 Next time, use `tasktree move`, which does all this atomically and verifies the result:
 

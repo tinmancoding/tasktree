@@ -233,6 +233,14 @@ func (a App) doctorFindings(ctx context.Context) ([]Finding, error) {
 				add("checkout-missing", "error", id, "recorded checkout path does not exist and an import for this task is incomplete; run "+product.Name+" import --recover <path>", nil)
 				continue
 			}
+			if found := a.findMovedCheckout(cfg.TasksRoot, id, co.Path); found != "" {
+				// The folder was moved by hand: never delete anything, re-point instead.
+				idCopy, foundCopy := id, found
+				add("checkout-missing", "error", id, "recorded checkout path does not exist; matching checkout found at "+found+"; --fix re-points local.yml and the repository paths there", func(context.Context) error {
+					return a.repointCheckout(ctx, idCopy, foundCopy)
+				})
+				continue
+			}
 			if !cloneIDs[id] {
 				idCopy := id
 				add("checkout-missing", "error", id, "recorded checkout path does not exist", func(context.Context) error {
@@ -387,6 +395,56 @@ func (a App) doctorFindings(ctx context.Context) ([]Finding, error) {
 		return out[i].Subject < out[j].Subject
 	})
 	return out, nil
+}
+
+// findMovedCheckout looks for a directory whose marker names the task: first
+// below tasksRoot (depth 3), then among the siblings of the recorded path.
+func (a App) findMovedCheckout(tasksRoot, id, recorded string) string {
+	if found := findCheckoutMarker(tasksRoot, id, 3); found != "" {
+		return found
+	}
+	if recorded == "" {
+		return ""
+	}
+	if parent := filepath.Dir(filepath.Clean(recorded)); parent != filepath.Clean(recorded) {
+		return findCheckoutMarker(parent, id, 1)
+	}
+	return ""
+}
+
+// repointCheckout makes local.yml and every initialized repository's .git file
+// and core.worktree agree with a checkout folder that was moved by hand. It
+// never deletes anything.
+func (a App) repointCheckout(ctx context.Context, id, newPath string) error {
+	marker, err := markerTaskID(newPath)
+	if err != nil || marker != id {
+		return fmt.Errorf("%s is not the checkout of %s", newPath, id)
+	}
+	ms, err := modules(newPath)
+	if err != nil {
+		return err
+	}
+	if err = a.Home.UpdateLocal(func(s *home.LocalState) error {
+		c := s.Checkouts[id]
+		c.Path = newPath
+		s.Checkouts[id] = c
+		return nil
+	}); err != nil {
+		return err
+	}
+	for _, m := range ms {
+		if !moduleInitialized(newPath, m) {
+			continue // never materialized (DN5): nothing to re-point
+		}
+		if err = rewriteSubmodule(a.Home, id, newPath, m); err != nil {
+			return err
+		}
+	}
+	if _, statErr := os.Stat(a.Home.ClonePath(id)); statErr == nil {
+		_, _, _ = git(ctx, a.Git.WithDefaults(), "", "config", "--file", filepath.Join(a.Home.ClonePath(id), "config"), "--unset-all", "core.worktree")
+	}
+	a.refreshTaskRecord(ctx, id)
+	return nil
 }
 
 // incompleteImportIDs returns every task id that has a directory under

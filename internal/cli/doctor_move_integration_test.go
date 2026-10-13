@@ -261,3 +261,53 @@ func TestMoveSuccessAndInjectedRollback(t *testing.T) {
 		t.Fatalf("mark done after move: %v", markErr)
 	}
 }
+
+// H3: a hand-moved checkout must be re-pointed, never treated as "no work at risk".
+func TestDoctorFixRepointsHandMovedCheckout(t *testing.T) {
+	f := newCloseFixture(t)
+	old := filepath.Join(f.tasks, "old")
+	handle, id, _ := createAndOpen(t, "Moved by hand", old)
+	if _, _, err := run(t, "add", f.upstream, "--name", "repo", "-t", handle); err != nil {
+		t.Fatalf("add repository: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(old, "repo", "dirty.txt"), []byte("keep me\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	moved := filepath.Join(f.tasks, "group", "moved")
+	if err := os.MkdirAll(filepath.Dir(moved), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(old, moved); err != nil {
+		t.Fatal(err)
+	}
+	out, _, err := run(t, "doctor", "--json")
+	if cli.Code(err) != 1 {
+		t.Fatalf("doctor code=%d out=%s", cli.Code(err), out)
+	}
+	if strings.Contains(out, "no work at risk") {
+		t.Fatalf("doctor claims no work at risk for a moved checkout: %s", out)
+	}
+	if _, _, err = run(t, "doctor", "--fix", "--json"); err != nil {
+		t.Fatalf("doctor --fix: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(f.home, "clones", id+".git", "modules", "repo")); err != nil {
+		t.Fatalf("doctor --fix deleted the hidden git directory: %v", err)
+	}
+	if b, err := os.ReadFile(filepath.Join(moved, "repo", "dirty.txt")); err != nil || string(b) != "keep me\n" {
+		t.Fatalf("dirty file: %q %v", b, err)
+	}
+	if status := gitRun(t, filepath.Join(moved, "repo"), "status", "--porcelain"); !strings.Contains(status, "dirty.txt") {
+		t.Fatalf("repository does not see the dirty file: %q", status)
+	}
+	local, err := os.ReadFile(filepath.Join(f.home, "local.yml"))
+	if err != nil || !strings.Contains(string(local), moved) {
+		t.Fatalf("local.yml not re-pointed: %q %v", local, err)
+	}
+	if _, _, err = run(t, "info", "-t", handle, "--json"); err != nil {
+		t.Fatalf("info after doctor --fix: %v", err)
+	}
+	out, _, err = run(t, "doctor", "--json")
+	if err != nil {
+		t.Fatalf("doctor still unhappy: %v %s", err, out)
+	}
+}
