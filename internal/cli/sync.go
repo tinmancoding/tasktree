@@ -15,7 +15,20 @@ func syncCmd(o *options) *cobra.Command {
 	var x app.SyncOptions
 	var j bool
 	var ref string
-	c := &cobra.Command{Use: "sync", Short: "Synchronize task records, definitions, and repository branches", Long: "Synchronize the configured hub remote and committed tasktree state. Outside a tasktree this is sync --all (checkouts are not touched). STATUS! in list marks unacknowledged record conflicts. Log entries interleaving in time are inserted in timestamp/id order, preserving local entry bytes.", Args: exact(0), RunE: func(cmd *cobra.Command, args []string) error {
+	c := &cobra.Command{Use: "sync", Short: "Synchronize task records, definitions, and repository branches", Long: `Exchange state with the tasks remote. Without a remote, sync still reconciles the local tasks repository and reports local state.
+
+Inside a tasktree (or with -t), sync does the following:
+  1. Fetch the remote.
+  2. Merge main. Task records are merged field by field: log entries are united in time order, labels and refs are merged as sets, and a field changed on both sides keeps the local value, gets a "comment" log entry with the remote value, and is flagged as a conflict (shown as "!" in list; clear it with "info ack").
+  3. Fast-forward the task branch. If local and remote both moved, sync stops with exit 5; run "resolve".
+  4. Apply recorded repository commits that came from the other machine to clean repositories on their branch.
+  5. Update repositories by mode, up to sync.jobs at a time: follow and work repositories fast-forward to origin; dirty or diverged ones are skipped and reported. Gitlink moves this causes are committed.
+  6. Push main and the task branch with a lease. A rejected push repeats the sync, up to 3 times.
+  7. Report dirty, diverged, skipped and unpushed state.
+
+Sync refuses to run when the root has uncommitted changes; run "commit" first. It never pushes code to a repository's origin; use "push".
+
+Outside a tasktree, sync is the same as --all: it exchanges main and every task branch and does not touch any checkout. It reports checkouts that are behind and checkouts of closed tasks.`, Args: exact(0), RunE: func(cmd *cobra.Command, args []string) error {
 		a, e := o.application()
 		if e != nil {
 			return e
@@ -51,10 +64,10 @@ func syncCmd(o *options) *cobra.Command {
 		return e
 	}}
 	c.Flags().StringVarP(&ref, "task", "t", "", "task handle or id")
-	c.Flags().BoolVar(&x.NoRepos, "no-repos", false, "skip repository branch updates")
-	c.Flags().BoolVar(&x.All, "all", false, "sync all task refs without touching checkouts")
-	c.Flags().BoolVar(&x.AllowUnrelated, "allow-unrelated", false, "authorize joining unrelated hub histories")
-	c.Flags().BoolVar(&j, "json", false, "emit the sync report as JSON")
+	c.Flags().BoolVar(&x.NoRepos, "no-repos", false, "skip step 5 (updating repositories from origin); recorded commits from the other machine are still applied")
+	c.Flags().BoolVar(&x.All, "all", false, "exchange main and every task branch; do not touch checkouts")
+	c.Flags().BoolVar(&x.AllowUnrelated, "allow-unrelated", false, "allow the first merge of main histories that share no commit")
+	c.Flags().BoolVar(&j, "json", false, "emit the report as JSON")
 	return c
 }
 func writeSyncReport(o *options, r app.SyncReport) {
@@ -79,7 +92,11 @@ func writeSyncReport(o *options, r app.SyncReport) {
 func resolveCmd(o *options) *cobra.Command {
 	var take, ref string
 	var j bool
-	c := &cobra.Command{Use: "resolve [path...]", Short: "Inspect or explicitly merge divergent tasktree histories", Args: cobra.ArbitraryArgs, RunE: func(cmd *cobra.Command, args []string) error {
+	c := &cobra.Command{Use: "resolve [path...]", Short: "Inspect or explicitly merge divergent tasktree histories", Long: `Resolve a task branch that diverged between this machine and the remote.
+
+Without --take, resolve lists the local and remote commits, the paths changed on both sides, and the paths that merge cleanly. It changes nothing when the histories have not diverged.
+
+Paths changed on one side only are merged automatically. Paths changed differently on both sides need a decision: --take local or --take remote applies to all of them, or to the paths given as arguments (repositories count as paths). Resolve then creates a merge commit, updates the checkout and syncs. Repository branches are never reset; if one is ahead of or diverged from the chosen commit, it keeps its tip and the mismatch is reported.`, Args: cobra.ArbitraryArgs, RunE: func(cmd *cobra.Command, args []string) error {
 		a, e := o.application()
 		if e != nil {
 			return e
@@ -140,7 +157,7 @@ func resolveCmd(o *options) *cobra.Command {
 		return e
 	}}
 	c.Flags().StringVarP(&ref, "task", "t", "", "task handle or id")
-	c.Flags().StringVar(&take, "take", "", "take local or remote for paths changed on both sides (all such paths by default)")
-	c.Flags().BoolVar(&j, "json", false, "emit comparison and result as JSON")
+	c.Flags().StringVar(&take, "take", "", "keep the local or remote version of paths changed on both sides (all such paths unless paths are given)")
+	c.Flags().BoolVar(&j, "json", false, "emit the comparison and result as JSON")
 	return c
 }

@@ -81,7 +81,13 @@ type options struct {
 
 func NewRoot(out, errOut io.Writer) *cobra.Command {
 	o := &options{out: out, err: errOut}
-	root := &cobra.Command{Use: product.Name, Short: "Task management backed by git", SilenceUsage: true, SilenceErrors: true, PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+	root := &cobra.Command{Use: product.Name, Short: "Task management backed by git", Long: `Manage tasks and the multi-repository workspaces for them. Git is the only state store.
+
+A task is a Markdown record with a status and a log. A tasktree is the definition of the repositories, files and symlinks that belong to one task. A checkout is a tasktree materialized in a directory on this machine.
+
+Most commands act on the task of the tasktree you are in. Use -t <handle|id> to name a task from anywhere. Inside a tasktree, record commands also honor TASKTREE_TASK and the focused subtask.
+
+Exit codes: 0 success; 1 other error; 2 usage or validation error; 3 not found; 4 not in a tasktree, or the task has no checkout; 5 conflict; 6 refused by a safety gate.`, SilenceUsage: true, SilenceErrors: true, PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 		if o.chdir != "" {
 			if err := os.Chdir(o.chdir); err != nil {
 				return fmt.Errorf("change directory: %w", err)
@@ -93,8 +99,8 @@ func NewRoot(out, errOut io.Writer) *cobra.Command {
 	root.SetErr(errOut)
 	root.PersistentFlags().StringVarP(&o.chdir, "chdir", "C", "", "run as if started in this directory")
 	root.PersistentFlags().BoolVarP(&o.verbose, "verbose", "v", false, "print git commands")
-	root.PersistentFlags().StringVar(&o.author, "author", "", "author for log entries")
-	root.AddCommand(setupCmd(o), configCmd(o), newCmd(o), listCmd(o), infoCmd(o), noteCmd(o), markCmd(o), refCmd(o), labelCmd(o), historyCmd(o), openCmd(o), addCmd(o), removeCmd(o), modeCmd(o), bootstrapCmd(o), focusCmd(o), pushCmd(o), commitCmd(o), importCmd(o), moveCmd(o), doctorCmd(o), templateCmd(o), aliasCmd(o), rootCmd(o), syncCmd(o), resolveCmd(o))
+	root.PersistentFlags().StringVar(&o.author, "author", "", "author for log entries (overrides TASKTREE_AUTHOR and the author config key)")
+	root.AddCommand(setupCmd(o), configCmd(o), newCmd(o), listCmd(o), infoCmd(o), noteCmd(o), markCmd(o), refCmd(o), labelCmd(o), historyCmd(o), openCmd(o), addCmd(o), removeCmd(o), modeCmd(o), bootstrapCmd(o), focusCmd(o), pushCmd(o), commitCmd(o), importCmd(o), moveCmd(o), doctorCmd(o), templateCmd(o), aliasCmd(o), rootCmd(o), syncCmd(o), resolveCmd(o), genDocsCmd(o))
 	for _, c := range root.Commands() {
 		requireKnownSubcommand(c)
 	}
@@ -141,7 +147,11 @@ func exact(n int) cobra.PositionalArgs {
 }
 func setupCmd(o *options) *cobra.Command {
 	var x app.SetupOptions
-	c := &cobra.Command{Use: "setup", Short: "Initialize ~/.tasktree and machine config", Args: exact(0), RunE: func(cmd *cobra.Command, args []string) error {
+	c := &cobra.Command{Use: "setup", Short: "Initialize ~/.tasktree and machine config", Long: `Create the tasks repository in ~/.tasktree (or $TASKTREE_HOME) and write config.yml. Safe to repeat: only the flags you pass change the config.
+
+With --remote on a machine that has no tasks repository, setup clones it from the remote. With --remote on an existing repository it behaves like "config set remote".
+
+When aliases.yml does not exist yet, setup copies V1 repository aliases into it if it finds them.`, Args: exact(0), RunE: func(cmd *cobra.Command, args []string) error {
 		a, err := o.application()
 		if err != nil {
 			return err
@@ -167,15 +177,19 @@ func setupCmd(o *options) *cobra.Command {
 		}
 		return nil
 	}}
-	c.Flags().StringVar(&x.TasksRoot, "tasks-root", "", "task checkout root")
-	c.Flags().StringVar(&x.Author, "author", "", "default author")
-	c.Flags().StringVar(&x.Machine, "machine", "", "machine name")
-	c.Flags().StringVar(&x.Remote, "remote", "", "hub remote URL")
+	c.Flags().StringVar(&x.TasksRoot, "tasks-root", "", "directory for new checkouts (default ~/Developer/tasks)")
+	c.Flags().StringVar(&x.Author, "author", "", "author name for log entries")
+	c.Flags().StringVar(&x.Machine, "machine", "", "machine name for log entries (default: hostname)")
+	c.Flags().StringVar(&x.Remote, "remote", "", "URL of the tasks remote")
 	return c
 }
 func configCmd(o *options) *cobra.Command {
-	root := &cobra.Command{Use: "config", Short: "Read or change machine config"}
-	root.AddCommand(&cobra.Command{Use: "get <key>", Short: "Print a config value", Args: exact(1), RunE: func(cmd *cobra.Command, args []string) error {
+	root := &cobra.Command{Use: "config", Short: "Read or change machine config", Long: `Read or change ~/.tasktree/config.yml.
+
+Keys: remote, tasksRoot, author, machine, jira.baseUrl, sync.jobs, sync.timeout.
+
+Setting remote adds or replaces origin on the tasks repository and pushes main and every task branch. Setting it to "" removes origin.`}
+	root.AddCommand(&cobra.Command{Use: "get <key>", Short: "Print a config value", Long: "Print one config value. Keys: remote, tasksRoot, author, machine, jira.baseUrl, sync.jobs, sync.timeout. Unset values print an empty line.", Args: exact(1), RunE: func(cmd *cobra.Command, args []string) error {
 		a, e := o.application()
 		if e != nil {
 			return e
@@ -185,7 +199,7 @@ func configCmd(o *options) *cobra.Command {
 			fmt.Fprintln(o.out, v)
 		}
 		return e
-	}}, &cobra.Command{Use: "set <key> <value>", Short: "Set a config value", Args: exact(2), RunE: func(cmd *cobra.Command, args []string) error {
+	}}, &cobra.Command{Use: "set <key> <value>", Short: "Set a config value", Long: "Set one config key. sync.jobs must be a positive integer. sync.timeout must be a positive duration such as 60s. See \"config\" for the keys.", Args: exact(2), RunE: func(cmd *cobra.Command, args []string) error {
 		a, e := o.application()
 		if e != nil {
 			return e
@@ -199,7 +213,13 @@ func newCmd(o *options) *cobra.Command {
 	var open, isolated bool
 	var path, templateName, branch string
 	var repos []string
-	c := &cobra.Command{Use: "new [title] [k=v ...]", Short: "Create a task (optionally from a template or open its tasktree)", Args: cobra.ArbitraryArgs, RunE: func(cmd *cobra.Command, args []string) error {
+	c := &cobra.Command{Use: "new [title] [k=v ...]", Short: "Create a task (optionally from a template or open its tasktree)", Long: `Create a task record and print "<handle> <id>". The handle is --handle, else the --jira key, else a slug of the title.
+
+A task starts without a tasktree. Add repositories with "add -t <handle>", or create the task from a template. With --open, the tasktree is created and checked out, and its path is printed.
+
+With --template, the title is optional and k=v arguments set template parameters. --jira, --handle, --status and the title override the template values.
+
+With --parent, the new task is a subtask of the parent. It shares the parent's tasktree unless you pass --isolated, which creates a tasktree of its own with the parent's work repositories.`, Args: cobra.ArbitraryArgs, RunE: func(cmd *cobra.Command, args []string) error {
 		varArgs := []string{}
 		if templateName != "" {
 			if len(args) > 0 && !strings.Contains(args[0], "=") {
@@ -280,22 +300,24 @@ func newCmd(o *options) *cobra.Command {
 		}
 		return e
 	}}
-	c.Flags().StringVar(&x.Jira, "jira", "", "Jira key")
-	c.Flags().StringVar(&x.Handle, "handle", "", "task handle")
-	c.Flags().StringVar(&x.Status, "status", "incoming", "initial status")
-	c.Flags().StringVar(&x.Parent, "parent", "", "parent task")
-	c.Flags().StringVar(&templateName, "template", "", "create from a template")
-	c.Flags().BoolVar(&open, "open", false, "create and open a tasktree")
-	c.Flags().BoolVar(&isolated, "isolated", false, "create an isolated subtask tasktree")
-	c.Flags().StringVar(&path, "path", "", "checkout path")
-	c.Flags().StringSliceVar(&repos, "repos", nil, "parent repositories to include in an isolated subtask")
-	c.Flags().StringVar(&branch, "branch", "", "work repository branch for an isolated subtask")
+	c.Flags().StringVar(&x.Jira, "jira", "", "Jira key; becomes the handle and a jira ref")
+	c.Flags().StringVar(&x.Handle, "handle", "", "task handle (default: Jira key, else slug of the title)")
+	c.Flags().StringVar(&x.Status, "status", "incoming", "initial status: incoming, next, active, blocked, done or dropped")
+	c.Flags().StringVar(&x.Parent, "parent", "", "make this a subtask of a task (handle or id)")
+	c.Flags().StringVar(&templateName, "template", "", "create from a template name or file")
+	c.Flags().BoolVar(&open, "open", false, "also create and check out a tasktree; prints its path")
+	c.Flags().BoolVar(&isolated, "isolated", false, "give the subtask its own tasktree (requires --parent)")
+	c.Flags().StringVar(&path, "path", "", "checkout path (default <tasksRoot>/<handle>)")
+	c.Flags().StringSliceVar(&repos, "repos", nil, "parent repositories to copy into an isolated subtask (default: the parent's work repositories)")
+	c.Flags().StringVar(&branch, "branch", "", "branch for the subtask's work repositories (default <parent-branch>-<subtask-handle>)")
 	return c
 }
 func listCmd(o *options) *cobra.Command {
 	var all, j bool
 	var statuses, labels, refs []string
-	c := &cobra.Command{Use: "list", Short: "List tasks (open tasks by default)", Long: "List tasks and local definition/checkout state. A ! suffix on STATUS marks unacknowledged sync conflicts; info shows their fields. Acknowledge a field with info ack <field>; info set and info edit also clear the field they change.", Args: exact(0), RunE: func(cmd *cobra.Command, args []string) error {
+	c := &cobra.Command{Use: "list", Short: "List tasks (open tasks by default)", Long: `List tasks, oldest first. Without --all or --status, only open tasks (incoming, next, active, blocked) are listed. Subtasks are indented under their parent when the parent is listed too.
+
+The TREE column is "here" when the task has a checkout on this machine, "defined" when it has a tasktree branch but no checkout here, and "-" otherwise. A "!" after the status marks unacknowledged sync conflicts; "info" shows the fields. Acknowledge one with "info ack <field>"; "info set" and "info edit" clear the field they change.`, Args: exact(0), RunE: func(cmd *cobra.Command, args []string) error {
 		a, e := o.application()
 		if e != nil {
 			return e
@@ -381,10 +403,10 @@ func listCmd(o *options) *cobra.Command {
 		}
 		return output.WriteTaskTable(o.out, rows)
 	}}
-	c.Flags().BoolVar(&all, "all", false, "include closed tasks")
-	c.Flags().StringSliceVar(&statuses, "status", nil, "filter by status (repeatable)")
-	c.Flags().StringSliceVar(&labels, "label", nil, "filter by label (repeatable, AND)")
-	c.Flags().StringArrayVar(&refs, "ref", nil, "filter by exact ref <jira|pr|url>:<value> (repeatable, AND)")
+	c.Flags().BoolVar(&all, "all", false, "include done and dropped tasks")
+	c.Flags().StringSliceVar(&statuses, "status", nil, "only tasks with this status (repeatable; may be a closed status)")
+	c.Flags().StringSliceVar(&labels, "label", nil, "only tasks with this label (repeatable; all must match)")
+	c.Flags().StringArrayVar(&refs, "ref", nil, "only tasks with this ref, as <jira|pr|url>:<value> (repeatable; all must match)")
 	c.Flags().BoolVar(&j, "json", false, "emit JSON")
 	return c
 }
@@ -401,7 +423,11 @@ func resolveTarget(a app.App, explicit string) (string, string, error) {
 func infoCmd(o *options) *cobra.Command {
 	var ref string
 	var j bool
-	c := &cobra.Command{Use: "info", Short: "Show a task record and, inside a tasktree, its repositories", Args: exact(0), RunE: func(cmd *cobra.Command, args []string) error {
+	c := &cobra.Command{Use: "info", Short: "Show a task record and, inside a tasktree, its repositories", Long: `Show the task record: fields, refs, subtasks, description and log. For a task with a checkout, also show the root's uncommitted changes and a table of its repositories (mode, branch, HEAD, state, ahead/behind, unpushed). For a task with a definition but no checkout here, show the defined repositories and their recorded commits.
+
+The task is -t, else TASKTREE_TASK, else the focused subtask, else the task of the tasktree you are in.
+
+With --json the output is one JSON object; see the JSON output reference.`, Args: exact(0), RunE: func(cmd *cobra.Command, args []string) error {
 		a, e := o.application()
 		if e != nil {
 			return e
@@ -531,7 +557,9 @@ func infoCmd(o *options) *cobra.Command {
 func infoEditCmd(o *options) *cobra.Command {
 	var ref, file string
 	var stdin bool
-	c := &cobra.Command{Use: "edit", Short: "Replace a task description", Args: exact(0), RunE: func(cmd *cobra.Command, args []string) error {
+	c := &cobra.Command{Use: "edit", Short: "Replace a task description", Long: `Replace the whole description. The new text comes from --file, from --stdin, or from your editor ($VISUAL, then $EDITOR, then vi) on a temporary file holding the current text.
+
+A description may not contain the reserved headings "## Description" or "## Log". If the text is unchanged, nothing is committed.`, Args: exact(0), RunE: func(cmd *cobra.Command, args []string) error {
 		if file != "" && stdin {
 			return usageError{"--file and --stdin are mutually exclusive"}
 		}
@@ -608,14 +636,16 @@ func infoEditCmd(o *options) *cobra.Command {
 		return nil
 	}}
 	c.Flags().StringVarP(&ref, "task", "t", "", "task handle or id")
-	c.Flags().StringVar(&file, "file", "", "read description from file")
-	c.Flags().BoolVar(&stdin, "stdin", false, "read description from standard input")
+	c.Flags().StringVar(&file, "file", "", "read the new description from this file")
+	c.Flags().BoolVar(&stdin, "stdin", false, "read the new description from standard input")
 	return c
 }
 func infoSetCmd(o *options) *cobra.Command {
 	var ref string
 	var clear bool
-	c := &cobra.Command{Use: "set <field> [value]", Short: "Set a task title, handle, or parent (acknowledging that field's conflict)", Args: func(cmd *cobra.Command, args []string) error {
+	c := &cobra.Command{Use: "set <field> [value]", Short: "Set a task title, handle, or parent (acknowledging that field's conflict)", Long: `Set one record field: title, handle or parent. A handle must be unique and match [A-Za-z0-9._-], at most 64 characters. A parent is a handle or id; --clear removes it. Reparenting only changes the record; branch names of existing subtask checkouts stay as they are.
+
+Status is not settable here; use "mark".`, Args: func(cmd *cobra.Command, args []string) error {
 		if len(args) < 1 || len(args) > 2 {
 			return usageError{"info set accepts a field and optional value"}
 		}
@@ -654,12 +684,12 @@ func infoSetCmd(o *options) *cobra.Command {
 		return nil
 	}}
 	c.Flags().StringVarP(&ref, "task", "t", "", "task handle or id")
-	c.Flags().BoolVar(&clear, "clear", false, "clear the parent")
+	c.Flags().BoolVar(&clear, "clear", false, "remove the parent (only valid for the parent field)")
 	return c
 }
 func infoAckCmd(o *options) *cobra.Command {
 	var ref string
-	c := &cobra.Command{Use: "ack <field>", Short: "Acknowledge a conflict flag without changing the field", Args: exact(1), RunE: func(cmd *cobra.Command, args []string) error {
+	c := &cobra.Command{Use: "ack <field>", Short: "Acknowledge a conflict flag without changing the field", Long: "Remove one field from the record's conflict list. Sync sets the list when both machines changed the same field; the remote value is kept in a comment entry in the log. Exits 3 if the field is not flagged.", Args: exact(1), RunE: func(cmd *cobra.Command, args []string) error {
 		a, e := o.application()
 		if e != nil {
 			return e
@@ -680,7 +710,9 @@ func infoAckCmd(o *options) *cobra.Command {
 }
 func noteCmd(o *options) *cobra.Command {
 	var ref, kind string
-	c := &cobra.Command{Use: "note <text>", Short: "Append a note, decision, comment, or ref to a task log", Args: exact(1), RunE: func(cmd *cobra.Command, args []string) error {
+	c := &cobra.Command{Use: "note <text>", Short: "Append a note, decision, comment, or ref to a task log", Long: `Append an entry to the task log. The entry records the author, machine and time. The text may not contain reserved headings or a log entry header line.
+
+The author is --author, else TASKTREE_AUTHOR, else the author config key. It must not contain spaces or "@".`, Args: exact(1), RunE: func(cmd *cobra.Command, args []string) error {
 		a, e := o.application()
 		if e != nil {
 			return e
@@ -699,13 +731,23 @@ func noteCmd(o *options) *cobra.Command {
 		return e
 	}}
 	c.Flags().StringVarP(&ref, "task", "t", "", "task handle or id")
-	c.Flags().StringVar(&kind, "kind", "note", "entry kind")
+	c.Flags().StringVar(&kind, "kind", "note", "entry kind: note, comment, decision or ref")
 	return c
 }
 func markCmd(o *options) *cobra.Command {
 	var ref string
 	var markOptions app.MarkOptions
-	c := &cobra.Command{Use: "mark <status>", Short: "Set task status; closing tears down the local tasktree", Args: exact(1), RunE: func(cmd *cobra.Command, args []string) error {
+	c := &cobra.Command{Use: "mark <status>", Short: "Set task status; closing tears down the local tasktree", Long: `Set the status to incoming, next, active, blocked, done or dropped. This is the only command that changes status.
+
+Closing a task (done or dropped) that has a checkout on this machine runs the close flow:
+  1. Refuse if the task has open subtasks (see --cascade).
+  2. Refuse if work would be lost: uncommitted changes, commits not on origin or a stash in any repository, ignored files or nested git repositories in the root, or a repository whose HEAD is older than the commit recorded for it (see --force).
+  3. Commit the root as "close: <status>" and push the task branch to the local tasks repository.
+  4. Record the status, then push main and the task branch to the remote, best effort, if one is configured.
+  5. Delete the checkout directory, its hidden git directory and its local.yml entry.
+The task branch stays, so the task can be reopened later.
+
+Closing a task without a checkout only changes the record.`, Args: exact(1), RunE: func(cmd *cobra.Command, args []string) error {
 		if e := record.ValidateStatus(args[0]); e != nil {
 			return usageError{e.Error()}
 		}
@@ -733,17 +775,17 @@ func markCmd(o *options) *cobra.Command {
 		return e
 	}}
 	c.Flags().StringVarP(&ref, "task", "t", "", "task handle or id")
-	c.Flags().BoolVar(&markOptions.Keep, "keep", false, "change status without tearing down the tasktree")
-	c.Flags().BoolVar(&markOptions.Force, "force", false, "close despite work that will be lost")
-	c.Flags().BoolVar(&markOptions.Cascade, "cascade", false, "close all open descendants first")
+	c.Flags().BoolVar(&markOptions.Keep, "keep", false, "change status only; keep the checkout")
+	c.Flags().BoolVar(&markOptions.Force, "force", false, "close even if work would be lost; the loss is listed on stderr")
+	c.Flags().BoolVar(&markOptions.Cascade, "cascade", false, "close all open subtasks first, deepest first; all gates are checked before any change")
 	return c
 }
 
 func refCmd(o *options) *cobra.Command {
-	root := &cobra.Command{Use: "ref", Short: "Manage typed task references"}
+	root := &cobra.Command{Use: "ref", Short: "Manage typed task references", Long: "Add or remove references to external items. Types: jira (a key such as PROJ-123), pr (owner/repo#N) and url. References are stored on the record; tasktree never calls the external system."}
 	for _, action := range []string{"add", "rm"} {
 		action := action
-		root.AddCommand(&cobra.Command{Use: action + " <type> <value>", Short: map[string]string{"add": "Add a task reference", "rm": "Remove a task reference"}[action], Args: exact(2), RunE: func(cmd *cobra.Command, args []string) error {
+		root.AddCommand(&cobra.Command{Use: action + " <type> <value>", Short: map[string]string{"add": "Add a task reference (types: jira, pr, url)", "rm": "Remove a task reference (exits 3 if absent)"}[action], Args: exact(2), RunE: func(cmd *cobra.Command, args []string) error {
 			if args[0] != "jira" && args[0] != "pr" && args[0] != "url" {
 				return usageError{fmt.Sprintf("invalid ref type %q", args[0])}
 			}
@@ -774,7 +816,7 @@ func refCmd(o *options) *cobra.Command {
 	return root
 }
 func labelCmd(o *options) *cobra.Command {
-	root := &cobra.Command{Use: "label", Short: "Manage task labels"}
+	root := &cobra.Command{Use: "label", Short: "Manage task labels", Long: "Add or remove labels. A label matches [a-z0-9][a-z0-9._-]*."}
 	for _, action := range []string{"add", "rm"} {
 		action := action
 		root.AddCommand(&cobra.Command{Use: action + " <label>...", Short: map[string]string{"add": "Add task labels", "rm": "Remove task labels"}[action], Args: func(cmd *cobra.Command, args []string) error {
@@ -812,7 +854,7 @@ func labelCmd(o *options) *cobra.Command {
 func historyCmd(o *options) *cobra.Command {
 	var ref string
 	var asJSON bool
-	c := &cobra.Command{Use: "history", Short: "Show a task record's git history", Args: exact(0), RunE: func(cmd *cobra.Command, args []string) error {
+	c := &cobra.Command{Use: "history", Short: "Show a task record's git history", Long: "Show the commits that changed the task record, newest first: time, git author and subject. This is the record's changelog; there is no separate stored one.", Args: exact(0), RunE: func(cmd *cobra.Command, args []string) error {
 		a, e := o.application()
 		if e != nil {
 			return e
@@ -902,7 +944,11 @@ func writeRepoInfo(w io.Writer, tree app.TasktreeInfo) error {
 func openCmd(o *options) *cobra.Command {
 	var x app.OpenOptions
 	var repos []string
-	c := &cobra.Command{Use: "open <handle|id>", Short: "Materialize or locate a task's tasktree; prints its path", Args: exact(1), RunE: func(cmd *cobra.Command, args []string) error {
+	c := &cobra.Command{Use: "open <handle|id>", Short: "Materialize or locate a task's tasktree; prints its path", Long: `Print the path of the task's checkout, creating it first when this machine has none.
+
+If a remote is configured and the task has no checkout here, open first fetches main and the task branch, best effort. The checkout is created at <tasksRoot>/<handle> unless --path is given. Repositories are cloned from the local cache, attached to their branches, and bootstrap steps run unless --skip-bootstrap is set. A repository whose recorded commit is not available yet is left uninitialized and reported; sync or the next open retries it.
+
+If the task already has a checkout here, open only prints its path. A closed task cannot be opened. A subtask without its own tasktree becomes an isolated subtask: it gets a tasktree with the parent's work repositories (or --repos), on branch <parent-branch>-<subtask-handle> (or --branch). The parent must be checked out.`, Args: exact(1), RunE: func(cmd *cobra.Command, args []string) error {
 		a, e := o.application()
 		if e != nil {
 			return e
@@ -917,11 +963,11 @@ func openCmd(o *options) *cobra.Command {
 		}
 		return e
 	}}
-	c.Flags().StringVar(&x.Path, "path", "", "checkout path")
-	c.Flags().BoolVar(&x.Force, "force", false, "replace an orphaned hidden git directory after reporting loss")
-	c.Flags().BoolVar(&x.SkipBootstrap, "skip-bootstrap", false, "do not run bootstrap steps")
-	c.Flags().StringSliceVar(&repos, "repos", nil, "parent repositories to include when promoting a subtask")
-	c.Flags().StringVar(&x.Branch, "branch", "", "work repository branch override")
+	c.Flags().StringVar(&x.Path, "path", "", "checkout path (default <tasksRoot>/<handle>)")
+	c.Flags().BoolVar(&x.Force, "force", false, "replace an existing hidden git directory for this task; work in it is listed first")
+	c.Flags().BoolVar(&x.SkipBootstrap, "skip-bootstrap", false, "do not run the bootstrap steps")
+	c.Flags().StringSliceVar(&repos, "repos", nil, "parent repositories to copy when promoting a subtask")
+	c.Flags().StringVar(&x.Branch, "branch", "", "branch for the work repositories when promoting a subtask")
 	return c
 }
 
@@ -963,7 +1009,19 @@ func requireTree(a app.App, ref string) (string, string, error) {
 func addCmd(o *options) *cobra.Command {
 	var ref string
 	var x app.AddOptions
-	c := &cobra.Command{Use: "add <alias|url>", Short: "Add a repository to the tasktree", Args: exact(1), RunE: func(cmd *cobra.Command, args []string) error {
+	c := &cobra.Command{Use: "add <alias|url>", Short: "Add a repository to the tasktree", Long: `Add a repository as a full clone and commit the change. The argument is an alias from aliases.yml or a clone URL. The clone comes from the local cache, which is fetched first. Aliases for the URL are registered automatically.
+
+Branch and mode follow from the flags:
+
+- Neither --branch nor --from: follow the remote default branch (mode follow).
+- --branch B, B exists: check out B (mode work).
+- --branch B, B is new: create B from --from, else from the default branch (mode work).
+- --from F, F is a branch: follow F (mode follow).
+- --from F, F is a tag or commit: detached at F (mode pin).
+
+--mode overrides the derived mode. Modes follow and work need a branch.
+
+With -t and no checkout on this machine, the repository is added to the task's definition and cloned on the next open.`, Args: exact(1), RunE: func(cmd *cobra.Command, args []string) error {
 		x.URL = args[0]
 		a, e := o.application()
 		if e != nil {
@@ -994,16 +1052,16 @@ func addCmd(o *options) *cobra.Command {
 		return e
 	}}
 	c.Flags().StringVarP(&ref, "task", "t", "", "task handle or id")
-	c.Flags().StringVar(&x.Branch, "branch", "", "branch")
-	c.Flags().StringVar(&x.From, "from", "", "base ref")
-	c.Flags().StringVar(&x.Name, "name", "", "repository name")
-	c.Flags().StringVar(&x.Mode, "mode", "", "follow, work, or pin")
+	c.Flags().StringVar(&x.Branch, "branch", "", "branch to work on; created if it does not exist")
+	c.Flags().StringVar(&x.From, "from", "", "branch, tag or commit to start from")
+	c.Flags().StringVar(&x.Name, "name", "", "directory name (default: last part of the URL)")
+	c.Flags().StringVar(&x.Mode, "mode", "", "follow, work or pin (default derived from --branch and --from)")
 	return c
 }
 func removeCmd(o *options) *cobra.Command {
 	var ref string
 	var force bool
-	c := &cobra.Command{Use: "remove <name>", Short: "Remove a repository from the tasktree", Args: exact(1), RunE: func(cmd *cobra.Command, args []string) error {
+	c := &cobra.Command{Use: "remove <name>", Short: "Remove a repository from the tasktree", Long: `Delete the repository directory and its hidden git directory, and commit the removal. Refuses when the repository has uncommitted changes, commits not on origin, or a stash; --force lists them and proceeds. With -t and no checkout here, only the definition changes.`, Args: exact(1), RunE: func(cmd *cobra.Command, args []string) error {
 		a, e := o.application()
 		if e != nil {
 			return e
@@ -1033,13 +1091,15 @@ func removeCmd(o *options) *cobra.Command {
 		return e
 	}}
 	c.Flags().StringVarP(&ref, "task", "t", "", "task handle or id")
-	c.Flags().BoolVar(&force, "force", false, "remove despite lost work")
+	c.Flags().BoolVar(&force, "force", false, "remove even if work would be lost; the loss is listed on stderr")
 	return c
 }
 func commitCmd(o *options) *cobra.Command {
 	var ref, msg string
 	var allowRewind bool
-	c := &cobra.Command{Use: "commit", Short: "Record root files and repository commits on the task branch", Args: exact(0), RunE: func(cmd *cobra.Command, args []string) error {
+	c := &cobra.Command{Use: "commit", Short: "Record root files and repository commits on the task branch", Long: `Commit everything in the tasktree root (files, symlinks and the current commit of every repository) on the task branch, and push it to the local tasks repository. Prints "nothing to commit" when the root is clean. Never commits inside repositories; repositories with uncommitted changes produce a warning.
+
+Refuses to record a repository commit that is older than the one already recorded, unless --allow-rewind is set.`, Args: exact(0), RunE: func(cmd *cobra.Command, args []string) error {
 		a, e := o.application()
 		if e != nil {
 			return e
@@ -1070,8 +1130,8 @@ func commitCmd(o *options) *cobra.Command {
 		return e
 	}}
 	c.Flags().StringVarP(&ref, "task", "t", "", "task handle or id")
-	c.Flags().StringVarP(&msg, "message", "m", "", "commit message")
-	c.Flags().BoolVar(&allowRewind, "allow-rewind", false, "allow recording a repository commit older than the recorded gitlink")
+	c.Flags().StringVarP(&msg, "message", "m", "", "commit message (default: tasktree(<id>): checkpoint)")
+	c.Flags().BoolVar(&allowRewind, "allow-rewind", false, "allow recording a repository commit older than the one already recorded")
 	return c
 }
 
@@ -1081,7 +1141,9 @@ func (doctorFindingsError) Error() string { return "doctor found errors" }
 
 func doctorCmd(o *options) *cobra.Command {
 	var fix, jsonOut bool
-	c := &cobra.Command{Use: "doctor", Short: "Check tasktree state and safely repair known problems", Args: exact(0), RunE: func(cmd *cobra.Command, args []string) error {
+	c := &cobra.Command{Use: "doctor", Short: "Check tasktree state and safely repair known problems", Long: `Check the tasks repository, records, checkouts and hidden git directories. Each finding has a code, a severity (error or warning) and a flag saying whether --fix can repair it.
+
+--fix applies only repairs that cannot discard work, then checks again. Exits 1 when errors remain; warnings alone exit 0.`, Args: exact(0), RunE: func(cmd *cobra.Command, args []string) error {
 		a, e := o.application()
 		if e != nil {
 			return e
@@ -1120,14 +1182,14 @@ func doctorCmd(o *options) *cobra.Command {
 		}
 		return nil
 	}}
-	c.Flags().BoolVar(&fix, "fix", false, "apply safe repairs and check again")
-	c.Flags().BoolVar(&jsonOut, "json", false, "print JSON")
+	c.Flags().BoolVar(&fix, "fix", false, "apply the repairs that cannot lose work, then check again")
+	c.Flags().BoolVar(&jsonOut, "json", false, "emit JSON")
 	return c
 }
 
 func moveCmd(o *options) *cobra.Command {
 	var ref string
-	c := &cobra.Command{Use: "move <new-path>", Short: "Relocate a tasktree checkout atomically", Args: exact(1), RunE: func(cmd *cobra.Command, args []string) error {
+	c := &cobra.Command{Use: "move <new-path>", Short: "Relocate a tasktree checkout atomically", Long: `Move a checkout to a new path on the same filesystem, rewrite the repository paths git keeps, update local.yml and verify that every repository is unchanged. On any failure the move is rolled back. The target must not exist or must be empty. Shells that sit in the old directory keep the old path; cd to the new one.`, Args: exact(1), RunE: func(cmd *cobra.Command, args []string) error {
 		a, e := o.application()
 		if e != nil {
 			return e
@@ -1149,7 +1211,7 @@ func moveCmd(o *options) *cobra.Command {
 }
 
 func templateCmd(o *options) *cobra.Command {
-	root := &cobra.Command{Use: "template", Short: "List, show, or validate task templates"}
+	root := &cobra.Command{Use: "template", Short: "List, show, or validate task templates", Long: "Templates create a task and, optionally, its tasktree. They come from ~/.tasktree/templates and from the built-in set (bugfix, feature, investigation). A template in your directory replaces a built-in one with the same name."}
 	var listJSON, showJSON bool
 	list := &cobra.Command{Use: "list", Short: "List available templates", Args: exact(0), RunE: func(cmd *cobra.Command, args []string) error {
 		a, e := o.application()
@@ -1175,7 +1237,7 @@ func templateCmd(o *options) *cobra.Command {
 		return tw.Flush()
 	}}
 	list.Flags().BoolVar(&listJSON, "json", false, "emit JSON")
-	show := &cobra.Command{Use: "show <name|file>", Short: "Show template parameters and raw YAML", Args: exact(1), RunE: func(cmd *cobra.Command, args []string) error {
+	show := &cobra.Command{Use: "show <name|file>", Short: "Show template parameters and raw YAML", Long: "Print the parameter table and the template YAML. The argument is a template name or a path to a file.", Args: exact(1), RunE: func(cmd *cobra.Command, args []string) error {
 		a, e := o.application()
 		if e != nil {
 			return e
@@ -1201,7 +1263,7 @@ func templateCmd(o *options) *cobra.Command {
 	}}
 	show.Flags().BoolVar(&showJSON, "json", false, "emit JSON")
 	root.AddCommand(list, show,
-		&cobra.Command{Use: "validate <name|file>", Short: "Validate a template", Args: exact(1), RunE: func(cmd *cobra.Command, args []string) error {
+		&cobra.Command{Use: "validate <name|file>", Short: "Validate a template", Long: "Check apiVersion, kind, metadata.name and that every {{variable}} is declared. The argument is a template name or a path to a file. Exits 2 when invalid, 3 when not found.", Args: exact(1), RunE: func(cmd *cobra.Command, args []string) error {
 			a, e := o.application()
 			if e != nil {
 				return e
@@ -1220,7 +1282,7 @@ func templateCmd(o *options) *cobra.Command {
 }
 
 func aliasCmd(o *options) *cobra.Command {
-	root := &cobra.Command{Use: "alias", Short: "Manage repository aliases"}
+	root := &cobra.Command{Use: "alias", Short: "Manage repository aliases", Long: "Aliases map short names to clone URLs in ~/.tasktree/aliases.yml. add registers aliases for each repository automatically."}
 	root.AddCommand(&cobra.Command{Use: "add <alias> <url>", Short: "Register a repository alias", Args: exact(2), RunE: func(cmd *cobra.Command, args []string) error {
 		a, e := o.application()
 		if e != nil {
@@ -1276,7 +1338,7 @@ func aliasCmd(o *options) *cobra.Command {
 
 func rootCmd(o *options) *cobra.Command {
 	var ref string
-	c := &cobra.Command{Use: "root", Short: "Print the tasktree root path", Args: exact(0), RunE: func(cmd *cobra.Command, args []string) error {
+	c := &cobra.Command{Use: "root", Short: "Print the tasktree root path", Long: "Print the checkout directory of the task. Exits 4 if the task has no checkout on this machine.", Args: exact(0), RunE: func(cmd *cobra.Command, args []string) error {
 		a, e := o.application()
 		if e != nil {
 			return e
@@ -1297,7 +1359,7 @@ func rootCmd(o *options) *cobra.Command {
 
 func modeCmd(o *options) *cobra.Command {
 	var ref string
-	c := &cobra.Command{Use: "mode <repo> <follow|work|pin>", Short: "Change a repository mode", Args: exact(2), RunE: func(cmd *cobra.Command, args []string) error {
+	c := &cobra.Command{Use: "mode <repo> <follow|work|pin>", Short: "Change a repository mode", Long: `Set the mode of a repository and commit the change. Modes: follow (fast-forward to origin/<branch>), work (fast-forward your branch; never rebase) and pin (never moves). Switching to follow or work records the current branch of the repository; switching to pin removes the recorded branch.`, Args: exact(2), RunE: func(cmd *cobra.Command, args []string) error {
 		if args[1] != "follow" && args[1] != "work" && args[1] != "pin" {
 			return usageError{"mode must be follow, work, or pin"}
 		}
@@ -1344,7 +1406,7 @@ func bootstrapCmd(o *options) *cobra.Command {
 		}
 		return a.Bootstrap(cmd.Context(), id, root, o.err)
 	}
-	c := &cobra.Command{Use: "bootstrap", Short: "Run, add, remove, or list the tasktree bootstrap steps", Args: exact(0), RunE: runSteps}
+	c := &cobra.Command{Use: "bootstrap", Short: "Run, add, remove, or list the tasktree bootstrap steps", Long: `Bootstrap steps are shell commands stored in .tasktree/config.yml. They run in order, stop at the first failure, and run on "open" when a checkout is created. Without a subcommand, "bootstrap" runs them now. Each step gets TASKTREE_ROOT set to the tasktree root.`, Args: exact(0), RunE: runSteps}
 	c.PersistentFlags().StringVarP(&ref, "task", "t", "", "task handle or id")
 	// target resolves a structural command to a checkout or, with -t, a
 	// definition without one (D45, D47).
@@ -1364,7 +1426,7 @@ func bootstrapCmd(o *options) *cobra.Command {
 	run := &cobra.Command{Use: "run", Short: "Run the tasktree bootstrap steps", Args: exact(0), RunE: runSteps}
 	var workdir string
 	var envPairs []string
-	add := &cobra.Command{Use: "add <name> <run>", Short: "Add a bootstrap step and commit it", Args: exact(2), RunE: func(cmd *cobra.Command, args []string) error {
+	add := &cobra.Command{Use: "add <name> <run>", Short: "Add a bootstrap step and commit it", Long: "Append a step. The name must be unique. The command runs with sh -c.", Args: exact(2), RunE: func(cmd *cobra.Command, args []string) error {
 		env, e := app.ParseEnvAssignments(envPairs)
 		if e != nil {
 			return e
@@ -1387,7 +1449,7 @@ func bootstrapCmd(o *options) *cobra.Command {
 		fmt.Fprintf(o.out, "added bootstrap step %s\n", args[0])
 		return nil
 	}}
-	add.Flags().StringVar(&workdir, "workdir", "", "working directory relative to the tasktree root")
+	add.Flags().StringVar(&workdir, "workdir", "", "directory to run in, relative to the tasktree root (default: the root)")
 	add.Flags().StringArrayVar(&envPairs, "env", nil, "environment variable KEY=VALUE (repeatable)")
 	rm := &cobra.Command{Use: "rm <name>", Short: "Remove a bootstrap step and commit the change", Args: exact(1), RunE: func(cmd *cobra.Command, args []string) error {
 		a, e := o.application()
@@ -1434,7 +1496,7 @@ func bootstrapCmd(o *options) *cobra.Command {
 }
 func focusCmd(o *options) *cobra.Command {
 	var clear bool
-	c := &cobra.Command{Use: "focus [handle|id]", Short: "Focus a shared descendant in this tasktree", Args: func(cmd *cobra.Command, args []string) error {
+	c := &cobra.Command{Use: "focus [handle|id]", Short: "Focus a shared descendant in this tasktree", Long: `Make record commands (info, note, ref, label, mark, history) in this checkout target a shared subtask instead of the task that owns the tasktree. Structural commands are not affected. Focus is stored per checkout in local.yml and clears when the subtask is closed. Use TASKTREE_TASK instead when several agents share one checkout.`, Args: func(cmd *cobra.Command, args []string) error {
 		if clear && len(args) == 0 {
 			return nil
 		}
@@ -1465,12 +1527,14 @@ func focusCmd(o *options) *cobra.Command {
 		}
 		return e
 	}}
-	c.Flags().BoolVar(&clear, "clear", false, "clear the checkout focus")
+	c.Flags().BoolVar(&clear, "clear", false, "clear the focus")
 	return c
 }
 func pushCmd(o *options) *cobra.Command {
 	var ref string
-	c := &cobra.Command{Use: "push [repo...]", Short: "Push repository branches and print PR hints", Args: cobra.ArbitraryArgs, RunE: func(cmd *cobra.Command, args []string) error {
+	c := &cobra.Command{Use: "push [repo...]", Short: "Push repository branches and print PR hints", Long: `Push repository branches to origin. Without arguments, only repositories in work mode are pushed. Name follow or pin repositories to push them too. All selected repositories are checked before any push: a detached HEAD, and the branches main, master, release/* and the remote default branch are refused.
+
+For an isolated subtask, push checks that the parent's branch on origin contains the subtask's fork point, warns if not, and prints a "gh pr create" line with the parent branch as base. It never opens a pull request.`, Args: cobra.ArbitraryArgs, RunE: func(cmd *cobra.Command, args []string) error {
 		a, e := o.application()
 		if e != nil {
 			return e
