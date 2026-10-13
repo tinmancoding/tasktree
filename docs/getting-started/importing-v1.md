@@ -138,7 +138,7 @@ Import keeps a journal in `~/.tasktree/imports/<id>/` until it finishes. If the 
 tasktree import --recover ~/ws/payments-retry
 ```
 
-Do not run `tasktree doctor --fix` before this: it would offer to delete the hidden git directory that holds the half-imported repositories. `--recover` takes exactly one path. If the task record was not created yet, it restores the V1 workspace exactly as it was. If the record exists, it repairs `local.yml` and removes the journal. See [Doctor and recovery](../guides/doctor-and-recovery.md).
+`doctor --fix` never touches the hidden git directory of an incomplete import. `--recover` takes exactly one path. If the task record was not created yet, it restores the V1 workspace exactly as it was. If the record exists, it repairs `local.yml` and removes the journal. See [Doctor and recovery](../guides/doctor-and-recovery.md).
 
 ## Clean up the V1 registry
 

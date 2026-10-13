@@ -41,7 +41,7 @@ The command needs no network, except one `ls-remote` call that is limited to 10 
 | `branch-unpushed-to-hub` | warning | when ahead | The checkout's HEAD is ahead of the task branch in the hub. `--fix` pushes it. If both moved (diverged), it is not fixable; use `tasktree sync` and `resolve`. |
 | `closed-but-checked-out` | warning | no | A closed task still has a checkout. Run `tasktree mark <status> -t <handle>` to remove it through the loss gate. |
 | `orphan-clone` | error | see below | A hidden git directory in `~/.tasktree/clones` has no `local.yml` entry. |
-| `import-journal` | error | no | A V1 import did not finish. Run `tasktree import --recover <path>` **before** anything else. Until then `doctor` also reports the half-imported workspace as an `orphan-clone`, and `doctor --fix` would delete the hidden git directory that now holds the repositories' git data. |
+| `import-journal` | error | no | A V1 import did not finish. Run `tasktree import --recover <path>`. The hidden git directory of an incomplete import holds the repositories' git data, so `doctor` never reports it as an `orphan-clone` and `--fix` never removes it. |
 | `subtask-branch-mismatch` | warning | no | An isolated subtask's branch does not start with its parent's branch name, after a reparent. Informational. |
 
 ### `checkout-missing`
@@ -112,7 +112,7 @@ You may edit `~/.tasktree/git` by hand, for example to fix a record. While it ha
 
 ### An import did not finish
 
-Run `import --recover` first. Do not run `doctor --fix` while `doctor` reports `import-journal`.
+Run `import --recover`. `doctor --fix` leaves the import's hidden git directory and journal alone, so it cannot make recovery impossible.
 
 ```console
 $ tasktree import --recover ~/ws/payments-retry

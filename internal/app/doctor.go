@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"github.com/tinmancoding/tasktree/v2/internal/product"
 	"os"
@@ -223,9 +224,15 @@ func (a App) doctorFindings(ctx context.Context) ([]Finding, error) {
 			cloneIDs[strings.TrimSuffix(ent.Name(), ".git")] = true
 		}
 	}
+	importIDs := incompleteImportIDs(a.Home)
 	for id, co := range local.Checkouts {
 		clone := a.Home.ClonePath(id)
 		if st, statErr := os.Stat(co.Path); statErr != nil || !st.IsDir() {
+			if importIDs[id] {
+				// The clone holds absorbed repositories that only the import journal can restore.
+				add("checkout-missing", "error", id, "recorded checkout path does not exist and an import for this task is incomplete; run "+product.Name+" import --recover <path>", nil)
+				continue
+			}
 			if !cloneIDs[id] {
 				idCopy := id
 				add("checkout-missing", "error", id, "recorded checkout path does not exist", func(context.Context) error {
@@ -307,6 +314,9 @@ func (a App) doctorFindings(ctx context.Context) ([]Finding, error) {
 		if _, ok := local.Checkouts[id]; ok {
 			continue
 		}
+		if importIDs[id] {
+			continue // owned by an incomplete import; reported under import-journal only
+		}
 		found := findCheckoutMarker(cfg.TasksRoot, id, 3)
 		if found != "" {
 			idCopy, pathCopy := id, found
@@ -377,6 +387,30 @@ func (a App) doctorFindings(ctx context.Context) ([]Finding, error) {
 		return out[i].Subject < out[j].Subject
 	})
 	return out, nil
+}
+
+// incompleteImportIDs returns every task id that has a directory under
+// imports/ (journal or quarantine). Its clone is never safe to delete.
+func incompleteImportIDs(h home.Home) map[string]bool {
+	ids := map[string]bool{}
+	base := filepath.Join(h.Root, "imports")
+	entries, err := os.ReadDir(base)
+	if err != nil {
+		return ids
+	}
+	for _, ent := range entries {
+		if !ent.IsDir() {
+			continue
+		}
+		ids[ent.Name()] = true
+		if b, e := os.ReadFile(filepath.Join(base, ent.Name(), "journal.json")); e == nil {
+			var j struct{ ID string }
+			if json.Unmarshal(b, &j) == nil && j.ID != "" {
+				ids[j.ID] = true
+			}
+		}
+	}
+	return ids
 }
 
 // lossInClone includes the standard hidden-git-dir gate, then additionally
