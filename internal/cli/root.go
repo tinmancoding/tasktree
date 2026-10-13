@@ -766,8 +766,11 @@ Closing a task without a checkout only changes the record.`, Args: exact(1), Run
 				fmt.Fprintln(o.err, loss)
 			}
 		}
-		if result.RemovedAt != "" && pathWithin(cwd, result.RemovedAt) {
-			fmt.Fprintln(o.err, "tasktree removed; run: cd ..")
+		for _, removed := range append([]string{result.RemovedAt}, result.Removed...) {
+			if removed != "" && pathWithin(cwd, removed) {
+				fmt.Fprintln(o.err, "tasktree removed; run: cd ..")
+				break
+			}
 		}
 		if e == nil {
 			fmt.Fprintf(o.out, "%s marked %s\n", result.Task.Handle, result.Task.Status)
@@ -887,8 +890,28 @@ func pathWithin(path, root string) bool {
 	if pathErr != nil || rootErr != nil {
 		return false
 	}
-	rel, err := filepath.Rel(root, path)
-	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+	within := func(path, root string) bool {
+		rel, err := filepath.Rel(root, path)
+		return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+	}
+	return within(path, root) || within(realPath(path), realPath(root))
+}
+
+// realPath resolves symlinks in the longest existing prefix of path, so a
+// directory that was just deleted still compares equal to its former alias.
+func realPath(path string) string {
+	rest := ""
+	for p := path; ; {
+		if real, err := filepath.EvalSymlinks(p); err == nil {
+			return filepath.Join(real, rest)
+		}
+		parent := filepath.Dir(p)
+		if parent == p {
+			return path
+		}
+		rest = filepath.Join(filepath.Base(p), rest)
+		p = parent
+	}
 }
 
 func writeInfo(w io.Writer, t record.Task, parent string, children []record.Task, jiraBase, focus string) {

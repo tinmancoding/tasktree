@@ -82,6 +82,19 @@ func (c Client) Run(ctx context.Context, dir string, env map[string]string, args
 func (c Client) RunInput(ctx context.Context, dir string, env map[string]string, input string, args ...string) (string, string, error) {
 	return c.runInput(ctx, dir, env, strings.NewReader(input), args...)
 }
+
+// cwdExists reports whether the process working directory still exists. On
+// some systems Getwd keeps returning the stale path of a deleted directory, so
+// the path is also stat'ed.
+func cwdExists() bool {
+	wd, err := os.Getwd()
+	if err != nil {
+		return false
+	}
+	st, err := os.Stat(wd)
+	return err == nil && st.IsDir()
+}
+
 func (c Client) runInput(ctx context.Context, dir string, env map[string]string, input io.Reader, args ...string) (string, string, error) {
 	cfg := c.withConfig()
 	execArgs := args
@@ -125,6 +138,14 @@ func (c Client) runInput(ctx context.Context, dir string, env map[string]string,
 	// A killed git can leave an SSH/helper child holding the pipes open.
 	// Bound pipe draining as well as the lifetime of the direct process.
 	cmd.WaitDelay = 250 * time.Millisecond
+	if dir == "" {
+		if !cwdExists() {
+			// The caller's working directory was deleted (for example by closing
+			// the checkout it was in). Every command here names its repository
+			// with an absolute path, so any existing directory will do.
+			dir = os.TempDir()
+		}
+	}
 	cmd.Dir = dir
 	cmd.Env = CleanEnv(env)
 	cmd.Stdin = input

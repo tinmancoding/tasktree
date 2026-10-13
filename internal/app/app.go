@@ -924,6 +924,8 @@ type MarkResult struct {
 	Task      record.Task
 	Loss      []string
 	RemovedAt string
+	// Removed lists every checkout directory deleted, in order (a cascade removes several).
+	Removed   []string
 	Remaining []string
 }
 
@@ -1033,6 +1035,7 @@ func (a App) Mark(ctx context.Context, ref, status string, o MarkOptions) (MarkR
 		return result, GateError{strings.Join(lateLoss, "\n") + "\ntask is closed; push and rerun " + product.Name + " mark " + status}
 	}
 	result.RemovedAt = checkout.Path
+	result.Removed = []string{checkout.Path}
 	result.Remaining = a.teardownTasktree(task.ID, checkout.Path, local)
 	if len(result.Remaining) > 0 {
 		return result, fmt.Errorf("task closed, but teardown incomplete; remains: %s", strings.Join(result.Remaining, ", "))
@@ -1135,6 +1138,7 @@ func (a App) markCascade(ctx context.Context, ref, status string, o MarkOptions)
 		if oneResult.RemovedAt != "" {
 			result.RemovedAt = oneResult.RemovedAt
 		}
+		result.Removed = append(result.Removed, oneResult.Removed...)
 		if markErr != nil {
 			for _, pending := range ordered[i:] {
 				result.Remaining = append(result.Remaining, pending.Handle)
