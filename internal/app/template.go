@@ -26,6 +26,43 @@ type RenderedTemplate struct {
 	Values map[string]string
 }
 
+// TemplateSummary is the JSON row of `template list --json`.
+type TemplateSummary struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Source      string `json:"source"`
+}
+
+// TemplateParameter is one declared parameter in `template show --json`.
+type TemplateParameter struct {
+	Name        string `json:"name"`
+	Required    bool   `json:"required"`
+	Default     string `json:"default"`
+	Description string `json:"description"`
+}
+
+// TemplateDetail is the JSON document of `template show --json`; Raw is the
+// template YAML exactly as stored.
+type TemplateDetail struct {
+	Name        string              `json:"name"`
+	Description string              `json:"description"`
+	Source      string              `json:"source"`
+	Parameters  []TemplateParameter `json:"parameters"`
+	Raw         string              `json:"raw"`
+}
+
+func SummarizeTemplate(s tpl.Spec) TemplateSummary {
+	return TemplateSummary{Name: s.Metadata.Name, Description: s.Metadata.Description, Source: s.Source}
+}
+
+func DescribeTemplate(s tpl.Spec) TemplateDetail {
+	d := TemplateDetail{Name: s.Metadata.Name, Description: s.Metadata.Description, Source: s.Source, Parameters: []TemplateParameter{}, Raw: string(s.Raw)}
+	for _, p := range s.Parameters {
+		d.Parameters = append(d.Parameters, TemplateParameter{Name: p.Name, Required: p.Required, Default: p.Default, Description: p.Description})
+	}
+	return d
+}
+
 func (a App) TemplateStore() tpl.Store { return tpl.New(filepath.Join(a.Home.Root, "templates")) }
 func renderTemplate(s tpl.Spec, values map[string]string) tpl.Spec {
 	r := variable.Render

@@ -1133,7 +1133,8 @@ func moveCmd(o *options) *cobra.Command {
 
 func templateCmd(o *options) *cobra.Command {
 	root := &cobra.Command{Use: "template", Short: "List, show, or validate task templates"}
-	root.AddCommand(&cobra.Command{Use: "list", Short: "List available templates", Args: exact(0), RunE: func(cmd *cobra.Command, args []string) error {
+	var listJSON, showJSON bool
+	list := &cobra.Command{Use: "list", Short: "List available templates", Args: exact(0), RunE: func(cmd *cobra.Command, args []string) error {
 		a, e := o.application()
 		if e != nil {
 			return e
@@ -1142,34 +1143,47 @@ func templateCmd(o *options) *cobra.Command {
 		if e != nil {
 			return e
 		}
+		if listJSON {
+			rows := make([]app.TemplateSummary, 0, len(all))
+			for _, s := range all {
+				rows = append(rows, app.SummarizeTemplate(s))
+			}
+			return json.NewEncoder(o.out).Encode(rows)
+		}
 		tw := newTable(o.out)
 		fmt.Fprintln(tw, "NAME\tSOURCE\tDESCRIPTION")
 		for _, s := range all {
 			fmt.Fprintf(tw, "%s\t%s\t%s\n", s.Metadata.Name, s.Source, s.Metadata.Description)
 		}
 		return tw.Flush()
-	}},
-		&cobra.Command{Use: "show <name>", Short: "Show template parameters and raw YAML", Args: exact(1), RunE: func(cmd *cobra.Command, args []string) error {
-			a, e := o.application()
-			if e != nil {
-				return e
-			}
-			s, e := a.TemplateStore().Load(args[0])
-			if e != nil {
-				return templateLoadError(e)
-			}
-			tw := newTable(o.out)
-			fmt.Fprintln(tw, "PARAMETER\tREQUIRED\tDEFAULT\tDESCRIPTION")
-			for _, p := range s.Parameters {
-				fmt.Fprintf(tw, "%s\t%t\t%s\t%s\n", p.Name, p.Required, p.Default, p.Description)
-			}
-			if e = tw.Flush(); e != nil {
-				return e
-			}
-			fmt.Fprintln(o.out, "---")
-			_, e = o.out.Write(s.Raw)
+	}}
+	list.Flags().BoolVar(&listJSON, "json", false, "emit JSON")
+	show := &cobra.Command{Use: "show <name|file>", Short: "Show template parameters and raw YAML", Args: exact(1), RunE: func(cmd *cobra.Command, args []string) error {
+		a, e := o.application()
+		if e != nil {
 			return e
-		}},
+		}
+		s, e := a.TemplateStore().Load(args[0])
+		if e != nil {
+			return templateLoadError(e)
+		}
+		if showJSON {
+			return json.NewEncoder(o.out).Encode(app.DescribeTemplate(s))
+		}
+		tw := newTable(o.out)
+		fmt.Fprintln(tw, "PARAMETER\tREQUIRED\tDEFAULT\tDESCRIPTION")
+		for _, p := range s.Parameters {
+			fmt.Fprintf(tw, "%s\t%t\t%s\t%s\n", p.Name, p.Required, p.Default, p.Description)
+		}
+		if e = tw.Flush(); e != nil {
+			return e
+		}
+		fmt.Fprintln(o.out, "---")
+		_, e = o.out.Write(s.Raw)
+		return e
+	}}
+	show.Flags().BoolVar(&showJSON, "json", false, "emit JSON")
+	root.AddCommand(list, show,
 		&cobra.Command{Use: "validate <name|file>", Short: "Validate a template", Args: exact(1), RunE: func(cmd *cobra.Command, args []string) error {
 			a, e := o.application()
 			if e != nil {

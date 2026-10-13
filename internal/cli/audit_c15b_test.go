@@ -261,3 +261,98 @@ func TestListRefFilter(t *testing.T) {
 		expectCode(t, 2, "invalid --ref", "list", "--ref", bad)
 	}
 }
+
+const fileTemplate = `apiVersion: tasktree.dev/v2
+kind: Template
+metadata:
+  name: from-file
+  description: A template loaded from a path
+parameters:
+  - {name: who, default: world}
+task:
+  title: "Hello {{who}}"
+  handle: "hello-{{who}}"
+`
+
+// DN7: a path separator or a .yml/.yaml suffix means "load this file";
+// anything else is a name looked up in user templates, then builtins.
+func TestTemplateFileVersusName(t *testing.T) {
+	setupRecords(t)
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "tpl.yml"), fileTemplate)
+	writeFile(t, filepath.Join(dir, "tpl.yaml"), strings.Replace(fileTemplate, "from-file", "from-yaml", 1))
+	writeFile(t, filepath.Join(dir, "noext"), strings.Replace(fileTemplate, "from-file", "from-noext", 1))
+	writeFile(t, filepath.Join(os.Getenv("TASKTREE_HOME"), "templates", "mine.yml"), strings.Replace(fileTemplate, "from-file", "mine", 1))
+
+	for _, ref := range []string{filepath.Join(dir, "tpl.yml"), filepath.Join(dir, "tpl.yaml"), filepath.Join(dir, "noext")} {
+		if out, _, err := run(t, "template", "show", ref); err != nil || !strings.Contains(out, "who") {
+			t.Fatalf("show %s: %v\n%s", ref, err, out)
+		}
+		if out, _, err := run(t, "template", "validate", ref); err != nil || !strings.Contains(out, "is valid") {
+			t.Fatalf("validate %s: %v\n%s", ref, err, out)
+		}
+	}
+	out, _, err := run(t, "new", "--template", filepath.Join(dir, "noext"), "who=path")
+	if err != nil || !strings.HasPrefix(out, "hello-path ") {
+		t.Fatalf("new --template path: %v %q", err, out)
+	}
+	// A relative file name ending in .yml is a file, even in the cwd.
+	old, _ := os.Getwd()
+	defer os.Chdir(old)
+	if err = os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	if out, _, err = run(t, "new", "--template", "tpl.yml", "who=cwd"); err != nil || !strings.HasPrefix(out, "hello-cwd ") {
+		t.Fatalf("new --template tpl.yml: %v %q", err, out)
+	}
+	// A bare name is discovered (user templates, then builtins), never a cwd file.
+	if out, _, err = run(t, "new", "--template", "mine", "who=name"); err != nil || !strings.HasPrefix(out, "hello-name ") {
+		t.Fatalf("new --template mine: %v %q", err, out)
+	}
+	expectCode(t, 3, "not found", "new", "--template", "noext", "who=x")
+	expectCode(t, 3, "not found", "new", "--template", "./missing.yml")
+}
+
+// DN3: template list/show --json with stable shapes.
+func TestTemplateJSON(t *testing.T) {
+	setupRecords(t)
+	out, _, err := run(t, "template", "list", "--json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rows []map[string]string
+	if err = json.Unmarshal([]byte(out), &rows); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	names := []string{}
+	for _, r := range rows {
+		names = append(names, r["name"])
+		if len(r) != 3 || r["source"] != "builtin" || r["description"] == "" {
+			t.Fatalf("row shape: %v", r)
+		}
+	}
+	if strings.Join(names, ",") != "bugfix,feature,investigation" {
+		t.Fatalf("names=%v", names)
+	}
+	out, _, err = run(t, "template", "show", "bugfix", "--json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var detail struct {
+		Name, Description, Source string
+		Parameters                []map[string]any
+		Raw                       string
+	}
+	if err = json.Unmarshal([]byte(out), &detail); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if detail.Name != "bugfix" || detail.Source != "builtin" || len(detail.Parameters) != 3 || !strings.Contains(detail.Raw, "kind: Template") {
+		t.Fatalf("detail: %+v", detail)
+	}
+	for _, key := range []string{"name", "required", "default", "description"} {
+		if _, ok := detail.Parameters[0][key]; !ok {
+			t.Fatalf("parameter missing %q: %v", key, detail.Parameters[0])
+		}
+	}
+	expectCode(t, 3, "not found", "template", "show", "nope", "--json")
+}
