@@ -447,6 +447,14 @@ With --json the output is one JSON object; see the JSON output reference.`, Args
 		var tree *app.TasktreeInfo
 		var definition *app.DefinitionInfo
 		if root != "" {
+			if _, statErr := os.Stat(root); statErr != nil {
+				// The recorded checkout is gone (deleted or moved by hand). Show the
+				// record and the definition instead of failing.
+				fmt.Fprintf(o.err, "warning: recorded checkout %s is missing; run %s doctor\n", root, product.Name)
+				root = ""
+			}
+		}
+		if root != "" {
 			_, rootCfg, discoverErr := app.DiscoverRoot(root)
 			if discoverErr != nil {
 				return discoverErr
