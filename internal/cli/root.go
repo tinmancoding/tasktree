@@ -196,7 +196,8 @@ func configCmd(o *options) *cobra.Command {
 func newCmd(o *options) *cobra.Command {
 	var x app.NewOptions
 	var open, isolated bool
-	var path, templateName string
+	var path, templateName, branch string
+	var repos []string
 	c := &cobra.Command{Use: "new [title] [k=v ...]", Short: "Create a task (optionally from a template or open its tasktree)", Args: cobra.ArbitraryArgs, RunE: func(cmd *cobra.Command, args []string) error {
 		varArgs := []string{}
 		if templateName != "" {
@@ -212,12 +213,22 @@ func newCmd(o *options) *cobra.Command {
 			}
 			x.Title = args[0]
 		}
+		if templateName != "" && isolated {
+			return usageError{"--isolated cannot be used with --template"}
+		}
+		if !isolated && (len(repos) > 0 || branch != "") {
+			return usageError{"--repos and --branch require --isolated"}
+		}
 		a, e := o.application()
 		if e != nil {
 			return e
 		}
 		if templateName != "" {
-			t, e := a.NewFromTemplate(cmd.Context(), app.TemplateApplyOptions{Name: templateName, Title: x.Title, Parent: x.Parent, Vars: varArgs})
+			tpl := app.TemplateApplyOptions{Name: templateName, Title: x.Title, Parent: x.Parent, Vars: varArgs, Jira: x.Jira, Handle: x.Handle}
+			if cmd.Flags().Changed("status") {
+				tpl.Status = x.Status
+			}
+			t, e := a.NewFromTemplate(cmd.Context(), tpl)
 			if e != nil {
 				return e
 			}
@@ -246,7 +257,7 @@ func newCmd(o *options) *cobra.Command {
 					handle = app.Slug(x.Title)
 				}
 			}
-			if e := a.PreflightIsolated(cmd.Context(), x.Parent, handle, app.OpenOptions{Path: path}); e != nil {
+			if e := a.PreflightIsolated(cmd.Context(), x.Parent, handle, app.OpenOptions{Path: path, Repos: repos, Branch: branch}); e != nil {
 				return e
 			}
 		}
@@ -259,7 +270,7 @@ func newCmd(o *options) *cobra.Command {
 			return nil
 		}
 		fmt.Fprintf(o.err, "%s %s\n", t.Handle, t.ID)
-		p, e := a.Open(cmd.Context(), t.ID, app.OpenOptions{Path: path}, o.err)
+		p, e := a.Open(cmd.Context(), t.ID, app.OpenOptions{Path: path, Repos: repos, Branch: branch}, o.err)
 		if e != nil && strings.Contains(e.Error(), "does not exist in parent") {
 			return usageError{e.Error()}
 		}
@@ -276,6 +287,8 @@ func newCmd(o *options) *cobra.Command {
 	c.Flags().BoolVar(&open, "open", false, "create and open a tasktree")
 	c.Flags().BoolVar(&isolated, "isolated", false, "create an isolated subtask tasktree")
 	c.Flags().StringVar(&path, "path", "", "checkout path")
+	c.Flags().StringSliceVar(&repos, "repos", nil, "parent repositories to include in an isolated subtask")
+	c.Flags().StringVar(&branch, "branch", "", "work repository branch for an isolated subtask")
 	return c
 }
 func listCmd(o *options) *cobra.Command {

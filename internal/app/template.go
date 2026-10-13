@@ -20,6 +20,8 @@ import (
 type TemplateApplyOptions struct {
 	Name, Title, Parent string
 	Vars                []string
+	// Jira, Handle and Status override the rendered task fields when set (M4).
+	Jira, Handle, Status string
 }
 type RenderedTemplate struct {
 	Spec   tpl.Spec
@@ -268,6 +270,23 @@ func (a App) NewFromTemplate(ctx context.Context, o TemplateApplyOptions) (recor
 	s := r.Spec
 	if o.Title != "" {
 		s.Task.Title = o.Title
+	}
+	if o.Jira != "" {
+		s.Task.Jira = o.Jira
+	}
+	if o.Handle != "" {
+		s.Task.Handle = o.Handle
+	}
+	if o.Status != "" {
+		s.Task.Status = o.Status
+		if e = record.ValidateStatus(o.Status); e != nil {
+			return record.Task{}, ValidationError{e.Error()}
+		}
+	}
+	if s.Task.Jira != "" {
+		if e = ValidateHandle(s.Task.Jira); e != nil {
+			return record.Task{}, e
+		}
 	}
 	if s.Task.Title == "" {
 		return record.Task{}, ValidationError{"template task.title is required when no title argument is passed"}

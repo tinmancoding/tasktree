@@ -440,3 +440,71 @@ func TestK2ResolverIsIdenticalForCheckoutAndDefinition(t *testing.T) {
 		})
 	}
 }
+
+// M3: new --parent --isolated forwards --repos and --branch to the open.
+func TestNewIsolatedAcceptsReposAndBranch(t *testing.T) {
+	f := newCloseFixture(t)
+	parent, _, root := createAndOpen(t, "Iso flags parent", filepath.Join(f.tasks, "iso-flags"))
+	if err := os.Chdir(root); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"add", f.upstream, "--name", "work", "--branch", "feature"}, {"add", f.upstream, "--name", "ref"}, {"add", f.upstream, "--name", "other", "--branch", "other"}} {
+		if _, _, err := run(t, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	expectCode(t, 2, "require --isolated", "new", "Nope", "--parent", parent, "--repos", "work")
+	expectCode(t, 2, "require --isolated", "new", "Nope", "--parent", parent, "--branch", "x")
+	out, _, err := run(t, "new", "Iso child", "--handle", "iso-flags-child", "--parent", parent, "--isolated", "--repos", "work,ref", "--branch", "custom/child")
+	if err != nil {
+		t.Fatal(err)
+	}
+	childRoot := strings.TrimSpace(out)
+	if _, err = os.Stat(filepath.Join(childRoot, "other")); !os.IsNotExist(err) {
+		t.Fatalf("--repos did not limit the repositories: %v", err)
+	}
+	if _, err = os.Stat(filepath.Join(childRoot, "ref", ".git")); err != nil {
+		t.Fatalf("selected follow repo missing: %v", err)
+	}
+	if got := gitRun(t, filepath.Join(childRoot, "work"), "branch", "--show-current"); got != "custom/child" {
+		t.Fatalf("--branch ignored: %q", got)
+	}
+}
+
+// M4: --jira/--handle/--status override a template's rendered task fields;
+// --isolated is not allowed with --template.
+func TestNewTemplateOverrides(t *testing.T) {
+	setupRecords(t)
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "plain.yml"), `apiVersion: tasktree.dev/v2
+kind: Template
+metadata: {name: plain}
+parameters:
+  - {name: n, default: base}
+task:
+  title: "Plain {{n}}"
+  handle: "plain-{{n}}"
+  jira: "TPL-1"
+  status: active
+`)
+	tpl := filepath.Join(dir, "plain.yml")
+	out, _, err := run(t, "new", "--template", tpl, "--handle", "custom", "--jira", "OVR-5", "--status", "blocked")
+	if err != nil || !strings.HasPrefix(out, "custom ") {
+		t.Fatalf("overrides: %v %q", err, out)
+	}
+	got := taskInfo(t, "custom")
+	if got.Status != "blocked" || len(got.Refs) != 1 || got.Refs[0].Value != "OVR-5" {
+		t.Fatalf("task: %+v", got)
+	}
+	// Without flags the template values stand (the --status default is not an override).
+	if out, _, err = run(t, "new", "--template", tpl, "n=two"); err != nil || !strings.HasPrefix(out, "plain-two ") {
+		t.Fatalf("defaults: %v %q", err, out)
+	}
+	if got = taskInfo(t, "plain-two"); got.Status != "active" || got.Refs[0].Value != "TPL-1" {
+		t.Fatalf("template values lost: %+v", got)
+	}
+	expectCode(t, 2, "", "new", "--template", tpl, "n=bad", "--status", "sideways")
+	expectCode(t, 2, "", "new", "--template", tpl, "n=bad", "--handle", "bad handle")
+	expectCode(t, 2, "", "new", "--template", tpl, "n=bad", "--jira", "bad key")
+	expectCode(t, 2, "cannot be used with --template", "new", "--template", tpl, "n=bad", "--parent", "plain-two", "--isolated")
+}
