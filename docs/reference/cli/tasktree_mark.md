@@ -16,6 +16,8 @@ The task branch stays, so the task can be reopened later.
 
 Closing a task without a checkout only changes the record.
 
+Marking the status the task already has changes nothing and prints "already <status>". A closed task whose checkout still exists is the exception: rerunning the close completes the teardown.
+
 ```
 tasktree mark <status> [flags]
 ```

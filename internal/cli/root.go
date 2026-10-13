@@ -754,7 +754,9 @@ Closing a task (done or dropped) that has a checkout on this machine runs the cl
   5. Delete the checkout directory, its hidden git directory and its local.yml entry.
 The task branch stays, so the task can be reopened later.
 
-Closing a task without a checkout only changes the record.`, Args: exact(1), RunE: func(cmd *cobra.Command, args []string) error {
+Closing a task without a checkout only changes the record.
+
+Marking the status the task already has changes nothing and prints "already <status>". A closed task whose checkout still exists is the exception: rerunning the close completes the teardown.`, Args: exact(1), RunE: func(cmd *cobra.Command, args []string) error {
 		if e := record.ValidateStatus(args[0]); e != nil {
 			return usageError{e.Error()}
 		}
@@ -780,7 +782,11 @@ Closing a task without a checkout only changes the record.`, Args: exact(1), Run
 			}
 		}
 		if e == nil {
-			fmt.Fprintf(o.out, "%s marked %s\n", result.Task.Handle, result.Task.Status)
+			if result.Unchanged {
+				fmt.Fprintf(o.out, "%s already %s\n", result.Task.Handle, result.Task.Status)
+			} else {
+				fmt.Fprintf(o.out, "%s marked %s\n", result.Task.Handle, result.Task.Status)
+			}
 		}
 		return e
 	}}

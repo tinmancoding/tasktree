@@ -936,6 +936,9 @@ type MarkResult struct {
 	// Removed lists every checkout directory deleted, in order (a cascade removes several).
 	Removed   []string
 	Remaining []string
+	// Unchanged is set when the task already had the requested status and
+	// nothing was written or removed.
+	Unchanged bool
 }
 
 func (a App) updateStatus(ctx context.Context, ref, status string) (record.Task, error) {
@@ -946,6 +949,9 @@ func (a App) updateStatus(ctx context.Context, ref, status string) (record.Task,
 	old, err := a.Info(ref)
 	if err != nil {
 		return record.Task{}, err
+	}
+	if old.Status == status {
+		return old, nil // nothing to record; a commit would be empty
 	}
 	t, err := a.Hub.UpdateWithPostCommit(ctx, ref, fmt.Sprintf("status %s → %s", old.Status, status), c.Author, c.Machine, func(d *record.Document) error { return d.SetStatus(status, a.Now().UTC()) }, func(task record.Task, raw []byte) {
 		a.writeGeneratedTaskRecord(task.ID, raw)
@@ -969,6 +975,14 @@ func (a App) Mark(ctx context.Context, ref, status string, o MarkOptions) (MarkR
 		return result, err
 	}
 	closing := !record.IsOpen(status)
+	if task.Status == status {
+		// Already there. A closed task with a live checkout still falls through,
+		// so that rerunning mark completes an interrupted teardown.
+		if !closing || o.Keep || !a.hasLiveCheckout(task.ID) {
+			result.Task, result.Unchanged = task, true
+			return result, nil
+		}
+	}
 	if closing {
 		docs, readErr := a.Hub.ReadAll()
 		if readErr != nil {
@@ -1052,6 +1066,19 @@ func (a App) Mark(ctx context.Context, ref, status string, o MarkOptions) (MarkR
 	return result, nil
 }
 
+func (a App) hasLiveCheckout(id string) bool {
+	local, err := a.Home.LoadLocal()
+	if err != nil {
+		return false
+	}
+	checkout, ok := local.Checkouts[id]
+	if !ok {
+		return false
+	}
+	st, err := os.Stat(checkout.Path)
+	return err == nil && st.IsDir()
+}
+
 // markCascade does every destructive-work preflight before changing any record.
 // Descendants are closed depth-first so each parent passes the ordinary ST1 gate.
 func (a App) markCascade(ctx context.Context, ref, status string, o MarkOptions) (MarkResult, error) {
@@ -1098,6 +1125,12 @@ func (a App) markCascade(ctx context.Context, ref, status string, o MarkOptions)
 	}
 	if err := visit(target); err != nil {
 		return MarkResult{}, err
+	}
+	if len(ordered) == 0 {
+		// Nothing open below or at the target: behave like a plain mark.
+		one := o
+		one.Cascade = false
+		return a.Mark(ctx, target.ID, status, one)
 	}
 	local, err := a.Home.LoadLocal()
 	if err != nil {

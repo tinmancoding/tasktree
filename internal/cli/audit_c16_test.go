@@ -103,3 +103,42 @@ func TestInfoSetParentClearBreaksExistingCycle(t *testing.T) {
 		t.Fatal("unrelated parent was cleared")
 	}
 }
+
+// H6: marking the status a task already has is a no-op, not a git error.
+func TestMarkSameStatusIsNoOp(t *testing.T) {
+	f := newCloseFixture(t)
+	handle, _, root := createAndOpen(t, "Mark twice", filepath.Join(f.tasks, "twice"))
+	hubCommits := func() string { return gitRun(t, filepath.Join(f.home, "git"), "rev-list", "--count", "main") }
+	if _, _, err := run(t, "mark", "active", "-t", handle); err != nil {
+		t.Fatal(err)
+	}
+	before := hubCommits()
+	out, _, err := run(t, "mark", "active", "-t", handle)
+	if err != nil || !strings.Contains(out, "already active") {
+		t.Fatalf("second mark active: %q %v", out, err)
+	}
+	if after := hubCommits(); after != before {
+		t.Fatalf("no-op mark committed: %s -> %s", before, after)
+	}
+
+	// A closed task with a live checkout still performs the teardown on rerun.
+	if _, _, err = run(t, "mark", "done", "--keep", "-t", handle); err != nil {
+		t.Fatal(err)
+	}
+	if out, _, err = run(t, "mark", "done", "--keep", "-t", handle); err != nil || !strings.Contains(out, "already done") {
+		t.Fatalf("second mark done --keep: %q %v", out, err)
+	}
+	if out, _, err = run(t, "mark", "done", "-t", handle); err != nil || !strings.Contains(out, "marked done") {
+		t.Fatalf("teardown rerun: %q %v", out, err)
+	}
+	if _, err := os.Stat(root); !os.IsNotExist(err) {
+		t.Fatalf("rerun did not remove the checkout: %v", err)
+	}
+	before = hubCommits()
+	if out, _, err = run(t, "mark", "done", "-t", handle); err != nil || !strings.Contains(out, "already done") {
+		t.Fatalf("mark done after teardown: %q %v", out, err)
+	}
+	if after := hubCommits(); after != before {
+		t.Fatalf("no-op mark committed: %s -> %s", before, after)
+	}
+}
