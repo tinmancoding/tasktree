@@ -2,6 +2,7 @@ package cli_test
 
 import (
 	"encoding/json"
+	"github.com/tinmancoding/tasktree/v2/internal/cli"
 	"os"
 	"path/filepath"
 	"strings"
@@ -694,5 +695,69 @@ func TestTaskViewRefreshedAfterMainMerge(t *testing.T) {
 	b.must("open", "fresh", "--skip-bootstrap")
 	if !strings.Contains(view(), "via open pre-fetch") {
 		t.Fatalf("open pre-fetch did not refresh task.md:\n%s", view())
+	}
+}
+
+// M27: TASKTREE_TASK naming a shared subtask resolves like focus.
+func TestEnvTaskSharedSubtaskKeepsTasktreeRoot(t *testing.T) {
+	f := newCloseFixture(t)
+	parent, parentID, root := createAndOpen(t, "Env parent", filepath.Join(f.tasks, "env-parent"))
+	if err := os.Chdir(root); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := run(t, "add", f.upstream, "--name", "repo"); err != nil {
+		t.Fatal(err)
+	}
+	out, _, err := run(t, "new", "Env child", "--handle", "env-child", "--parent", parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	child := strings.Fields(out)[0]
+	unrelated, _, err := run(t, "new", "Unrelated", "--handle", "unrelated")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TASKTREE_TASK", child)
+
+	wantRoot, _ := filepath.EvalSymlinks(root)
+	gotRoot, _ := filepath.EvalSymlinks(strings.TrimSpace(func() string { o, _, _ := run(t, "root"); return o }()))
+	if gotRoot != wantRoot {
+		t.Fatalf("root = %q, want %q", gotRoot, wantRoot)
+	}
+	out, _, err = run(t, "info", "--json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload struct {
+		Handle   string
+		Tasktree struct {
+			State string
+			Repos []struct{ Name string }
+		}
+	}
+	if err = json.Unmarshal([]byte(out), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Handle != child || payload.Tasktree.State != "here" || len(payload.Tasktree.Repos) != 1 || payload.Tasktree.Repos[0].Name != "repo" {
+		t.Fatalf("info payload: %s", out)
+	}
+	// Record commands hit the subtask; structural commands the root's task.
+	if _, _, err = run(t, "note", "for the child"); err != nil {
+		t.Fatal(err)
+	}
+	if got := taskInfo(t, child); len(got.Log) != 1 || got.Log[0].Body != "for the child" {
+		t.Fatalf("child log: %+v", got.Log)
+	}
+	writeFile(t, filepath.Join(root, "structural"), "x\n")
+	if _, _, err = run(t, "commit", "-m", "root commit"); err != nil {
+		t.Fatal(err)
+	}
+	if got := gitRun(t, filepath.Join(f.home, "git"), "show", "task/"+parentID+":structural"); got != "x" {
+		t.Fatalf("commit targeted the wrong task: %q", got)
+	}
+	// An unrelated task is not a descendant: no root is borrowed.
+	t.Setenv("TASKTREE_TASK", strings.Fields(unrelated)[0])
+	if _, _, err = run(t, "root"); cli.Code(err) != 4 {
+		t.Fatalf("unrelated task root: code=%d err=%v", cli.Code(err), err)
 	}
 }

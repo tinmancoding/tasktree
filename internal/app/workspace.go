@@ -122,6 +122,25 @@ func (a App) ResolveTarget(explicit, start string) (string, string, error) {
 		if c, ok := s.Checkouts[t.ID]; ok {
 			return t.ID, c.Path, nil
 		}
+		if source != "" {
+			// M27: TASKTREE_TASK naming a shared descendant of the tasktree we
+			// are in resolves like focus: the root and repo table stay available.
+			if root, cfg, derr := DiscoverRoot(start); derr == nil && cfg.TaskID != t.ID {
+				docs, readErr := a.Hub.ReadAll()
+				if readErr != nil {
+					return "", "", readErr
+				}
+				byID := map[string]record.Task{}
+				for _, d := range docs {
+					byID[d.Task.ID] = d.Task
+				}
+				if descendant, walkErr := isDescendant(byID, t.ID, cfg.TaskID); walkErr != nil {
+					return "", "", walkErr
+				} else if descendant {
+					return t.ID, root, nil
+				}
+			}
+		}
 		return t.ID, "", nil
 	}
 	root, cfg, err := DiscoverRoot(start)
