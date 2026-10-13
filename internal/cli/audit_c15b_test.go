@@ -118,3 +118,47 @@ func TestResolveReportsNothingToResolveAndWhatItMerged(t *testing.T) {
 		}
 	}
 }
+
+// DN10: status is written only by mark; info ack clears any flagged field.
+func TestInfoAckAndStatusRemovedFromInfoSet(t *testing.T) {
+	setupRecords(t)
+	id := newRecord(t, "Flagged", "flagged")
+	hubDir := filepath.Join(os.Getenv("TASKTREE_HOME"), "git")
+	path := filepath.Join(hubDir, "tasks", id+".md")
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b = []byte(strings.Replace(string(b), "status: incoming", "status: incoming\nconflict: [status, mystery, title]", 1))
+	if err = os.WriteFile(path, b, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, hubDir, "add", ".")
+	gitRun(t, hubDir, "commit", "-m", "fixture")
+
+	_, _, err = run(t, "info", "set", "status", "active", "-t", "flagged")
+	if code := codeOf(err); code != 2 || !strings.Contains(err.Error(), "tasktree mark <status>") {
+		t.Fatalf("info set status code=%d err=%v", code, err)
+	}
+	if got := taskInfo(t, "flagged"); got.Status != "incoming" {
+		t.Fatalf("info set status changed the status to %s", got.Status)
+	}
+	if _, _, err = run(t, "info", "ack", "mystery", "-t", "flagged"); err != nil {
+		t.Fatalf("ack unknown key: %v", err)
+	}
+	if _, _, err = run(t, "info", "ack", "status", "-t", "flagged"); err != nil {
+		t.Fatal(err)
+	}
+	if got := taskInfo(t, "flagged"); strings.Join(got.Conflict, ",") != "title" {
+		t.Fatalf("conflict=%v", got.Conflict)
+	}
+	expectCode(t, 3, "not flagged", "info", "ack", "status", "-t", "flagged")
+	expectCode(t, 3, "not flagged", "info", "ack", "nonsense", "-t", "flagged")
+	// info set <field> still clears its own flag.
+	if _, _, err = run(t, "info", "set", "title", "Flagged again", "-t", "flagged"); err != nil {
+		t.Fatal(err)
+	}
+	if got := taskInfo(t, "flagged"); len(got.Conflict) != 0 || got.Title != "Flagged again" {
+		t.Fatalf("after set: %+v", got)
+	}
+}

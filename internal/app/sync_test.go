@@ -237,8 +237,8 @@ func TestSyncS4RecordMatrixTwoMachines(t *testing.T) {
 		}
 	}
 	// Concurrent scalars and descriptions retain A's side and audit B's text.
-	p.a.SetInfo(p.ctx, task.ID, "status", "active", false)
-	p.b.SetInfo(p.ctx, task.ID, "status", "blocked", false)
+	p.a.updateStatus(p.ctx, task.ID, "active")
+	p.b.updateStatus(p.ctx, task.ID, "blocked")
 	p.a.EditDescription(p.ctx, task.ID, "local description")
 	p.b.EditDescription(p.ctx, task.ID, "remote description\n```\nwith fence")
 	p.sync(p.b, SyncOptions{All: true})
@@ -270,7 +270,7 @@ func TestSyncS4RecordMatrixTwoMachines(t *testing.T) {
 	if _, changed, e := p.a.EditDescription(p.ctx, task.ID, "local description"); e != nil || !changed {
 		t.Fatalf("description ack: %v", e)
 	}
-	if _, changed, e := p.a.SetInfo(p.ctx, task.ID, "status", "active", false); e != nil || !changed {
+	if _, e := p.a.AckConflict(p.ctx, task.ID, "status"); e != nil {
 		t.Fatalf("status ack: %v", e)
 	}
 	v, _ = p.a.Hub.Read(task.ID)

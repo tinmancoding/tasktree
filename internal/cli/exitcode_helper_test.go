@@ -20,3 +20,5 @@ func expectCode(t *testing.T, want int, wantMsg string, args ...string) {
 		t.Fatalf("%v error %q missing %q", args, err, wantMsg)
 	}
 }
+
+func codeOf(err error) int { return cli.Code(err) }

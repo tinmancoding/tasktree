@@ -479,13 +479,7 @@ func (a App) SetInfo(ctx context.Context, ref, field, value string, clear bool) 
 		}
 		summary = "handle updated"
 	case "status":
-		if err := record.ValidateStatus(value); err != nil {
-			return record.Task{}, false, ValidationError{err.Error()}
-		}
-		if current.Status == value && !hasConflict(current, "status") {
-			return current, false, nil
-		}
-		summary = "status acknowledged"
+		return record.Task{}, false, ValidationError{"info set does not change status; use " + product.Name + " mark <status> (acknowledge a status conflict with " + product.Name + " info ack status)"}
 	case "parent":
 		var parent *string
 		if !clear {
@@ -527,7 +521,7 @@ func (a App) SetInfo(ctx context.Context, ref, field, value string, clear bool) 
 			summary = "parent set to " + *parent
 		}
 	default:
-		return record.Task{}, false, ValidationError{fmt.Sprintf("unknown info field %q (expected title, handle, status, or parent)", field)}
+		return record.Task{}, false, ValidationError{fmt.Sprintf("unknown info field %q (expected title, handle, or parent)", field)}
 	}
 	author, machine, err := a.author()
 	if err != nil {
@@ -542,8 +536,6 @@ func (a App) SetInfo(ctx context.Context, ref, field, value string, clear bool) 
 			return readErr
 		}
 		switch field {
-		case "status":
-			return d.SetStatus(value, a.Now().UTC())
 		case "title":
 			return d.SetFrontString(field, value, a.Now().UTC())
 		case "handle":
@@ -586,6 +578,26 @@ func (a App) SetInfo(ctx context.Context, ref, field, value string, clear bool) 
 		}
 	}, func(task record.Task, raw []byte) { a.writeGeneratedTaskRecord(task.ID, raw) })
 	return t, err == nil, err
+}
+
+// AckConflict removes one field from the record's conflict list without
+// touching any other content (DN10). Any flagged key is acceptable, including
+// unknown frontmatter keys; a field that is not flagged is not found.
+func (a App) AckConflict(ctx context.Context, ref, field string) (record.Task, error) {
+	current, err := a.Info(ref)
+	if err != nil {
+		return record.Task{}, err
+	}
+	if !hasConflict(current, field) {
+		return record.Task{}, NotFoundError{fmt.Sprintf("%s: field %q is not flagged as conflicted", current.Handle, field)}
+	}
+	author, machine, err := a.author()
+	if err != nil {
+		return record.Task{}, err
+	}
+	return a.Hub.UpdateWithPostCommit(ctx, current.ID, "conflict acknowledged: "+field, author, machine, func(d *record.Document) error {
+		return d.ClearConflict(field)
+	}, func(task record.Task, raw []byte) { a.writeGeneratedTaskRecord(task.ID, raw) })
 }
 
 func (a App) Ref(ctx context.Context, ref, action, typ, value string) (record.Task, bool, error) {

@@ -281,7 +281,7 @@ func newCmd(o *options) *cobra.Command {
 func listCmd(o *options) *cobra.Command {
 	var all, j bool
 	var statuses, labels []string
-	c := &cobra.Command{Use: "list", Short: "List tasks (open tasks by default)", Long: "List tasks and local definition/checkout state. A ! suffix on STATUS marks unacknowledged sync conflicts; info shows their fields. Acknowledge a field with info set, or description with info edit.", Args: exact(0), RunE: func(cmd *cobra.Command, args []string) error {
+	c := &cobra.Command{Use: "list", Short: "List tasks (open tasks by default)", Long: "List tasks and local definition/checkout state. A ! suffix on STATUS marks unacknowledged sync conflicts; info shows their fields. Acknowledge a field with info ack <field>; info set and info edit also clear the field they change.", Args: exact(0), RunE: func(cmd *cobra.Command, args []string) error {
 		a, e := o.application()
 		if e != nil {
 			return e
@@ -509,7 +509,7 @@ func infoCmd(o *options) *cobra.Command {
 	}}
 	c.Flags().StringVarP(&ref, "task", "t", "", "task handle or id")
 	c.Flags().BoolVar(&j, "json", false, "emit JSON")
-	c.AddCommand(infoEditCmd(o), infoSetCmd(o))
+	c.AddCommand(infoEditCmd(o), infoSetCmd(o), infoAckCmd(o))
 	return c
 }
 
@@ -600,7 +600,7 @@ func infoEditCmd(o *options) *cobra.Command {
 func infoSetCmd(o *options) *cobra.Command {
 	var ref string
 	var clear bool
-	c := &cobra.Command{Use: "set <field> [value]", Short: "Set a task title, handle, status, or parent (acknowledging conflicts)", Args: func(cmd *cobra.Command, args []string) error {
+	c := &cobra.Command{Use: "set <field> [value]", Short: "Set a task title, handle, or parent (acknowledging that field's conflict)", Args: func(cmd *cobra.Command, args []string) error {
 		if len(args) < 1 || len(args) > 2 {
 			return usageError{"info set accepts a field and optional value"}
 		}
@@ -640,6 +640,27 @@ func infoSetCmd(o *options) *cobra.Command {
 	}}
 	c.Flags().StringVarP(&ref, "task", "t", "", "task handle or id")
 	c.Flags().BoolVar(&clear, "clear", false, "clear the parent")
+	return c
+}
+func infoAckCmd(o *options) *cobra.Command {
+	var ref string
+	c := &cobra.Command{Use: "ack <field>", Short: "Acknowledge a conflict flag without changing the field", Args: exact(1), RunE: func(cmd *cobra.Command, args []string) error {
+		a, e := o.application()
+		if e != nil {
+			return e
+		}
+		resolved, _, e := resolveTarget(a, ref)
+		if e != nil {
+			return e
+		}
+		t, e := a.AckConflict(cmd.Context(), resolved, args[0])
+		if e != nil {
+			return e
+		}
+		fmt.Fprintf(o.out, "conflict on %s acknowledged for %s\n", args[0], t.Handle)
+		return nil
+	}}
+	c.Flags().StringVarP(&ref, "task", "t", "", "task handle or id")
 	return c
 }
 func noteCmd(o *options) *cobra.Command {

@@ -75,7 +75,7 @@ func TestSyncCLIOutsideMeansAllAndConflictDisplay(t *testing.T) {
 	if e != nil || !strings.Contains(out, `"conflict":["status","description"]`) {
 		t.Fatalf("info json=%s err=%v", out, e)
 	}
-	if _, _, e = run(t, "info", "set", "status", "incoming", "-t", "task"); e != nil {
+	if _, _, e = run(t, "info", "ack", "status", "-t", "task"); e != nil {
 		t.Fatal(e)
 	}
 	file := filepath.Join(t.TempDir(), "empty")
