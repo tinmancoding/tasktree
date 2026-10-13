@@ -933,6 +933,13 @@ func repoLoss(ctx context.Context, g gitx.Client, name, path string, bare bool) 
 		args, dir = append(args, "--git-dir", path), ""
 	}
 	run := func(a ...string) (string, error) {
+		if bare {
+			// A module gitdir retains core.worktree, which can point at a deleted
+			// checkout. Override it even for ref-only commands: Git resolves that
+			// configured path before executing them.
+			out, _, err := g.Run(ctx, "", map[string]string{"GIT_WORK_TREE": path}, append(args, a...)...)
+			return out, err
+		}
 		out, _, err := git(ctx, g, dir, append(args, a...)...)
 		return out, err
 	}
@@ -954,6 +961,11 @@ func repoLoss(ctx context.Context, g gitx.Client, name, path string, bare bool) 
 	}
 	if _, err = run("show-ref", "--verify", "--quiet", "refs/stash"); err == nil {
 		loss = append(loss, name+" has a stash")
+	} else {
+		var commandErr gitx.CommandError
+		if !errors.As(err, &commandErr) || commandErr.ExitCode != 1 {
+			return nil, fmt.Errorf("cannot check %s for loss: %w", name, err)
+		}
 	}
 	return loss, nil
 }
@@ -1007,9 +1019,14 @@ func (a App) tasktreeLoss(ctx context.Context, id, root string) ([]string, error
 	for _, m := range ms {
 		worktree := filepath.Join(root, m.Path)
 		gitdir := filepath.Join(a.Home.ClonePath(id), "modules", m.Name)
-		_, statErr := os.Stat(worktree)
-		x, e := repoLoss(ctx, g, m.Name, worktree, false)
-		if statErr != nil {
+		st, statErr := os.Stat(worktree)
+		var x []string
+		var e error
+		if statErr == nil && st.IsDir() {
+			x, e = repoLoss(ctx, g, m.Name, worktree, false)
+		} else {
+			// A missing worktree cannot have dirty files, but its gitdir can still
+			// hold commits or stashes that must gate teardown.
 			x, e = repoLoss(ctx, g, m.Name, gitdir, true)
 		}
 		if e != nil {
@@ -1102,7 +1119,14 @@ func (a App) Remove(ctx context.Context, id, root, name string, force bool) ([]s
 		return nil, fmt.Errorf("invalid submodule checkout path %q", p)
 	}
 	g := a.Git.WithDefaults()
-	loss, lossErr := repoLoss(ctx, g, name, p, false)
+	lossPath, bare := p, false
+	if st, statErr := os.Stat(p); statErr != nil || !st.IsDir() {
+		// The worktree may already have been deleted. Check its module gitdir
+		// for commits and stashes rather than failing before the force gate can
+		// report the work at risk.
+		lossPath, bare = filepath.Join(a.Home.ClonePath(id), "modules", m.Name), true
+	}
+	loss, lossErr := repoLoss(ctx, g, name, lossPath, bare)
 	if lossErr != nil && !force {
 		return nil, GateError{lossErr.Error()}
 	}

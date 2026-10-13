@@ -60,6 +60,149 @@ func TestDoctorHealthyAndMalformedRecord(t *testing.T) {
 	}
 }
 
+func TestDoctorHandlesDeletedCheckoutModuleLoss(t *testing.T) {
+	f := newCloseFixture(t)
+	unsafeHandle, unsafeID, unsafeRoot := createAndOpen(t, "Deleted checkout with work", filepath.Join(f.tasks, "unsafe-deleted"))
+	if err := os.Chdir(unsafeRoot); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := run(t, "add", f.upstream, "--name", "api", "--branch", "fd"); err != nil {
+		t.Fatalf("add repository: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(unsafeRoot, "api", "lost"), []byte("local work\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, filepath.Join(unsafeRoot, "api"), "add", "lost")
+	gitRun(t, filepath.Join(unsafeRoot, "api"), "commit", "-m", "local only")
+	if err := os.Chdir(f.base); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(unsafeRoot); err != nil {
+		t.Fatal(err)
+	}
+	unsafeClone := filepath.Join(f.home, "clones", unsafeID+".git")
+
+	out, _, err := run(t, "doctor", "--json")
+	if cli.Code(err) != 1 {
+		t.Fatalf("doctor code=%d err=%v output=%s", cli.Code(err), err, out)
+	}
+	var result struct {
+		Findings []struct {
+			Code, Subject, Message string
+			Fixable                bool
+		}
+	}
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatal(err)
+	}
+	var unsafeFinding *struct {
+		Code, Subject, Message string
+		Fixable                bool
+	}
+	for i := range result.Findings {
+		finding := &result.Findings[i]
+		if finding.Code == "check-failed" {
+			t.Fatalf("doctor failed its module loss check: %s", out)
+		}
+		if finding.Code == "checkout-missing" && finding.Subject == unsafeID {
+			unsafeFinding = finding
+		}
+	}
+	if unsafeFinding == nil || unsafeFinding.Fixable || !strings.Contains(unsafeFinding.Message, "api has unpushed commits") {
+		t.Fatalf("unsafe deleted checkout finding: %s", out)
+	}
+
+	out, _, err = run(t, "doctor", "--fix", "--json")
+	if cli.Code(err) != 1 {
+		t.Fatalf("doctor --fix code=%d err=%v output=%s", cli.Code(err), err, out)
+	}
+	if _, err := os.Stat(unsafeClone); err != nil {
+		t.Fatalf("doctor --fix removed clone with unpushed work: %v", err)
+	}
+	if local, err := os.ReadFile(filepath.Join(f.home, "local.yml")); err != nil || !strings.Contains(string(local), unsafeID) {
+		t.Fatalf("doctor --fix removed local checkout with unpushed work: %q %v", local, err)
+	}
+
+	_, forceErr, err := run(t, "open", unsafeHandle, "--force")
+	if err != nil || !strings.Contains(forceErr, "api has unpushed commits") {
+		t.Fatalf("open --force did not report lost module commit: err=%v stderr=%q", err, forceErr)
+	}
+
+	_, cleanID, cleanRoot := createAndOpen(t, "Deleted checkout without work", filepath.Join(f.tasks, "clean-deleted"))
+	if err := os.RemoveAll(cleanRoot); err != nil {
+		t.Fatal(err)
+	}
+	cleanClone := filepath.Join(f.home, "clones", cleanID+".git")
+	out, _, err = run(t, "doctor", "--json")
+	if cli.Code(err) != 1 {
+		t.Fatalf("doctor code=%d err=%v output=%s", cli.Code(err), err, out)
+	}
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatal(err)
+	}
+	fixableClean := false
+	for _, finding := range result.Findings {
+		if finding.Code == "checkout-missing" && finding.Subject == cleanID && finding.Fixable {
+			fixableClean = true
+		}
+	}
+	if !fixableClean {
+		t.Fatalf("clean deleted checkout was not fixable: %s", out)
+	}
+	if _, _, err = run(t, "doctor", "--fix", "--json"); err != nil {
+		t.Fatalf("doctor --fix clean checkout: %v", err)
+	}
+	if _, err := os.Stat(cleanClone); !os.IsNotExist(err) {
+		t.Fatalf("doctor --fix left clean clone: %v", err)
+	}
+	if local, err := os.ReadFile(filepath.Join(f.home, "local.yml")); err != nil || strings.Contains(string(local), cleanID) {
+		t.Fatalf("doctor --fix left clean local checkout: %q %v", local, err)
+	}
+}
+
+func TestDoctorContinuesAfterCheckFailure(t *testing.T) {
+	f := newCloseFixture(t)
+	_, id, root := createAndOpen(t, "Broken module check", filepath.Join(f.tasks, "broken-module"))
+	if err := os.Chdir(root); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := run(t, "add", f.upstream, "--name", "api", "--branch", "broken"); err != nil {
+		t.Fatalf("add repository: %v", err)
+	}
+	if err := os.Chdir(f.base); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(root); err != nil {
+		t.Fatal(err)
+	}
+	clone := filepath.Join(f.home, "clones", id+".git")
+	if err := os.WriteFile(filepath.Join(clone, "modules", "api", "HEAD"), []byte("not-a-ref\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(f.home, "imports", "unfinished"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	out, _, err := run(t, "doctor", "--json")
+	if cli.Code(err) != 1 {
+		t.Fatalf("doctor code=%d err=%v output=%s", cli.Code(err), err, out)
+	}
+	var result struct {
+		Findings []struct{ Code string }
+	}
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatal(err)
+	}
+	checkFailed, importJournal := false, false
+	for _, finding := range result.Findings {
+		checkFailed = checkFailed || finding.Code == "check-failed"
+		importJournal = importJournal || finding.Code == "import-journal"
+	}
+	if !checkFailed || !importJournal {
+		t.Fatalf("doctor did not continue after failed check: %s", out)
+	}
+}
+
 func TestMoveSuccessAndInjectedRollback(t *testing.T) {
 	f := newCloseFixture(t)
 	old := filepath.Join(f.tasks, "old")

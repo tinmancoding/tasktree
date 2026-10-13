@@ -61,7 +61,8 @@ func (a App) Doctor(ctx context.Context, fix bool) (DoctorResult, error) {
 			continue
 		}
 		if err := f.fix(ctx); err != nil {
-			return DoctorResult{}, fmt.Errorf("fix %s (%s): %w", f.Code, f.Subject, err)
+			fixed = append(fixed, Finding{Code: "check-failed", Severity: "error", Subject: f.Subject, Message: fmt.Sprintf("fix %s: %v", f.Code, err)})
+			continue
 		}
 		f.Fixed = true
 		f.fix = nil
@@ -83,7 +84,8 @@ func (a App) doctorFindings(ctx context.Context) ([]Finding, error) {
 	}
 	cfg, err := a.Home.LoadConfig()
 	if err != nil {
-		return nil, err
+		add("check-failed", "error", a.Home.ConfigPath(), err.Error(), nil)
+		return out, nil
 	}
 	if cfg.Remote == "" {
 		add("no-remote", "warning", a.Home.Root, "no remote configured; ~/.tasktree is the only copy; make a backup", nil)
@@ -91,9 +93,8 @@ func (a App) doctorFindings(ctx context.Context) ([]Finding, error) {
 	if a.Hub.IsSetup() {
 		status, _, e := git(ctx, a.Git.WithDefaults(), a.Home.GitPath(), "status", "--porcelain")
 		if e != nil {
-			return nil, e
-		}
-		if strings.TrimSpace(status) != "" {
+			add("check-failed", "error", a.Home.GitPath(), e.Error(), nil)
+		} else if strings.TrimSpace(status) != "" {
 			add("hub-dirty", "error", a.Home.GitPath(), "hub has uncommitted changes", nil)
 		}
 	}
@@ -103,7 +104,8 @@ func (a App) doctorFindings(ctx context.Context) ([]Finding, error) {
 	tasksDir := filepath.Join(a.Home.GitPath(), "tasks")
 	entries, e := os.ReadDir(tasksDir)
 	if e != nil && !os.IsNotExist(e) {
-		return nil, e
+		add("check-failed", "error", tasksDir, e.Error(), nil)
+		entries = nil
 	}
 	for _, ent := range entries {
 		if ent.IsDir() || !strings.HasSuffix(ent.Name(), ".md") {
@@ -112,7 +114,8 @@ func (a App) doctorFindings(ctx context.Context) ([]Finding, error) {
 		p := filepath.Join(tasksDir, ent.Name())
 		b, readErr := os.ReadFile(p)
 		if readErr != nil {
-			return nil, readErr
+			add("check-failed", "error", p, readErr.Error(), nil)
+			continue
 		}
 		d, parseErr := record.Parse(b)
 		if parseErr != nil {
@@ -166,12 +169,14 @@ func (a App) doctorFindings(ctx context.Context) ([]Finding, error) {
 
 	local, err := a.Home.LoadLocal()
 	if err != nil {
-		return nil, err
+		add("check-failed", "error", a.Home.LocalPath(), err.Error(), nil)
+		local = home.LocalState{Checkouts: map[string]home.Checkout{}}
 	}
 	cloneIDs := map[string]bool{}
 	cloneEntries, e := os.ReadDir(a.Home.ClonesPath())
 	if e != nil && !os.IsNotExist(e) {
-		return nil, e
+		add("check-failed", "error", a.Home.ClonesPath(), e.Error(), nil)
+		cloneEntries = nil
 	}
 	for _, ent := range cloneEntries {
 		if ent.IsDir() && strings.HasSuffix(ent.Name(), ".git") {
@@ -189,7 +194,8 @@ func (a App) doctorFindings(ctx context.Context) ([]Finding, error) {
 			} else {
 				loss, lossErr := lossInClone(ctx, a, clone)
 				if lossErr != nil {
-					return nil, lossErr
+					add("check-failed", "error", clone, lossErr.Error(), nil)
+					continue
 				}
 				if len(loss) > 0 {
 					add("checkout-missing", "error", id, strings.Join(loss, "; ")+"; restore the folder or run tt2 open "+handleFor(byID, id)+" --force", nil)
@@ -212,7 +218,8 @@ func (a App) doctorFindings(ctx context.Context) ([]Finding, error) {
 		}
 		ms, modErr := modules(co.Path)
 		if modErr != nil {
-			return nil, modErr
+			add("check-failed", "error", co.Path, modErr.Error(), nil)
+			continue
 		}
 		for _, m := range ms {
 			expectedGit := filepath.Join(clone, "modules", m.Name)
@@ -268,7 +275,8 @@ func (a App) doctorFindings(ctx context.Context) ([]Finding, error) {
 		clone := a.Home.ClonePath(id)
 		loss, lossErr := lossInClone(ctx, a, clone)
 		if lossErr != nil {
-			return nil, lossErr
+			add("check-failed", "error", clone, lossErr.Error(), nil)
+			continue
 		}
 		if len(loss) > 0 {
 			add("orphan-clone", "error", id, strings.Join(loss, "; ")+"; restore its checkout before removing the clone", nil)
@@ -286,7 +294,7 @@ func (a App) doctorFindings(ctx context.Context) ([]Finding, error) {
 			}
 		}
 	} else if !os.IsNotExist(e) {
-		return nil, e
+		add("check-failed", "error", imports, e.Error(), nil)
 	}
 
 	// An isolated child's work branch should retain its parent's branch prefix.
