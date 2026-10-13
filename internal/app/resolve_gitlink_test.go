@@ -49,7 +49,7 @@ func TestResolveS8RemoteGitlinkNeverRewindsCleanRepoBranch(t *testing.T) {
 		t.Fatalf("root gitlink=%s want=%s", recorded, chosen)
 	}
 	skipped := strings.Join(result.Report.Skipped, "\n")
-	for _, text := range []string{"branch tip " + tip, "chosen gitlink " + chosen, "reconcile inside the repo", "tt2 commit"} {
+	for _, text := range []string{"branch tip " + tip, "chosen gitlink " + chosen, "reconcile inside the repo", "tasktree commit"} {
 		if !strings.Contains(skipped, text) {
 			t.Fatalf("missing mismatch guidance %q: %s", text, skipped)
 		}

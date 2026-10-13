@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"github.com/tinmancoding/tasktree/v2/internal/product"
 	"io"
 	"os"
 	"path/filepath"
@@ -163,19 +164,19 @@ func (a App) PlanImport(ctx context.Context, root string, o ImportOptions) (Impo
 	}
 	p := ImportPlan{Path: abs}
 	if id, ok := pendingImportForRoot(a.Home, abs); ok {
-		return p, GateError{fmt.Sprintf("incomplete import %s; run tt2 import --recover %s", id, abs)}
+		return p, GateError{fmt.Sprintf("incomplete import %s; run "+product.Name+" import --recover %s", id, abs)}
 	}
 	if _, err := os.Lstat(filepath.Join(abs, ".tasktree", "config.yml")); err == nil {
 		var marker TasktreeConfig
 		b, readErr := os.ReadFile(filepath.Join(abs, ".tasktree", "config.yml"))
 		if readErr != nil || yaml.Unmarshal(b, &marker) != nil || marker.TaskID == "" {
-			return p, GateError{"incomplete import: invalid .tasktree/config.yml; run tt2 import --recover " + abs}
+			return p, GateError{"incomplete import: invalid .tasktree/config.yml; run " + product.Name + " import --recover " + abs}
 		}
 		_, hubErr := a.Hub.Read(marker.TaskID)
 		local, localErr := a.Home.LoadLocal()
 		_, localOK := local.Checkouts[marker.TaskID]
 		if hubErr != nil || localErr != nil || !localOK {
-			return p, GateError{"incomplete import: marker exists without both hub record and local checkout; run tt2 import --recover " + abs}
+			return p, GateError{"incomplete import: marker exists without both hub record and local checkout; run " + product.Name + " import --recover " + abs}
 		}
 		p.AlreadyImported = true
 		p.Handle = filepath.Base(abs)
@@ -664,7 +665,7 @@ func (a App) Import(ctx context.Context, root string, o ImportOptions) (res Impo
 		return res, nil
 	}
 	if !a.Hub.IsSetup() {
-		return res, fmt.Errorf("tasktree is not set up; run tt2 setup")
+		return res, fmt.Errorf("tasktree is not set up; run " + product.Name + " setup")
 	}
 	if o.Status == "" {
 		o.Status = "active"
@@ -848,7 +849,7 @@ func (a App) Import(ctx context.Context, root string, o ImportOptions) (res Impo
 	started = false
 	finalPath := p.Path
 	if err = a.Home.UpdateLocal(func(s *home.LocalState) error { s.Checkouts[id] = home.Checkout{Path: finalPath}; return nil }); err != nil {
-		err = fmt.Errorf("record created but local.yml update failed: %w; run tt2 import --recover %s", err, p.Path)
+		err = fmt.Errorf("record created but local.yml update failed: %w; run "+product.Name+" import --recover %s", err, p.Path)
 		return
 	}
 	if err = st.saveJournal(9); err != nil {

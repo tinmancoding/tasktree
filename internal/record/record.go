@@ -107,7 +107,7 @@ func validateBody(kind, s string) error {
 }
 func ValidateDescription(s string) error { return validateBody("description", s) }
 
-// ValidateEntryBody validates text supplied to tt2 note before a hub write.
+// ValidateEntryBody validates text supplied to tasktree note before a hub write.
 func ValidateEntryBody(s string) error { return validateBody("note body", s) }
 
 func ValidateKind(s string) error {

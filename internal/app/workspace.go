@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/tinmancoding/tasktree/v2/internal/product"
 	"os"
 	"path/filepath"
 	"sort"
@@ -517,7 +518,7 @@ func ensureDSStoreExcluded(gitDir string) error {
 }
 
 func starterAgents(t record.Task) string {
-	return fmt.Sprintf("# %s (%s)\n\nThis folder is a tasktree for task `%s` (id `%s`), managed by `tt2`.\n\n## Rules for agents\n\n- The task record is the source of truth for status, notes, decisions, and references. Read it with `tt2 info` or `.tasktree/task.md` (a generated copy — never edit it).\n- Record progress with `tt2 note \"...\"`; use `--kind decision`, `--kind comment`, or `--kind ref` when it fits. Set `TASKTREE_AUTHOR` to your agent name.\n- Never run git in this folder's root; it is intentionally not a git repository. Record root files and repository commits with `tt2 commit -m \"...\"`.\n- Inside each repository folder, git works normally: branch, commit, push.\n- Add or remove repositories with `tt2 add <alias|url>` and `tt2 remove <name>`. Never `git clone` into this folder.\n- Change task status (`tt2 mark ...`) only when asked.\n\n## Notes\n", t.Title, t.Handle, t.Handle, t.ID)
+	return fmt.Sprintf("# %s (%s)\n\nThis folder is a tasktree for task `%s` (id `%s`), managed by `"+product.Name+"`.\n\n## Rules for agents\n\n- The task record is the source of truth for status, notes, decisions, and references. Read it with `"+product.Name+" info` or `.tasktree/task.md` (a generated copy — never edit it).\n- Record progress with `"+product.Name+" note \"...\"`; use `--kind decision`, `--kind comment`, or `--kind ref` when it fits. Set `TASKTREE_AUTHOR` to your agent name.\n- Never run git in this folder's root; it is intentionally not a git repository. Record root files and repository commits with `"+product.Name+" commit -m \"...\"`.\n- Inside each repository folder, git works normally: branch, commit, push.\n- Add or remove repositories with `"+product.Name+" add <alias|url>` and `"+product.Name+" remove <name>`. Never `git clone` into this folder.\n- Change task status (`"+product.Name+" mark ...`) only when asked.\n\n## Notes\n", t.Title, t.Handle, t.Handle, t.ID)
 }
 func recordOpen(s string) bool { return s != "done" && s != "dropped" }
 
@@ -1555,8 +1556,8 @@ func (a App) openIsolated(ctx context.Context, t record.Task, o OpenOptions, pro
 		return "", err
 	}
 	agents := starterAgents(t)
-	intro := fmt.Sprintf("This folder is a tasktree for task `%s` (id `%s`), managed by `tt2`.\n", t.Handle, t.ID)
-	agents = strings.Replace(agents, intro, intro+fmt.Sprintf("\nParent task: `%s` — read it with `tt2 info -t %s`.\n", parent.Handle, parent.Handle), 1)
+	intro := fmt.Sprintf("This folder is a tasktree for task `%s` (id `%s`), managed by `"+product.Name+"`.\n", t.Handle, t.ID)
+	agents = strings.Replace(agents, intro, intro+fmt.Sprintf("\nParent task: `%s` — read it with `"+product.Name+" info -t %s`.\n", parent.Handle, parent.Handle), 1)
 	if err = os.WriteFile(filepath.Join(path, "AGENTS.md"), []byte(agents), 0644); err != nil {
 		return "", err
 	}

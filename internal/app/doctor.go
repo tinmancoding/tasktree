@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"github.com/tinmancoding/tasktree/v2/internal/product"
 	"os"
 	"path/filepath"
 	"sort"
@@ -172,7 +173,7 @@ func (a App) doctorFindings(ctx context.Context) ([]Finding, error) {
 	for h, ids := range byHandle {
 		if len(ids) > 1 {
 			sort.Strings(ids)
-			add("duplicate-handle", "error", h, "records share this handle: "+strings.Join(ids, ", ")+"; run tt2 info set handle … -t <id>", nil)
+			add("duplicate-handle", "error", h, "records share this handle: "+strings.Join(ids, ", ")+"; run "+product.Name+" info set handle … -t <id>", nil)
 		}
 	}
 	for _, d := range docs {
@@ -237,7 +238,7 @@ func (a App) doctorFindings(ctx context.Context) ([]Finding, error) {
 					continue
 				}
 				if len(loss) > 0 {
-					add("checkout-missing", "error", id, strings.Join(loss, "; ")+"; restore the folder or run tt2 open "+handleFor(byID, id)+" --force", nil)
+					add("checkout-missing", "error", id, strings.Join(loss, "; ")+"; restore the folder or run "+product.Name+" open "+handleFor(byID, id)+" --force", nil)
 				} else {
 					idCopy, cloneCopy := id, clone
 					add("checkout-missing", "error", id, "recorded checkout path does not exist; hidden clone has no work at risk", func(context.Context) error {
@@ -296,7 +297,7 @@ func (a App) doctorFindings(ctx context.Context) ([]Finding, error) {
 			}
 		}
 		if d := byID[id]; d != nil && !record.IsOpen(d.Task.Status) {
-			add("closed-but-checked-out", "warning", d.Task.Handle, "closed task still has a checkout; run tt2 mark <status> -t "+d.Task.Handle, nil)
+			add("closed-but-checked-out", "warning", d.Task.Handle, "closed task still has a checkout; run "+product.Name+" mark <status> -t "+d.Task.Handle, nil)
 		}
 	}
 	for id := range cloneIDs {
@@ -329,7 +330,7 @@ func (a App) doctorFindings(ctx context.Context) ([]Finding, error) {
 		for _, x := range xs {
 			if x.IsDir() {
 				p := filepath.Join(imports, x.Name())
-				add("import-journal", "error", p, "incomplete import or quarantine; run tt2 import --recover <path>", nil)
+				add("import-journal", "error", p, "incomplete import or quarantine; run "+product.Name+" import --recover <path>", nil)
 			}
 		}
 	} else if !os.IsNotExist(e) {

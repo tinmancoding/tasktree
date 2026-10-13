@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/tinmancoding/tasktree/v2/internal/product"
 	"io"
 	"os"
 	"os/exec"
@@ -73,7 +74,7 @@ type options struct {
 
 func NewRoot(out, errOut io.Writer) *cobra.Command {
 	o := &options{out: out, err: errOut}
-	root := &cobra.Command{Use: "tt2", Short: "Task management backed by git", SilenceUsage: true, SilenceErrors: true, PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+	root := &cobra.Command{Use: product.Name, Short: "Task management backed by git", SilenceUsage: true, SilenceErrors: true, PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 		if o.chdir != "" {
 			if err := os.Chdir(o.chdir); err != nil {
 				return fmt.Errorf("change directory: %w", err)
@@ -181,7 +182,7 @@ func newCmd(o *options) *cobra.Command {
 			}
 		} else {
 			if len(args) != 1 {
-				return usageError{"tt2 new requires one title unless --template is used"}
+				return usageError{product.Name + " new requires one title unless --template is used"}
 			}
 			x.Title = args[0]
 		}
@@ -540,7 +541,7 @@ func infoEditCmd(o *options) *cobra.Command {
 			if editor == "" {
 				editor = "vi"
 			}
-			command := exec.Command("sh", "-c", "exec \"$1\" \"$2\"", "tt2 editor", editor, name)
+			command := exec.Command("sh", "-c", "exec \"$1\" \"$2\"", product.Name+" editor", editor, name)
 			command.Stdin, command.Stdout, command.Stderr = os.Stdin, o.out, o.err
 			if runErr := command.Run(); runErr != nil {
 				return fmt.Errorf("run editor: %w", runErr)
@@ -1252,13 +1253,13 @@ func importCmd(o *options) *cobra.Command {
 	var all, recoverImport bool
 	c := &cobra.Command{Use: "import <v1-path>", Short: "Import V1 workspaces without recloning repositories", Args: func(cmd *cobra.Command, args []string) error {
 		if recoverImport && (all || len(args) != 1) {
-			return usageError{"tt2 import --recover accepts exactly one path and cannot be combined with --all"}
+			return usageError{product.Name + " import --recover accepts exactly one path and cannot be combined with --all"}
 		}
 		if all && len(args) != 0 {
-			return usageError{"tt2 import --all accepts no path"}
+			return usageError{product.Name + " import --all accepts no path"}
 		}
 		if !all && len(args) != 1 {
-			return usageError{"tt2 import accepts one path or --all"}
+			return usageError{product.Name + " import accepts one path or --all"}
 		}
 		if all && (cmd.Flags().Changed("handle") || cmd.Flags().Changed("status")) {
 			return usageError{"--handle and --status cannot be used with --all"}

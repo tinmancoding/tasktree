@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/tinmancoding/tasktree/v2/internal/product"
 	"io"
 	"os"
 	"path/filepath"
@@ -28,7 +29,7 @@ func (e NotFoundError) Error() string { return fmt.Sprintf("task %q not found", 
 
 type NotSetupError struct{}
 
-func (NotSetupError) Error() string { return "tasktree is not set up; run tt2 setup" }
+func (NotSetupError) Error() string { return "tasktree is not set up; run " + product.Name + " setup" }
 
 type Hub struct {
 	Path          string

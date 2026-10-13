@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"github.com/tinmancoding/tasktree/v2/internal/product"
 	"os"
 	"path/filepath"
 	"sort"
@@ -101,7 +102,7 @@ func (a App) cleanSyncRoot(ctx context.Context, id, root string) error {
 				}
 			}
 		}
-		return hub.ConflictError{Message: "root has uncommitted changes; run tt2 commit first"}
+		return hub.ConflictError{Message: "root has uncommitted changes; run " + product.Name + " commit first"}
 	}
 	return nil
 }
@@ -215,7 +216,7 @@ func (a App) Sync(ctx context.Context, o SyncOptions) (report SyncReport, err er
 					diverged[ref] = true
 					report.Diverged = appendUnique(report.Diverged, ref)
 					if !o.All {
-						return hub.ConflictError{Message: ref + " diverged; run tt2 resolve to inspect and resolve it"}
+						return hub.ConflictError{Message: ref + " diverged; run " + product.Name + " resolve to inspect and resolve it"}
 					}
 					continue
 				}
@@ -299,7 +300,7 @@ func (a App) Sync(ctx context.Context, o SyncOptions) (report SyncReport, err er
 		}
 	}
 	if len(report.Diverged) > 0 {
-		return report, hub.ConflictError{Message: "task branches diverged; open the tasktree and run tt2 resolve"}
+		return report, hub.ConflictError{Message: "task branches diverged; open the tasktree and run " + product.Name + " resolve"}
 	}
 	if len(report.Failed) > 0 {
 		return report, fmt.Errorf("some sync steps failed")
@@ -389,7 +390,7 @@ func (a App) advanceCheckout(ctx context.Context, id, root string, r *SyncReport
 		return err
 	}
 	if _, _, err = rootGit(ctx, g, a.Home, id, root, "-c", "submodule.recurse=false", "merge", "--ff-only", next); err != nil {
-		return hub.ConflictError{Message: "checkout diverged from hub; run tt2 resolve"}
+		return hub.ConflictError{Message: "checkout diverged from hub; run " + product.Name + " resolve"}
 	}
 	a.applyGitlinks(ctx, id, root, old, before, r)
 	r.Steps = append(r.Steps, "fast-forwarded task checkout")
@@ -523,7 +524,7 @@ func (a App) applyOneGitlink(ctx context.Context, m module, path, target string,
 	}
 	head = strings.TrimSpace(head)
 	if _, _, e = git(ctx, g, path, "merge-base", "--is-ancestor", head, target); e != nil {
-		r.Skipped = appendUnique(r.Skipped, fmt.Sprintf("%s: non-fast-forward gitlink; branch tip %s stays unchanged, root records chosen gitlink %s and will show it modified; reconcile inside the repo or run tt2 commit to record the repo tip", m.Name, head, target))
+		r.Skipped = appendUnique(r.Skipped, fmt.Sprintf("%s: non-fast-forward gitlink; branch tip %s stays unchanged, root records chosen gitlink %s and will show it modified; reconcile inside the repo or run "+product.Name+" commit to record the repo tip", m.Name, head, target))
 		return
 	}
 	args := []string{"merge", "--ff-only", target}
@@ -545,7 +546,7 @@ func (a App) materializeSelected(ctx context.Context, id, root string, m module)
 		return fmt.Errorf("refuse to overwrite new submodule path: %w", err)
 	}
 	if _, err := os.Stat(filepath.Join(a.Home.ClonePath(id), "modules", m.Name)); err == nil {
-		return fmt.Errorf("hidden module directory already exists; run tt2 doctor before materializing %s", m.Name)
+		return fmt.Errorf("hidden module directory already exists; run "+product.Name+" doctor before materializing %s", m.Name)
 	} else if !os.IsNotExist(err) {
 		return err
 	}
@@ -774,7 +775,7 @@ func (a App) pullOpenRemote(ctx context.Context, ref string) {
 			l := a.Hub.Ref(ctx, localRef)
 			n, ok := a.fastForwardPair(ctx, l, refs[ref])
 			if !ok {
-				a.warnf("%s diverged; run tt2 sync and resolve", localRef)
+				a.warnf("%s diverged; run "+product.Name+" sync and resolve", localRef)
 				continue
 			}
 			if e = a.Hub.MoveRef(ctx, localRef, n, l); e != nil {

@@ -102,7 +102,7 @@ func TestSyncS2DirtyRootAndS3ClosedReport(t *testing.T) {
 	before := p.a.Hub.Ref(p.ctx, "task/"+task.ID)
 	r, e := p.a.Sync(p.ctx, SyncOptions{ID: task.ID, Root: root})
 	requireSyncConflict(t, e)
-	if len(r.Dirty) != 1 || !strings.Contains(e.Error(), "tt2 commit") {
+	if len(r.Dirty) != 1 || !strings.Contains(e.Error(), "tasktree commit") {
 		t.Fatalf("dirty gate=%+v %v", r, e)
 	}
 	if p.a.Hub.Ref(p.ctx, "task/"+task.ID) != before {

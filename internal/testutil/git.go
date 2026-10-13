@@ -138,7 +138,7 @@ func BuildBinary(t *testing.T) string {
 	root := repoRoot(t)
 	binDir := t.TempDir()
 	binPath := filepath.Join(binDir, "tasktree-test")
-	build := exec.Command("go", "build", "-o", binPath, "./cmd/tt2")
+	build := exec.Command("go", "build", "-o", binPath, "./cmd/tasktree")
 	build.Dir = root
 	// Inject the real GOPATH/GOMODCACHE captured at init time so that a
 	// test-overridden HOME does not redirect the module cache into a temp dir.

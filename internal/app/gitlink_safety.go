@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"github.com/tinmancoding/tasktree/v2/internal/product"
 	"path/filepath"
 	"strings"
 )
@@ -31,7 +32,7 @@ func (a App) gitlinkRewind(ctx context.Context, id, root string, m module, fetch
 	}
 	if _, _, missing := git(ctx, g, path, "cat-file", "-e", recorded+"^{commit}"); missing != nil {
 		if !fetchMissing {
-			return recorded, head, false, GateError{"cannot verify recorded gitlink for " + m.Name + "; run tt2 sync, or pass --allow-rewind"}
+			return recorded, head, false, GateError{"cannot verify recorded gitlink for " + m.Name + "; run " + product.Name + " sync, or pass --allow-rewind"}
 		}
 		if _, _, e = git(ctx, g, path, "fetch", "origin"); e != nil {
 			return recorded, head, false, e
@@ -51,7 +52,7 @@ func (a App) refuseGitlinkRewinds(ctx context.Context, id, root string) error {
 			return e
 		}
 		if rewind {
-			return GateError{fmt.Sprintf("would move %s back from %s to %s; run tt2 sync, or pass --allow-rewind to record the older commit", m.Name, recorded, head)}
+			return GateError{fmt.Sprintf("would move %s back from %s to %s; run "+product.Name+" sync, or pass --allow-rewind to record the older commit", m.Name, recorded, head)}
 		}
 	}
 	return nil
