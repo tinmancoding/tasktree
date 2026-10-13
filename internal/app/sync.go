@@ -70,11 +70,33 @@ func (a App) fetchRemote(ctx context.Context) error {
 	return err
 }
 func (a App) cleanSyncRoot(ctx context.Context, id, root string) error {
-	out, _, err := rootGit(ctx, a.Git.WithDefaults(), a.Home, id, root, "status", "--porcelain", "--ignore-submodules=dirty")
+	out, _, err := rootGit(ctx, a.Git.WithDefaults(), a.Home, id, root, "status", "--porcelain", "-z", "--ignore-submodules=dirty")
 	if err != nil {
 		return err
 	}
-	if strings.TrimSpace(out) != "" {
+	ms, err := modules(root)
+	if err != nil {
+		return err
+	}
+	byPath := map[string]module{}
+	for _, m := range ms {
+		byPath[m.Path] = m
+	}
+	for _, entry := range strings.Split(out, "\x00") {
+		if entry == "" {
+			continue
+		}
+		if len(entry) > 3 && entry[:3] == " M " {
+			if m, ok := byPath[entry[3:]]; ok {
+				_, _, pending, e := a.gitlinkRewind(ctx, id, root, m, true)
+				if e != nil {
+					return e
+				}
+				if pending {
+					continue
+				}
+			}
+		}
 		return hub.ConflictError{Message: "root has uncommitted changes; run tt2 commit first"}
 	}
 	return nil
@@ -342,6 +364,7 @@ func (a App) advanceCheckout(ctx context.Context, id, root string, r *SyncReport
 	old = strings.TrimSpace(old)
 	next := a.Hub.Ref(ctx, "refs/heads/task/"+id)
 	if next == old {
+		a.applyPendingGitlinks(ctx, id, root, r)
 		return nil
 	}
 	if err = a.cleanSyncRoot(ctx, id, root); err != nil {
@@ -452,6 +475,14 @@ func safeModulePath(root string, m module) bool {
 }
 func (a App) applyOneGitlink(ctx context.Context, m module, path, target string, r *SyncReport) {
 	g := a.Git.WithDefaults()
+	// Retain the target object even when a dirty checkout must be skipped,
+	// so commit can later check rewind safety without touching a remote.
+	if _, _, missing := git(ctx, g, path, "cat-file", "-e", target+"^{commit}"); missing != nil {
+		if _, _, e := git(ctx, g, path, "fetch", "origin"); e != nil {
+			r.Failed = append(r.Failed, m.Name+": "+e.Error())
+			return
+		}
+	}
 	dirty, e := g.IsDirty(ctx, path)
 	if e != nil {
 		r.Failed = append(r.Failed, m.Name+": "+e.Error())
@@ -463,17 +494,9 @@ func (a App) applyOneGitlink(ctx context.Context, m module, path, target string,
 		return
 	}
 	branch, e := g.CurrentBranch(ctx, path)
-	if e != nil || branch != m.Branch || branch == "" {
+	if e != nil || (m.Mode == "pin" && branch != "") || (m.Mode != "pin" && (branch != m.Branch || branch == "")) {
 		r.Skipped = appendUnique(r.Skipped, m.Name+": other branch; gitlink not applied")
 		return
-	}
-	// Pulled-definition application is not an upstream update: fetch only if
-	// the target object is missing. Reachability uses the fetched origin refs.
-	if _, _, missing := git(ctx, g, path, "cat-file", "-e", target+"^{commit}"); missing != nil {
-		if _, _, e = git(ctx, g, path, "fetch", "origin"); e != nil {
-			r.Failed = append(r.Failed, m.Name+": "+e.Error())
-			return
-		}
 	}
 	reachable, _, e := git(ctx, g, path, "for-each-ref", "--format=%(refname)", "--contains="+target, "refs/remotes/origin/")
 	if e != nil || strings.TrimSpace(reachable) == "" {
@@ -490,7 +513,11 @@ func (a App) applyOneGitlink(ctx context.Context, m module, path, target string,
 		r.Skipped = appendUnique(r.Skipped, fmt.Sprintf("%s: non-fast-forward gitlink; branch tip %s stays unchanged, root records chosen gitlink %s and will show it modified; reconcile inside the repo or run tt2 commit to record the repo tip", m.Name, head, target))
 		return
 	}
-	if _, _, e = git(ctx, g, path, "merge", "--ff-only", target); e != nil {
+	args := []string{"merge", "--ff-only", target}
+	if m.Mode == "pin" {
+		args = []string{"checkout", "--detach", target}
+	}
+	if _, _, e = git(ctx, g, path, args...); e != nil {
 		r.Skipped = appendUnique(r.Skipped, m.Name+": non-fast-forward gitlink")
 		return
 	}

@@ -433,7 +433,7 @@ func TestSyncS6LossGateAndSkippedGitlinks(t *testing.T) {
 	// The old gitlink creates a root difference; commit it to explicitly retain
 	// local state before testing the next pulled definition change.
 	os.Remove(filepath.Join(rootB, "repo", "dirty"))
-	if _, _, e := p.b.Commit(p.ctx, task.ID, rootB, "retain old repo"); e != nil {
+	if _, _, e := p.b.CommitWithRewind(p.ctx, task.ID, rootB, "retain old repo", true); e != nil {
 		t.Fatal(e)
 	}
 	p.sync(p.b, SyncOptions{All: true})

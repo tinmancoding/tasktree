@@ -949,6 +949,7 @@ func removeCmd(o *options) *cobra.Command {
 }
 func commitCmd(o *options) *cobra.Command {
 	var ref, msg string
+	var allowRewind bool
 	c := &cobra.Command{Use: "commit", Short: "Record root files and repository commits on the task branch", Args: exact(0), RunE: func(cmd *cobra.Command, args []string) error {
 		a, e := o.application()
 		if e != nil {
@@ -958,7 +959,7 @@ func commitCmd(o *options) *cobra.Command {
 		if e != nil {
 			return e
 		}
-		committed, warnings, e := a.Commit(cmd.Context(), id, root, msg)
+		committed, warnings, e := a.CommitWithRewind(cmd.Context(), id, root, msg, allowRewind)
 		for _, w := range warnings {
 			fmt.Fprintln(o.err, "warning:", w)
 		}
@@ -973,6 +974,7 @@ func commitCmd(o *options) *cobra.Command {
 	}}
 	c.Flags().StringVarP(&ref, "task", "t", "", "task handle or id")
 	c.Flags().StringVarP(&msg, "message", "m", "", "commit message")
+	c.Flags().BoolVar(&allowRewind, "allow-rewind", false, "allow recording a repository commit older than the recorded gitlink")
 	return c
 }
 

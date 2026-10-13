@@ -861,6 +861,9 @@ func (a App) Mark(ctx context.Context, ref, status string, o MarkOptions) (MarkR
 	}
 	if !closing || o.Keep {
 		result.Task, err = a.updateStatus(ctx, task.ID, status)
+		if err == nil && closing {
+			a.pushCloseRemote(ctx, task.ID)
+		}
 		return result, err
 	}
 	local, err := a.Home.LoadLocal()
@@ -889,7 +892,7 @@ func (a App) Mark(ctx context.Context, ref, status string, o MarkOptions) (MarkR
 	if len(result.Loss) > 0 && !o.Force {
 		return result, GateError{strings.Join(result.Loss, "\n")}
 	}
-	if _, _, err = a.Commit(ctx, task.ID, checkout.Path, fmt.Sprintf("tasktree(%s): close: %s", task.ID, status)); err != nil {
+	if _, _, err = a.CommitWithRewind(ctx, task.ID, checkout.Path, fmt.Sprintf("tasktree(%s): close: %s", task.ID, status), o.Force); err != nil {
 		return result, err
 	}
 	// Close is complete only when the hub task branch exactly matches the clone.
@@ -984,6 +987,12 @@ func (a App) markCascade(ctx context.Context, ref, status string, o MarkOptions)
 		}
 		if st, statErr := os.Stat(checkout.Path); statErr != nil || !st.IsDir() {
 			continue
+		}
+		if !o.Force {
+			if e := a.refuseGitlinkRewinds(ctx, t.ID, checkout.Path); e != nil {
+				refusals = append(refusals, t.Handle+": "+e.Error())
+				continue
+			}
 		}
 		loss, lossErr := a.tasktreeLoss(ctx, t.ID, checkout.Path)
 		if lossErr != nil {

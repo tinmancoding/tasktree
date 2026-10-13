@@ -896,6 +896,10 @@ func (a App) commitRoot(ctx context.Context, id, root, msg string) error {
 }
 
 func (a App) Commit(ctx context.Context, id, root, msg string) (bool, []string, error) {
+	return a.CommitWithRewind(ctx, id, root, msg, false)
+}
+
+func (a App) CommitWithRewind(ctx context.Context, id, root, msg string, allowRewind bool) (bool, []string, error) {
 	if err := validateRootIdentity(id, root); err != nil {
 		return false, nil, err
 	}
@@ -904,6 +908,11 @@ func (a App) Commit(ctx context.Context, id, root, msg string) (bool, []string, 
 	ms, e := modules(root)
 	if e != nil {
 		return false, nil, e
+	}
+	if !allowRewind {
+		if e := a.refuseGitlinkRewinds(ctx, id, root); e != nil {
+			return false, nil, e
+		}
 	}
 	for _, m := range ms {
 		dirty, _ := g.IsDirty(ctx, filepath.Join(root, m.Path))
