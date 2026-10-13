@@ -1715,7 +1715,7 @@ func importCmd(o *options) *cobra.Command {
 				if x.Move {
 					fmt.Fprintln(o.out, "workspace moved; existing shells keep their old $PWD — cd to", result.Path)
 				}
-				fmt.Fprintln(o.out, "V1 registry unchanged; run `tasktree prune` to drop its entry")
+				fmt.Fprintln(o.out, "V1 registry not modified; remove the entry with V1's tasktree prune or delete ~/.local/state/tasktree/registry.toml")
 			}
 		}
 		if all {

@@ -194,3 +194,24 @@ func TestDoctorJSONEmptyFindingsIsArray(t *testing.T) {
 		t.Fatalf("doctor --json = %s", out)
 	}
 }
+
+// D-4: V2 has no prune command, so the import message must not suggest one.
+func TestImportCompletionMessageDoesNotMentionV2Prune(t *testing.T) {
+	f := newCloseFixture(t)
+	legacy := filepath.Join(f.base, "legacy-prune")
+	if err := os.MkdirAll(legacy, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	manifest := "apiVersion: tasktree.dev/v1\nkind: Tasktree\nmetadata:\n  name: Prune message\nspec:\n  sources: []\n"
+	if err := os.WriteFile(filepath.Join(legacy, "Tasktree.yml"), []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, _, err := run(t, "import", legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const want = "V1 registry not modified; remove the entry with V1's tasktree prune or delete ~/.local/state/tasktree/registry.toml"
+	if !strings.Contains(out, want) || strings.Contains(out, "run `tasktree prune`") {
+		t.Fatalf("import output:\n%s", out)
+	}
+}

@@ -54,7 +54,7 @@ target: /home/alice/ws/payments-retry
 source api: path=api type=git branch=feature/retry mode=work dirty=0 stashes=0 unpushed=0
 root files: 1 (6 bytes)
 imported /home/alice/ws/payments-retry as payments-retry (qppf31)
-V1 registry unchanged; run `tasktree prune` to drop its entry
+V1 registry not modified; remove the entry with V1's tasktree prune or delete ~/.local/state/tasktree/registry.toml
 ```
 
 Check the result before you import more:
@@ -142,13 +142,10 @@ tasktree import --recover ~/ws/payments-retry
 
 ## Clean up the V1 registry
 
-Import never edits the V1 registry. The imported folder no longer contains a `Tasktree.yml`, so the V1 binary's `prune` removes its entry:
+Import never edits the V1 registry, so imported folders stay listed there. The V2 binary has no `prune` command, and the `tasktree prune` named in the import message is the V1 command. There are two ways to clean up:
 
-```bash
-tasktree-v1 prune
-```
-
-The message `run tasktree prune` printed by the importer refers to this V1 command. The V2 binary has no `prune`.
+- Run V1's `tasktree prune` after importing, while the V1 binary is still installed (for example when you built V2 into another directory instead of replacing V1). The imported folder no longer contains a `Tasktree.yml`, so V1 drops its entry. Run it before you install V2 over V1.
+- After you have imported everything, delete the V1 registry file, `~/.local/state/tasktree/registry.toml`. Nothing in V2 reads it except `import --all`.
 
 ## Do not run the V1 binary on imported folders
 
