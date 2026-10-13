@@ -666,6 +666,9 @@ func (a App) Add(ctx context.Context, id, root string, o AddOptions) (AddResult,
 	if err := validateRootIdentity(id, root); err != nil {
 		return r, err
 	}
+	if o.Mode != "" && o.Mode != "follow" && o.Mode != "work" && o.Mode != "pin" {
+		return r, ValidationError{fmt.Sprintf("invalid mode %q", o.Mode)}
+	}
 	store := repoalias.NewStore(a.Home.AliasesPath())
 	if u, ok, e := store.Resolve(o.URL); e != nil {
 		return r, e
@@ -775,7 +778,7 @@ func (a App) Add(ctx context.Context, id, root string, o AddOptions) (AddResult,
 		}
 	}
 	if mode != "follow" && mode != "work" && mode != "pin" {
-		return r, fmt.Errorf("invalid mode %q", mode)
+		return r, ValidationError{fmt.Sprintf("invalid mode %q", mode)}
 	}
 	_, _, e = rootGit(ctx, g, a.Home, id, root, "-c", "protocol.file.allow=always", "submodule", "add", "--force", o.URL, o.Name)
 	if e != nil {
@@ -1120,7 +1123,7 @@ func (a App) Remove(ctx context.Context, id, root, name string, force bool) ([]s
 		}
 	}
 	if m == nil {
-		return nil, fmt.Errorf("repository %q not found", name)
+		return nil, NotFoundError{fmt.Sprintf("repository %q not found", name)}
 	}
 	validRelative := func(v string) bool {
 		if v == "" || filepath.IsAbs(v) {
@@ -1237,7 +1240,7 @@ func (a App) Mode(ctx context.Context, id, root, name, mode string) error {
 		return err
 	}
 	if mode != "follow" && mode != "work" && mode != "pin" {
-		return fmt.Errorf("invalid mode %q", mode)
+		return ValidationError{fmt.Sprintf("invalid mode %q", mode)}
 	}
 	ms, err := modules(root)
 	if err != nil {
@@ -1251,7 +1254,7 @@ func (a App) Mode(ctx context.Context, id, root, name, mode string) error {
 		}
 	}
 	if found == nil {
-		return fmt.Errorf("repository %q not found", name)
+		return NotFoundError{fmt.Sprintf("repository %q not found", name)}
 	}
 	g := a.Git.WithDefaults()
 	gm := filepath.Join(root, ".gitmodules")
@@ -1743,7 +1746,7 @@ func (a App) Push(ctx context.Context, id, root string, names []string) ([]PushR
 				found = found || m.Name == n
 			}
 			if !found {
-				return nil, fmt.Errorf("repository %q not found", n)
+				return nil, NotFoundError{fmt.Sprintf("repository %q not found", n)}
 			}
 		}
 	}

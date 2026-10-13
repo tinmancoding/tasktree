@@ -24,6 +24,20 @@ type ValidationError struct{ Message string }
 
 func (e ValidationError) Error() string { return e.Message }
 
+// NotFoundError reports a named thing (repository, ref, ...) that does not
+// exist; the CLI maps it to exit code 3.
+type NotFoundError struct{ Message string }
+
+func (e NotFoundError) Error() string { return e.Message }
+
+// NoCheckoutError reports a structural command aimed at a task that has no
+// checkout on this machine; the CLI maps it to exit code 4.
+type NoCheckoutError struct{ Handle string }
+
+func (e NoCheckoutError) Error() string {
+	return fmt.Sprintf("%s has no checkout on this machine; run %s open %s", e.Handle, product.Name, e.Handle)
+}
+
 type App struct {
 	Home           home.Home
 	Hub            hub.Hub
@@ -146,7 +160,7 @@ func (a App) ConfigGet(key string) (string, error) {
 	case "sync.timeout":
 		return c.Sync.Timeout, nil
 	default:
-		return "", fmt.Errorf("unknown config key %q", key)
+		return "", ValidationError{fmt.Sprintf("unknown config key %q", key)}
 	}
 }
 func (a App) ConfigSet(key, value string) error {
@@ -184,7 +198,7 @@ func (a App) ConfigSetContext(ctx context.Context, key, value string) error {
 		}
 		c.Sync.Timeout = value
 	default:
-		return fmt.Errorf("unknown config key %q", key)
+		return ValidationError{fmt.Sprintf("unknown config key %q", key)}
 	}
 	if err := a.Home.SaveConfig(c); err != nil {
 		return err
@@ -218,7 +232,7 @@ func (a App) NewTask(ctx context.Context, o NewOptions) (record.Task, error) {
 		o.Status = "incoming"
 	}
 	if err := record.ValidateStatus(o.Status); err != nil {
-		return record.Task{}, err
+		return record.Task{}, ValidationError{err.Error()}
 	}
 	if o.Handle == "" {
 		if o.Jira != "" {
@@ -307,7 +321,7 @@ func (a App) ListFiltered(all bool, statuses, labels []string) ([]record.Task, e
 	wanted := map[string]bool{}
 	for _, s := range statuses {
 		if err := record.ValidateStatus(s); err != nil {
-			return nil, err
+			return nil, ValidationError{err.Error()}
 		}
 		wanted[s] = true
 	}
@@ -596,7 +610,7 @@ func (a App) Ref(ctx context.Context, ref, action, typ, value string) (record.Ta
 		return current, false, nil
 	}
 	if action == "rm" && !found {
-		return record.Task{}, false, hub.NotFoundError{Ref: typ + ": " + value}
+		return record.Task{}, false, NotFoundError{fmt.Sprintf("ref %s:%s not found on %s", typ, value, current.Handle)}
 	}
 	author, machine, err := a.author()
 	if err != nil {
@@ -811,7 +825,7 @@ func (a App) Note(ctx context.Context, ref, text, kind string) (record.Task, err
 		kind = "note"
 	}
 	if err := record.ValidateKind(kind); err != nil {
-		return record.Task{}, err
+		return record.Task{}, ValidationError{err.Error()}
 	}
 	author, machine, err := a.author()
 	if err != nil {
@@ -874,7 +888,7 @@ func (a App) updateStatus(ctx context.Context, ref, status string) (record.Task,
 func (a App) Mark(ctx context.Context, ref, status string, o MarkOptions) (MarkResult, error) {
 	result := MarkResult{}
 	if err := record.ValidateStatus(status); err != nil {
-		return result, err
+		return result, ValidationError{err.Error()}
 	}
 	if o.Cascade && !record.IsOpen(status) {
 		return a.markCascade(ctx, ref, status, o)

@@ -38,8 +38,14 @@ func Code(err error) int {
 	if errors.As(err, &ni) {
 		return 4
 	}
+	var nc app.NoCheckoutError
+	if errors.As(err, &nc) {
+		return 4
+	}
 	var nf hub.NotFoundError
-	if errors.As(err, &nf) {
+	var appNF app.NotFoundError
+	var tplNF template.NotFoundError
+	if errors.As(err, &nf) || errors.As(err, &appNF) || errors.As(err, &tplNF) {
 		return 3
 	}
 	var conflict hub.ConflictError
@@ -59,7 +65,7 @@ func Code(err error) int {
 	// Cobra/pflag does not expose a stable public error type for flag parsing.
 	// Match only its concrete flag diagnostics; application errors containing
 	// words such as "requires" must retain exit 1.
-	if strings.HasPrefix(s, "unknown flag:") || strings.HasPrefix(s, "unknown shorthand flag:") || strings.HasPrefix(s, "flag needs an argument:") || strings.HasPrefix(s, "invalid argument ") {
+	if strings.HasPrefix(s, "unknown command ") || strings.HasPrefix(s, "unknown flag:") || strings.HasPrefix(s, "unknown shorthand flag:") || strings.HasPrefix(s, "flag needs an argument:") || strings.HasPrefix(s, "invalid argument ") {
 		return 2
 	}
 	return 1
@@ -88,7 +94,27 @@ func NewRoot(out, errOut io.Writer) *cobra.Command {
 	root.PersistentFlags().BoolVarP(&o.verbose, "verbose", "v", false, "print git commands")
 	root.PersistentFlags().StringVar(&o.author, "author", "", "author for log entries")
 	root.AddCommand(setupCmd(o), configCmd(o), newCmd(o), listCmd(o), infoCmd(o), noteCmd(o), markCmd(o), refCmd(o), labelCmd(o), historyCmd(o), openCmd(o), addCmd(o), removeCmd(o), modeCmd(o), bootstrapCmd(o), focusCmd(o), pushCmd(o), commitCmd(o), importCmd(o), moveCmd(o), doctorCmd(o), templateCmd(o), rootCmd(o), syncCmd(o), resolveCmd(o))
+	for _, c := range root.Commands() {
+		requireKnownSubcommand(c)
+	}
 	return root
+}
+
+// requireKnownSubcommand makes a command group reject an unknown subcommand
+// with a usage error (exit 2) instead of silently printing help.
+func requireKnownSubcommand(c *cobra.Command) {
+	if !c.HasSubCommands() || c.Runnable() {
+		return
+	}
+	c.RunE = func(cmd *cobra.Command, args []string) error {
+		if len(args) > 0 {
+			return usageError{fmt.Sprintf("unknown command %q for %q", args[0], cmd.CommandPath())}
+		}
+		return cmd.Help()
+	}
+	for _, sub := range c.Commands() {
+		requireKnownSubcommand(sub)
+	}
 }
 func (o *options) application() (app.App, error) {
 	h, err := home.Resolve()
@@ -859,6 +885,29 @@ func openCmd(o *options) *cobra.Command {
 	c.Flags().StringVar(&x.Branch, "branch", "", "work repository branch override")
 	return c
 }
+
+// noCheckout reports a structural command aimed at a task without a checkout
+// on this machine. An empty id means no task was targeted at all.
+// templateLoadError keeps a missing template a typed not-found (exit 3) and any
+// other load failure a usage error.
+func templateLoadError(e error) error {
+	var nf template.NotFoundError
+	if errors.As(e, &nf) {
+		return e
+	}
+	return usageError{e.Error()}
+}
+
+func noCheckout(a app.App, id string) error {
+	if id == "" {
+		return notInTasktreeError{}
+	}
+	t, err := a.Info(id)
+	if err != nil {
+		return err
+	}
+	return app.NoCheckoutError{Handle: t.Handle}
+}
 func requireTree(a app.App, ref string) (string, string, error) {
 	id, root, e := a.ResolveTreeTarget(ref, "")
 	if e != nil {
@@ -868,7 +917,7 @@ func requireTree(a app.App, ref string) (string, string, error) {
 		return "", "", e
 	}
 	if root == "" {
-		return "", "", notInTasktreeError{}
+		return "", "", noCheckout(a, id)
 	}
 	return id, root, nil
 }
@@ -1085,7 +1134,7 @@ func templateCmd(o *options) *cobra.Command {
 			}
 			s, e := a.TemplateStore().Load(args[0])
 			if e != nil {
-				return usageError{e.Error()}
+				return templateLoadError(e)
 			}
 			tw := newTable(o.out)
 			fmt.Fprintln(tw, "PARAMETER\tREQUIRED\tDEFAULT\tDESCRIPTION")
@@ -1106,7 +1155,7 @@ func templateCmd(o *options) *cobra.Command {
 			}
 			s, e := a.TemplateStore().Load(args[0])
 			if e != nil {
-				return usageError{e.Error()}
+				return templateLoadError(e)
 			}
 			if e = template.Validate(s); e != nil {
 				return usageError{e.Error()}
@@ -1124,12 +1173,12 @@ func rootCmd(o *options) *cobra.Command {
 		if e != nil {
 			return e
 		}
-		_, root, e := resolveTarget(a, ref)
+		id, root, e := resolveTarget(a, ref)
 		if e != nil {
 			return e
 		}
 		if root == "" {
-			return notInTasktreeError{}
+			return noCheckout(a, id)
 		}
 		fmt.Fprintln(o.out, root)
 		return nil

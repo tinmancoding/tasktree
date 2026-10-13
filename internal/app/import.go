@@ -671,7 +671,7 @@ func (a App) Import(ctx context.Context, root string, o ImportOptions) (res Impo
 		o.Status = "active"
 	}
 	if err = record.ValidateStatus(o.Status); err != nil {
-		return res, err
+		return res, ValidationError{err.Error()}
 	}
 	id, err := record.NewID()
 	if err != nil {

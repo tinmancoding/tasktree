@@ -411,7 +411,7 @@ func (a App) RemoveDefined(ctx context.Context, id, name string) error {
 			f["gitlink:"+m.Path] = strings.TrimSpace(sha)
 		}
 		if !found {
-			return nil, nil, ValidationError{fmt.Sprintf("repository %q not found", name)}
+			return nil, nil, NotFoundError{fmt.Sprintf("repository %q not found", name)}
 		}
 		return out, f, nil
 	})
@@ -437,7 +437,7 @@ func (a App) ModeDefined(ctx context.Context, id, name, mode string) error {
 			}
 		}
 		if !found {
-			return nil, nil, ValidationError{fmt.Sprintf("repository %q not found", name)}
+			return nil, nil, NotFoundError{fmt.Sprintf("repository %q not found", name)}
 		}
 		return ms, f, nil
 	})

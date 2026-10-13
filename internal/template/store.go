@@ -3,6 +3,7 @@ package template
 
 import (
 	"embed"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -117,10 +118,19 @@ func (s Store) List() ([]Spec, error) {
 	sort.Slice(out, func(i, j int) bool { return out[i].Metadata.Name < out[j].Metadata.Name })
 	return out, nil
 }
+
+// NotFoundError reports an unknown template name or a missing template file.
+type NotFoundError struct{ Name string }
+
+func (e NotFoundError) Error() string { return fmt.Sprintf("template %q not found", e.Name) }
+
 func (s Store) Load(nameOrPath string) (Spec, error) {
 	if strings.ContainsAny(nameOrPath, "/\\") || strings.HasSuffix(nameOrPath, ".yml") || strings.HasSuffix(nameOrPath, ".yaml") {
 		b, e := os.ReadFile(nameOrPath)
 		if e != nil {
+			if errors.Is(e, os.ErrNotExist) {
+				return Spec{}, NotFoundError{nameOrPath}
+			}
 			return Spec{}, e
 		}
 		return parse(b, "file")
@@ -134,7 +144,7 @@ func (s Store) Load(nameOrPath string) (Spec, error) {
 			return v, nil
 		}
 	}
-	return Spec{}, fmt.Errorf("template %q not found", nameOrPath)
+	return Spec{}, NotFoundError{nameOrPath}
 }
 func stringsOf(s Spec) []string {
 	x := []string{s.Task.Title, s.Task.Handle, s.Task.Jira, s.Task.Status, s.Task.Description}

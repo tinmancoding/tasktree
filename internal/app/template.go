@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -87,6 +88,10 @@ func validTemplatePath(p string) bool {
 func (a App) RenderTemplate(name string, args []string) (RenderedTemplate, error) {
 	s, e := a.TemplateStore().Load(name)
 	if e != nil {
+		var nf tpl.NotFoundError
+		if errors.As(e, &nf) {
+			return RenderedTemplate{}, e
+		}
 		return RenderedTemplate{}, ValidationError{e.Error()}
 	}
 	if e = tpl.Validate(s); e != nil {
