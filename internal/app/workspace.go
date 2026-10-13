@@ -941,6 +941,12 @@ func (a App) CommitWithRewind(ctx context.Context, id, root, msg string, allowRe
 	return true, warnings, e
 }
 
+// RootShortHead returns the abbreviated commit id at the checkout's HEAD.
+func (a App) RootShortHead(ctx context.Context, id, root string) (string, error) {
+	out, _, err := rootGit(ctx, a.Git.WithDefaults(), a.Home, id, root, "rev-parse", "--short", "HEAD")
+	return strings.TrimSpace(out), err
+}
+
 func repoLoss(ctx context.Context, g gitx.Client, name, path string, bare bool) ([]string, error) {
 	loss := []string{}
 	args := []string{}

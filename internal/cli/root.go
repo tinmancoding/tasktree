@@ -966,7 +966,15 @@ func commitCmd(o *options) *cobra.Command {
 		}
 		if e == nil {
 			if committed {
-				fmt.Fprintln(o.out, "tasktree committed and pushed")
+				sha, e := a.RootShortHead(cmd.Context(), id, root)
+				if e != nil {
+					return e
+				}
+				msg := "committed " + sha + " and pushed to the local hub"
+				if cfg, e := a.Home.LoadConfig(); e == nil && cfg.Remote != "" {
+					msg += "; run " + product.Name + " sync to publish"
+				}
+				fmt.Fprintln(o.out, msg)
 			} else {
 				fmt.Fprintln(o.out, "nothing to commit")
 			}
