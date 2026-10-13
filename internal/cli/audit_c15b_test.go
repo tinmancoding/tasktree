@@ -652,3 +652,47 @@ func TestSetupRemoteOnExistingHubPushes(t *testing.T) {
 		t.Fatalf("remote=%q", got)
 	}
 }
+
+// M23: after any main merge, every live local checkout whose record changed
+// gets its .tasktree/task.md regenerated.
+func TestTaskViewRefreshedAfterMainMerge(t *testing.T) {
+	a, b, _ := twoMachines(t)
+	a.must("new", "Watched", "--handle", "watched")
+	a.must("new", "Other", "--handle", "other")
+	a.must("sync")
+	watched := strings.TrimSpace(b.must("open", "watched"))
+	other := strings.TrimSpace(b.must("open", "other"))
+	view := func() string {
+		bs, err := os.ReadFile(filepath.Join(watched, ".tasktree", "task.md"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(bs)
+	}
+	push := func(note string) {
+		a.must("note", note, "-t", "watched")
+		a.must("sync")
+	}
+
+	push("via sync all")
+	b.must("sync", "--all")
+	if !strings.Contains(view(), "via sync all") {
+		t.Fatalf("sync --all did not refresh task.md:\n%s", view())
+	}
+
+	push("via sync in another tasktree")
+	if _, _, err := b.inDir(other, "sync", "--no-repos"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(view(), "via sync in another tasktree") {
+		t.Fatalf("sync inside another tasktree did not refresh task.md:\n%s", view())
+	}
+
+	push("via open pre-fetch")
+	a.must("new", "Fresh", "--handle", "fresh")
+	a.must("sync")
+	b.must("open", "fresh", "--skip-bootstrap")
+	if !strings.Contains(view(), "via open pre-fetch") {
+		t.Fatalf("open pre-fetch did not refresh task.md:\n%s", view())
+	}
+}

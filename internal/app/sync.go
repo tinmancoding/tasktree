@@ -167,6 +167,7 @@ func (a App) Sync(ctx context.Context, o SyncOptions) (report SyncReport, err er
 			}
 		}
 		diverged := map[string]bool{}
+		var mainFrom, mainTo string
 		err = a.Hub.WithLock(ctx, func() error {
 			if e := a.Hub.EnsureClean(ctx); e != nil {
 				return e
@@ -190,6 +191,7 @@ func (a App) Sync(ctx context.Context, o SyncOptions) (report SyncReport, err er
 				return e
 			}
 			updates["refs/heads/main"] = merged
+			mainFrom, mainTo = local["refs/heads/main"], merged
 			tasks := map[string]bool{}
 			if o.All {
 				for ref := range local {
@@ -234,6 +236,7 @@ func (a App) Sync(ctx context.Context, o SyncOptions) (report SyncReport, err er
 		if err != nil {
 			return report, err
 		}
+		a.refreshChangedCheckouts(ctx, mainFrom, mainTo)
 		if !o.All {
 			if err = a.advanceCheckout(ctx, o.ID, o.Root, &report); err != nil {
 				return report, err
@@ -731,6 +734,35 @@ func (a App) pushCloseRemote(ctx context.Context, id string) {
 		}
 	}
 }
+
+// refreshChangedCheckouts regenerates .tasktree/task.md for every live local
+// checkout whose record differs between two main commits (M23, AG4). It runs
+// outside the hub lock because the refresh takes it.
+func (a App) refreshChangedCheckouts(ctx context.Context, from, to string) {
+	if from == "" || to == "" || from == to {
+		return
+	}
+	out, _, err := a.Git.Run(ctx, a.Home.GitPath(), nil, "diff", "--name-only", "-z", from, to, "--", "tasks")
+	if err != nil {
+		a.warnf("refresh .tasktree/task.md after merge: %v", err)
+		return
+	}
+	local, err := a.Home.LoadLocal()
+	if err != nil {
+		a.warnf("refresh .tasktree/task.md after merge: %v", err)
+		return
+	}
+	for _, p := range strings.Split(out, "\x00") {
+		id := strings.TrimSuffix(strings.TrimPrefix(p, "tasks/"), ".md")
+		if !strings.HasPrefix(p, "tasks/") || !strings.HasSuffix(p, ".md") || !record.ValidID(id) {
+			continue
+		}
+		if _, ok := local.Checkouts[id]; ok {
+			a.refreshTaskRecord(ctx, id)
+		}
+	}
+}
+
 func (a App) pullOpenRemote(ctx context.Context, ref string) {
 	cfg, e := a.Home.LoadConfig()
 	if e != nil || cfg.Remote == "" {
@@ -745,6 +777,8 @@ func (a App) pullOpenRemote(ctx context.Context, ref string) {
 		a.warnf("remote open fetch failed; continuing with local state: %v", e)
 		return
 	}
+	var mainFrom, mainTo string
+	defer func() { a.refreshChangedCheckouts(ctx, mainFrom, mainTo) }()
 	e = a.Hub.WithLock(ctx, func() error {
 		if e := a.Hub.EnsureClean(ctx); e != nil {
 			return e
@@ -759,6 +793,7 @@ func (a App) pullOpenRemote(ctx context.Context, ref string) {
 		if e = a.Hub.MoveRef(ctx, "refs/heads/main", next, old); e != nil {
 			return e
 		}
+		mainFrom, mainTo = old, next
 		refs, e := a.Hub.Refs(ctx, "refs/remotes/origin/task/")
 		if e != nil {
 			return e
