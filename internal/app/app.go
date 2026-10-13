@@ -132,8 +132,14 @@ func (a App) Setup(ctx context.Context, o SetupOptions) (home.Config, error) {
 			return c, err
 		}
 		if o.RemoteSet {
+			// DN8: on an existing hub this is exactly `config set remote`.
 			if err := a.Hub.ConfigureRemote(ctx, c.Remote); err != nil {
 				return c, err
+			}
+			if c.Remote != "" {
+				if err := a.pushInitialRemote(ctx); err != nil {
+					return c, err
+				}
 			}
 		}
 	}

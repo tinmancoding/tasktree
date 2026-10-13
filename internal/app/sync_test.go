@@ -148,10 +148,12 @@ func TestSyncS1JoinAndUnrelatedS9(t *testing.T) {
 	}
 	d := newSyncMachine(t, "D", "")
 	own := p.task(d, "From D")
-	// Existing hub setup configures only: no history rewrite or push.
+	// DN8: setup --remote on an existing hub is `config set remote`: it
+	// configures origin and pushes, which an unrelated remote rejects. Either
+	// way no history is rewritten or merged.
 	before := d.Hub.Ref(p.ctx, "main")
-	if _, e := d.Setup(p.ctx, SetupOptions{Remote: p.remote, RemoteSet: true}); e != nil {
-		t.Fatal(e)
+	if _, e := d.Setup(p.ctx, SetupOptions{Remote: p.remote, RemoteSet: true}); e == nil || !strings.Contains(e.Error(), "rejected") {
+		t.Fatalf("setup --remote with unrelated remote history: %v", e)
 	}
 	if d.Hub.Ref(p.ctx, "main") != before {
 		t.Fatal("setup merged existing hub")

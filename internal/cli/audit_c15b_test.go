@@ -635,3 +635,20 @@ func TestOpenLiveCheckoutDoesNotFetch(t *testing.T) {
 		t.Fatalf("sync did not merge:\n%s", got)
 	}
 }
+
+// DN8: setup --remote on an existing hub behaves like config set remote.
+func TestSetupRemoteOnExistingHubPushes(t *testing.T) {
+	m := newMachine(t, "m")
+	m.must("setup", "--author", "alice", "--machine", "box", "--tasks-root", m.tasks)
+	m.must("new", "Pushed", "--handle", "pushed", "--open")
+	remote := filepath.Join(t.TempDir(), "hub.git")
+	gitRun(t, "", "init", "--bare", "-b", "main", remote)
+	m.must("setup", "--remote", remote)
+	refs := gitRun(t, remote, "for-each-ref", "--format=%(refname)")
+	if !strings.Contains(refs, "refs/heads/main") || !strings.Contains(refs, "refs/heads/task/") {
+		t.Fatalf("remote refs after setup --remote:\n%s", refs)
+	}
+	if got := strings.TrimSpace(m.must("config", "get", "remote")); got != remote {
+		t.Fatalf("remote=%q", got)
+	}
+}
