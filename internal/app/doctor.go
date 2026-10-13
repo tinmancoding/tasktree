@@ -194,7 +194,7 @@ func (a App) doctorFindings(ctx context.Context) ([]Finding, error) {
 				key := strings.Join(cycle, "->")
 				if !seenCycles[key] {
 					seenCycles[key] = true
-					add("parent-cycle", "error", d.Task.Handle, "parent cycle: "+strings.Join(cycle, " -> "), nil)
+					add("parent-cycle", "error", d.Task.Handle, "parent cycle: "+strings.Join(cycle, " -> ")+"; break it with "+product.Name+" info set parent --clear -t <id>", nil)
 				}
 				break
 			}

@@ -490,8 +490,17 @@ func (a App) EditDescription(ctx context.Context, ref, text string) (record.Task
 }
 
 func (a App) SetInfo(ctx context.Context, ref, field, value string, clear bool) (record.Task, bool, error) {
-	current, err := a.Info(ref)
-	if err != nil {
+	var current record.Task
+	var err error
+	if field == "parent" && clear {
+		// Clearing a parent can never create a cycle, so it must also work on a
+		// task that is already part of one (which Info refuses to read).
+		d, readErr := a.Hub.Read(ref)
+		if readErr != nil {
+			return record.Task{}, false, readErr
+		}
+		current = d.Task
+	} else if current, err = a.Info(ref); err != nil {
 		return record.Task{}, false, err
 	}
 	docs, err := a.Hub.ReadAll()

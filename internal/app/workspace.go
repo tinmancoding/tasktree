@@ -101,6 +101,17 @@ func git(ctx context.Context, g gitx.Client, dir string, args ...string) (string
 }
 
 func (a App) ResolveTarget(explicit, start string) (string, string, error) {
+	return a.resolveTarget(explicit, start, true)
+}
+
+// ResolveTargetIgnoringParentGraph resolves like ResolveTarget but does not
+// refuse a task because the parent graph has a cycle. Only the repair of that
+// cycle (info set parent --clear) may use it.
+func (a App) ResolveTargetIgnoringParentGraph(explicit, start string) (string, string, error) {
+	return a.resolveTarget(explicit, start, false)
+}
+
+func (a App) resolveTarget(explicit, start string, validateGraph bool) (string, string, error) {
 	ref := explicit
 	source := ""
 	if ref == "" {
@@ -108,7 +119,16 @@ func (a App) ResolveTarget(explicit, start string) (string, string, error) {
 		source = "TASKTREE_TASK"
 	}
 	if ref != "" {
-		t, err := a.Info(ref)
+		var t record.Task
+		var err error
+		if validateGraph {
+			t, err = a.Info(ref)
+		} else {
+			var d *record.Document
+			if d, err = a.Hub.Read(ref); err == nil {
+				t = d.Task
+			}
+		}
 		if err != nil {
 			if source != "" {
 				return "", "", fmt.Errorf("%s=%q: %w", source, ref, err)

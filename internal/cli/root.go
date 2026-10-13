@@ -411,7 +411,10 @@ The TREE column is "here" when the task has a checkout on this machine, "defined
 	return c
 }
 func resolveTarget(a app.App, explicit string) (string, string, error) {
-	id, root, err := a.ResolveTarget(explicit, "")
+	return resolveWith(a.ResolveTarget, explicit)
+}
+func resolveWith(resolve func(explicit, start string) (string, string, error), explicit string) (string, string, error) {
+	id, root, err := resolve(explicit, "")
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return "", "", notInTasktreeError{}
@@ -664,7 +667,11 @@ Status is not settable here; use "mark".`, Args: func(cmd *cobra.Command, args [
 		if e != nil {
 			return e
 		}
-		resolved, _, e := resolveTarget(a, ref)
+		resolve := a.ResolveTarget
+		if clear {
+			resolve = a.ResolveTargetIgnoringParentGraph
+		}
+		resolved, _, e := resolveWith(resolve, ref)
 		if e != nil {
 			return e
 		}
