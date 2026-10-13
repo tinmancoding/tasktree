@@ -3,7 +3,7 @@
 ## Requirements
 
 - **git 2.40 or later.** tasktree runs `git merge-tree --write-tree -z`, which needs 2.40. It is developed and tested with git 2.53.
-- **Linux or macOS.** tasktree uses file locks (`flock`) that Windows does not provide, so Windows is not supported.
+- **Linux or macOS.** tasktree uses file locks (`flock`) that Windows does not provide, so Windows is not supported. Release archives are built for Linux and macOS on amd64 and arm64 only.
 - **Go 1.25 or later**, only if you build from source.
 
 Check git:

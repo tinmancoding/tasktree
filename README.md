@@ -4,7 +4,7 @@ tasktree manages tasks and the multi-repository workspaces for them in one comma
 
 ## Install
 
-Requires git 2.40 or later, on Linux or macOS.
+Requires git 2.40 or later, on Linux or macOS (amd64 or arm64). Windows is not supported.
 
 ```bash
 go install github.com/tinmancoding/tasktree/v2/cmd/tasktree@latest
