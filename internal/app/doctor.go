@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/tinmancoding/tasktree/v2/internal/home"
 	"github.com/tinmancoding/tasktree/v2/internal/record"
@@ -92,9 +91,10 @@ func (a App) doctorFindings(ctx context.Context) ([]Finding, error) {
 		add("no-remote", "warning", a.Home.Root, "no remote configured; ~/.tasktree is the only copy; make a backup", nil)
 	}
 	if cfg.Remote != "" && a.Hub.IsSetup() {
-		short, cancel := context.WithTimeout(ctx, 3*time.Second)
-		_, _, e := a.Git.Run(short, a.Home.GitPath(), map[string]string{"GIT_TERMINAL_PROMPT": "0"}, "ls-remote", "origin", "refs/heads/main")
-		cancel()
+		short, e := a.implicitNetworkContext(ctx)
+		if e == nil {
+			_, _, e = a.Git.Run(short, a.Home.GitPath(), nil, "ls-remote", "origin", "refs/heads/main")
+		}
 		if e != nil {
 			add("remote-unreachable", "warning", cfg.Remote, "hub remote is unreachable: "+e.Error(), nil)
 		}
@@ -111,10 +111,26 @@ func (a App) doctorFindings(ctx context.Context) ([]Finding, error) {
 		}
 	}
 	if a.Hub.IsSetup() {
+		interrupted, fixable := false, false
+		e := a.Hub.WithLock(ctx, func() error {
+			var err error
+			interrupted, fixable, err = a.Hub.InterruptedSync(ctx)
+			return err
+		})
+		if e != nil {
+			add("check-failed", "error", a.Home.GitPath(), e.Error(), nil)
+		}
+		if interrupted {
+			var repair func(context.Context) error
+			if fixable {
+				repair = a.Hub.RepairInterruptedSync
+			}
+			add("hub-interrupted-sync", "error", a.Home.GitPath(), "interrupted sync: hub index still records the pre-merge tree", repair)
+		}
 		status, _, e := git(ctx, a.Git.WithDefaults(), a.Home.GitPath(), "status", "--porcelain")
 		if e != nil {
 			add("check-failed", "error", a.Home.GitPath(), e.Error(), nil)
-		} else if strings.TrimSpace(status) != "" {
+		} else if strings.TrimSpace(status) != "" && !interrupted {
 			add("hub-dirty", "error", a.Home.GitPath(), "hub has uncommitted changes", nil)
 		}
 	}

@@ -304,6 +304,9 @@ func (h Hub) ensureClean(ctx context.Context) error {
 	if err != nil || strings.TrimSpace(branch) != "main" {
 		return ConflictError{"hub main must be checked out before retrying"}
 	}
+	if err := h.repairInterruptedSync(ctx); err != nil {
+		return err
+	}
 	out, _, err := h.Git.Run(ctx, h.Path, nil, "status", "--porcelain")
 	if err != nil {
 		return err
