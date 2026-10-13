@@ -174,3 +174,23 @@ func TestVersionFlagAndCommand(t *testing.T) {
 		t.Fatalf("--version=%q version=%q", flagOut, cmdOut)
 	}
 }
+
+// D-3: a doctor run with nothing to report prints "findings": [].
+func TestDoctorJSONEmptyFindingsIsArray(t *testing.T) {
+	f := newCloseFixture(t)
+	remote := filepath.Join(f.base, "hub-remote.git")
+	gitRun(t, f.base, "init", "--bare", "-b", "main", remote)
+	if _, _, err := run(t, "config", "set", "remote", remote); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := run(t, "sync", "--all"); err != nil {
+		t.Fatal(err)
+	}
+	out, _, err := run(t, "doctor", "--json")
+	if err != nil {
+		t.Fatalf("doctor: %v %s", err, out)
+	}
+	if !strings.Contains(out, `"findings":[]`) {
+		t.Fatalf("doctor --json = %s", out)
+	}
+}

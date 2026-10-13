@@ -495,4 +495,16 @@ func (t *flexibleTime) UnmarshalYAML(node *yaml.Node) error {
 	return nil
 }
 
-func (t Task) MarshalJSON() ([]byte, error) { type plain Task; return json.Marshal(plain(t)) }
+func (t Task) MarshalJSON() ([]byte, error) {
+	type plain Task
+	if t.Labels == nil {
+		t.Labels = []string{}
+	}
+	if t.Refs == nil {
+		t.Refs = []Ref{}
+	}
+	if t.Log == nil {
+		t.Log = []Entry{}
+	}
+	return json.Marshal(plain(t))
+}

@@ -15,7 +15,7 @@ Every command that reads state accepts `--json`. The output is one JSON document
 | `template show` | [one template](#template-show) |
 | `bootstrap list` | [array of steps](#bootstrap-list) |
 
-Keys that are listed below always exist unless the table says they are optional. Treat unknown keys as additions and ignore them. Object keys of `list` and `info` appear in alphabetical order; do not rely on key order anywhere. Timestamps are RFC 3339 in UTC. Task ids are 6 characters.
+Keys that are listed below always exist unless the table says they are optional. A list is never `null`: an empty list is `[]`. Only fields documented as "or null" (such as `parent`) can be `null`. Treat unknown keys as additions and ignore them. Object keys of `list` and `info` appear in alphabetical order; do not rely on key order anywhere. Timestamps are RFC 3339 in UTC. Task ids are 6 characters.
 
 ## Task fields
 
@@ -186,7 +186,7 @@ $ tasktree doctor --json
 
 | Key | Type | Meaning |
 |---|---|---|
-| `findings` | array or null | Findings, errors first. **`null`, not `[]`, when there are none.** |
+| `findings` | array | Findings, errors first. `[]` when there are none. |
 | `errors`, `warnings` | number | Counts of findings that are not fixed |
 
 A finding has `code`, `severity` (`error` or `warning`), `subject`, `message`, `fixable` and `fixed` (true after `--fix` repaired it). The codes are listed in [Doctor and recovery](../guides/doctor-and-recovery.md#codes). The exit code is 1 when `errors` is greater than zero.

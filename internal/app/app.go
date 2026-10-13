@@ -793,7 +793,7 @@ func (a App) History(ctx context.Context, ref string) ([]HistoryEntry, error) {
 	if err != nil {
 		return nil, err
 	}
-	var history []HistoryEntry
+	history := []HistoryEntry{}
 	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
 		p := strings.Split(line, "\x00")
 		if len(p) != 3 {
