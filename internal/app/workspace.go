@@ -906,6 +906,10 @@ func (a App) Commit(ctx context.Context, id, root, msg string) (bool, []string, 
 }
 
 func (a App) CommitWithRewind(ctx context.Context, id, root, msg string, allowRewind bool) (bool, []string, error) {
+	return a.commitCheckout(ctx, id, root, msg, allowRewind, rewindFromCommit)
+}
+
+func (a App) commitCheckout(ctx context.Context, id, root, msg string, allowRewind bool, rc rewindContext) (bool, []string, error) {
 	if err := validateRootIdentity(id, root); err != nil {
 		return false, nil, err
 	}
@@ -916,7 +920,7 @@ func (a App) CommitWithRewind(ctx context.Context, id, root, msg string, allowRe
 		return false, nil, e
 	}
 	if !allowRewind {
-		if e := a.refuseGitlinkRewinds(ctx, id, root); e != nil {
+		if e := a.refuseGitlinkRewinds(ctx, id, root, rc); e != nil {
 			return false, nil, e
 		}
 	}

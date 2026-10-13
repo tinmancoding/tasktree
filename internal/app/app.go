@@ -786,6 +786,7 @@ func (a App) refreshTaskRecord(ctx context.Context, id string) {
 	}
 	a.writeGeneratedTaskRecord(id, d.Render())
 }
+
 // explicitAuthor returns the author given by --author or TASKTREE_AUTHOR.
 func (a App) explicitAuthor() string {
 	if a.AuthorOverride != "" {
@@ -951,7 +952,7 @@ func (a App) Mark(ctx context.Context, ref, status string, o MarkOptions) (MarkR
 	if len(result.Loss) > 0 && !o.Force {
 		return result, GateError{strings.Join(result.Loss, "\n")}
 	}
-	if _, _, err = a.CommitWithRewind(ctx, task.ID, checkout.Path, fmt.Sprintf("tasktree(%s): close: %s", task.ID, status), o.Force); err != nil {
+	if _, _, err = a.commitCheckout(ctx, task.ID, checkout.Path, fmt.Sprintf("tasktree(%s): close: %s", task.ID, status), o.Force, rewindFromClose); err != nil {
 		return result, err
 	}
 	// Close is complete only when the hub task branch exactly matches the clone.
@@ -1048,7 +1049,7 @@ func (a App) markCascade(ctx context.Context, ref, status string, o MarkOptions)
 			continue
 		}
 		if !o.Force {
-			if e := a.refuseGitlinkRewinds(ctx, t.ID, checkout.Path); e != nil {
+			if e := a.refuseGitlinkRewinds(ctx, t.ID, checkout.Path, rewindFromClose); e != nil {
 				refusals = append(refusals, t.Handle+": "+e.Error())
 				continue
 			}

@@ -12,6 +12,26 @@ import (
 // Comparing ancestry (rather than merely different SHAs) does not authorize
 // overwriting a user's ahead/diverged repository branch.
 func (a App) gitlinkRewind(ctx context.Context, id, root string, m module, fetchMissing bool) (recorded, head string, rewind bool, err error) {
+	return a.gitlinkRewindFor(ctx, id, root, m, fetchMissing, rewindFromCommit)
+}
+
+// rewindContext names the command refusing a gitlink rewind so its hint offers
+// only the override that command actually has (M26).
+type rewindContext int
+
+const (
+	rewindFromCommit rewindContext = iota
+	rewindFromClose
+)
+
+func (c rewindContext) override() string {
+	if c == rewindFromClose {
+		return "run " + product.Name + " sync, or close with " + product.Name + " mark --force to record the older commit"
+	}
+	return "pass --allow-rewind to record the older commit, or run " + product.Name + " sync to apply the recorded one"
+}
+
+func (a App) gitlinkRewindFor(ctx context.Context, id, root string, m module, fetchMissing bool, rc rewindContext) (recorded, head string, rewind bool, err error) {
 	if !safeModulePath(root, m) {
 		return "", "", false, fmt.Errorf("unsafe submodule path: %s", m.Path)
 	}
@@ -32,7 +52,7 @@ func (a App) gitlinkRewind(ctx context.Context, id, root string, m module, fetch
 	}
 	if _, _, missing := git(ctx, g, path, "cat-file", "-e", recorded+"^{commit}"); missing != nil {
 		if !fetchMissing {
-			return recorded, head, false, GateError{"cannot verify recorded gitlink for " + m.Name + "; run " + product.Name + " sync, or pass --allow-rewind"}
+			return recorded, head, false, GateError{"cannot verify recorded gitlink for " + m.Name + "; " + rc.override()}
 		}
 		if _, _, e = git(ctx, g, path, "fetch", "origin"); e != nil {
 			return recorded, head, false, e
@@ -41,18 +61,18 @@ func (a App) gitlinkRewind(ctx context.Context, id, root string, m module, fetch
 	_, _, e = git(ctx, g, path, "merge-base", "--is-ancestor", head, recorded)
 	return recorded, head, e == nil, nil
 }
-func (a App) refuseGitlinkRewinds(ctx context.Context, id, root string) error {
+func (a App) refuseGitlinkRewinds(ctx context.Context, id, root string, rc rewindContext) error {
 	ms, e := modules(root)
 	if e != nil {
 		return e
 	}
 	for _, m := range ms {
-		recorded, head, rewind, e := a.gitlinkRewind(ctx, id, root, m, false)
+		recorded, head, rewind, e := a.gitlinkRewindFor(ctx, id, root, m, false, rc)
 		if e != nil {
 			return e
 		}
 		if rewind {
-			return GateError{fmt.Sprintf("would move %s back from %s to %s; run "+product.Name+" sync, or pass --allow-rewind to record the older commit", m.Name, recorded, head)}
+			return GateError{fmt.Sprintf("would move %s back from %s to %s; %s", m.Name, recorded, head, rc.override())}
 		}
 	}
 	return nil

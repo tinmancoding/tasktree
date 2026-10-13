@@ -2,6 +2,9 @@ package app
 
 import (
 	"context"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -35,5 +38,36 @@ func assertImportAuthor(t *testing.T, a App, id, want string) {
 	}
 	if len(got.Log) != 1 || got.Log[0].Author != want {
 		t.Fatalf("log = %+v, want author %s", got.Log, want)
+	}
+}
+
+// M26: the rewind refusal names the escape hatch that exists in its context.
+func TestGitlinkRewindHintsAreContextSpecific(t *testing.T) {
+	for _, closeTask := range []bool{false, true} {
+		name := map[bool]string{false: "commit", true: "close"}[closeTask]
+		t.Run(name, func(t *testing.T) {
+			p, id, _, rb, _ := reviewSkippedLink(t, false)
+			dirty := filepath.Join(rb, "repo", "dirty")
+			writeSyncFile(t, dirty, "work")
+			p.sync(p.b, SyncOptions{ID: id, Root: rb, NoRepos: true})
+			os.Remove(dirty)
+			var e error
+			if closeTask {
+				_, e = p.b.Mark(p.ctx, id, "done", MarkOptions{})
+			} else {
+				_, _, e = p.b.Commit(p.ctx, id, rb, "rewind")
+			}
+			if e == nil {
+				t.Fatal("expected a rewind refusal")
+			}
+			msg := e.Error()
+			if closeTask {
+				if strings.Contains(msg, "--allow-rewind") || !strings.Contains(msg, "mark --force") || !strings.Contains(msg, "sync") {
+					t.Fatalf("close hint: %s", msg)
+				}
+			} else if !strings.Contains(msg, "--allow-rewind") || strings.Contains(msg, "mark --force") {
+				t.Fatalf("commit hint: %s", msg)
+			}
+		})
 	}
 }
