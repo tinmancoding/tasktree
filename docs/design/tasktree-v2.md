@@ -1,6 +1,6 @@
 # Design: tasktree V2
 
-Status: **Accepted** (design interview, decisions D1–D46)
+Status: **Accepted** (design interview, decisions D1–D50)
 Supersedes: the workspace-centric V1 model (`Tasktree.yml` + plain folders + registry)
 
 V2 turns tasktree into a single personal tool for **task management + multi-repo workspace
@@ -582,3 +582,7 @@ Checked against git 2.53.0:
 | D44 | `push` without arguments pushes only `work` repos and checks protected branches for all selected repos before pushing any; `follow`/`pin` repos are pushed only when named |
 | D45 | Structural commands (`add`, `remove`, `commit`, `mode`, `push`, `bootstrap`) always act on the tasktree root's own task; `focus`/`TASKTREE_TASK` retarget only record commands (refines D30) |
 | D46 | The loss gate (close, `remove`, import report) counts commits reachable from HEAD or local branches but not from `origin`, plus stashes; tags are excluded (tags fetched from `origin` are indistinguishable from local ones and caused false refusals) |
+| D47 | Three concepts: **task** (record on `main`), **tasktree** (definition: the `task/<id>` branch with sources, modes, files; may exist without a checkout), **checkout** (materialization on one machine). Tasks never hold sources. Definition edits (`add/remove/mode -t`, templates) work without a checkout by writing the hub branch directly (hub lock, temporary index, `commit-tree`, compare-and-swap `update-ref`); base commits resolve from the bare cache (fetch, no clone). With a local checkout, the checkout path is used |
+| D48 | `tt2 new` creates only a record (plus optional `--open`); repos come from `add -t` or a template |
+| D49 | Template = `task:` (record fields) + optional `tasktree:` (`repos`, `symlinks`, `files`, `bootstrap`) → record + tasktree definition; V1 parameters and `{{var}}` syntax kept |
+| D50 | Templates TP1–TP6: only `~/.tasktree/templates/` + builtins (`bugfix`, `feature`, `investigation`; user overrides builtin); `aibm-general` converted by hand; `template list/show/validate`; V1 variable precedence, provenance in the first log entry; `--template` with `--parent` only for record-only templates |
