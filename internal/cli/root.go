@@ -18,6 +18,7 @@ import (
 	"github.com/tinmancoding/tasktree/v2/internal/hub"
 	"github.com/tinmancoding/tasktree/v2/internal/output"
 	"github.com/tinmancoding/tasktree/v2/internal/record"
+	"github.com/tinmancoding/tasktree/v2/internal/template"
 )
 
 type notInTasktreeError struct{}
@@ -84,7 +85,7 @@ func NewRoot(out, errOut io.Writer) *cobra.Command {
 	root.PersistentFlags().StringVarP(&o.chdir, "chdir", "C", "", "run as if started in this directory")
 	root.PersistentFlags().BoolVarP(&o.verbose, "verbose", "v", false, "print git commands")
 	root.PersistentFlags().StringVar(&o.author, "author", "", "author for log entries")
-	root.AddCommand(setupCmd(o), configCmd(o), newCmd(o), listCmd(o), infoCmd(o), noteCmd(o), markCmd(o), refCmd(o), labelCmd(o), historyCmd(o), openCmd(o), addCmd(o), removeCmd(o), modeCmd(o), bootstrapCmd(o), focusCmd(o), pushCmd(o), commitCmd(o), importCmd(o), moveCmd(o), doctorCmd(o), rootCmd(o))
+	root.AddCommand(setupCmd(o), configCmd(o), newCmd(o), listCmd(o), infoCmd(o), noteCmd(o), markCmd(o), refCmd(o), labelCmd(o), historyCmd(o), openCmd(o), addCmd(o), removeCmd(o), modeCmd(o), bootstrapCmd(o), focusCmd(o), pushCmd(o), commitCmd(o), importCmd(o), moveCmd(o), doctorCmd(o), templateCmd(o), rootCmd(o))
 	return root
 }
 func (o *options) application() (app.App, error) {
@@ -167,12 +168,39 @@ func configCmd(o *options) *cobra.Command {
 func newCmd(o *options) *cobra.Command {
 	var x app.NewOptions
 	var open, isolated bool
-	var path, branch string
-	var repos []string
-	c := &cobra.Command{Use: "new <title>", Short: "Create a task (optionally a subtask, optionally open its tasktree)", Args: exact(1), RunE: func(cmd *cobra.Command, args []string) error {
-		x.Title = args[0]
+	var path, templateName string
+	c := &cobra.Command{Use: "new [title] [k=v ...]", Short: "Create a task (optionally from a template or open its tasktree)", Args: cobra.ArbitraryArgs, RunE: func(cmd *cobra.Command, args []string) error {
+		varArgs := []string{}
+		if templateName != "" {
+			if len(args) > 0 && !strings.Contains(args[0], "=") {
+				x.Title = args[0]
+				varArgs = args[1:]
+			} else {
+				varArgs = args
+			}
+		} else {
+			if len(args) != 1 {
+				return usageError{"tt2 new requires one title unless --template is used"}
+			}
+			x.Title = args[0]
+		}
 		a, e := o.application()
 		if e != nil {
+			return e
+		}
+		if templateName != "" {
+			t, e := a.NewFromTemplate(cmd.Context(), app.TemplateApplyOptions{Name: templateName, Title: x.Title, Parent: x.Parent, Vars: varArgs})
+			if e != nil {
+				return e
+			}
+			if !open {
+				fmt.Fprintf(o.out, "%s %s\n", t.Handle, t.ID)
+				return nil
+			}
+			p, e := a.Open(cmd.Context(), t.ID, app.OpenOptions{Path: path}, o.err)
+			if e == nil {
+				fmt.Fprintln(o.out, p)
+			}
 			return e
 		}
 		if isolated && x.Parent == "" {
@@ -190,7 +218,7 @@ func newCmd(o *options) *cobra.Command {
 					handle = app.Slug(x.Title)
 				}
 			}
-			if e := a.PreflightIsolated(cmd.Context(), x.Parent, handle, app.OpenOptions{Path: path, Repos: repos, Branch: branch}); e != nil {
+			if e := a.PreflightIsolated(cmd.Context(), x.Parent, handle, app.OpenOptions{Path: path}); e != nil {
 				return e
 			}
 		}
@@ -203,7 +231,7 @@ func newCmd(o *options) *cobra.Command {
 			return nil
 		}
 		fmt.Fprintf(o.err, "%s %s\n", t.Handle, t.ID)
-		p, e := a.Open(cmd.Context(), t.ID, app.OpenOptions{Path: path, Repos: repos, Branch: branch}, o.err)
+		p, e := a.Open(cmd.Context(), t.ID, app.OpenOptions{Path: path}, o.err)
 		if e != nil && strings.Contains(e.Error(), "does not exist in parent") {
 			return usageError{e.Error()}
 		}
@@ -216,10 +244,9 @@ func newCmd(o *options) *cobra.Command {
 	c.Flags().StringVar(&x.Handle, "handle", "", "task handle")
 	c.Flags().StringVar(&x.Status, "status", "incoming", "initial status")
 	c.Flags().StringVar(&x.Parent, "parent", "", "parent task")
+	c.Flags().StringVar(&templateName, "template", "", "create from a template")
 	c.Flags().BoolVar(&open, "open", false, "create and open a tasktree")
 	c.Flags().BoolVar(&isolated, "isolated", false, "create an isolated subtask tasktree")
-	c.Flags().StringSliceVar(&repos, "repos", nil, "parent repositories to include")
-	c.Flags().StringVar(&branch, "branch", "", "work repository branch override")
 	c.Flags().StringVar(&path, "path", "", "checkout path")
 	return c
 }
@@ -236,7 +263,25 @@ func listCmd(o *options) *cobra.Command {
 			return e
 		}
 		if j {
-			return json.NewEncoder(o.out).Encode(tasks)
+			payload := make([]map[string]any, 0, len(tasks))
+			local, _ := a.Home.LoadLocal()
+			for _, t := range tasks {
+				b, _ := json.Marshal(t)
+				var row map[string]any
+				_ = json.Unmarshal(b, &row)
+				state := "none"
+				if a.DefinitionExists(cmd.Context(), t.ID) {
+					state = "defined"
+				}
+				if c, ok := local.Checkouts[t.ID]; ok {
+					if st, x := os.Stat(c.Path); x == nil && st.IsDir() {
+						state = "here"
+					}
+				}
+				row["tasktree"] = state
+				payload = append(payload, row)
+			}
+			return json.NewEncoder(o.out).Encode(payload)
 		}
 		allTasks, e := a.List(true, nil)
 		if e != nil {
@@ -255,6 +300,7 @@ func listCmd(o *options) *cobra.Command {
 			visible[t.ID] = true
 		}
 		rows := []output.TaskRow{}
+		local, _ := a.Home.LoadLocal()
 		var visit func(record.Task, int)
 		visit = func(t record.Task, depth int) {
 			if !visible[t.ID] {
@@ -268,7 +314,16 @@ func listCmd(o *options) *cobra.Command {
 			if t.Progress != nil {
 				progress = fmt.Sprintf("%d/%d", t.Progress.Closed, t.Progress.Total)
 			}
-			rows = append(rows, output.TaskRow{Handle: strings.Repeat("  ", depth) + t.Handle, Status: t.Status, Title: t.Title, ID: t.ID, Parent: parent, Progress: progress})
+			treeState := "-"
+			if a.DefinitionExists(cmd.Context(), t.ID) {
+				treeState = "defined"
+			}
+			if c, ok := local.Checkouts[t.ID]; ok {
+				if st, x := os.Stat(c.Path); x == nil && st.IsDir() {
+					treeState = "here"
+				}
+			}
+			rows = append(rows, output.TaskRow{Handle: strings.Repeat("  ", depth) + t.Handle, Status: t.Status, Title: t.Title, ID: t.ID, Parent: parent, Progress: progress, Tree: treeState})
 			for _, child := range children[t.ID] {
 				visit(child, depth+1)
 			}
@@ -313,6 +368,7 @@ func infoCmd(o *options) *cobra.Command {
 			return e
 		}
 		var tree *app.TasktreeInfo
+		var definition *app.DefinitionInfo
 		if root != "" {
 			_, rootCfg, discoverErr := app.DiscoverRoot(root)
 			if discoverErr != nil {
@@ -325,6 +381,10 @@ func infoCmd(o *options) *cobra.Command {
 				}
 				tree = &x
 			}
+		} else if d, defErr := a.Definition(cmd.Context(), t.ID); defErr != nil {
+			return defErr
+		} else if d.State == "defined" {
+			definition = &d
 		}
 		allTasks, listErr := a.List(true, nil)
 		if listErr != nil {
@@ -366,7 +426,11 @@ func infoCmd(o *options) *cobra.Command {
 				}
 			}
 			if tree != nil {
-				payload["tasktree"] = tree
+				payload["tasktree"] = map[string]any{"state": "here", "path": tree.Path, "rootDirty": tree.RootDirty, "repos": tree.Repos}
+			} else if definition != nil {
+				payload["tasktree"] = definition
+			} else {
+				payload["tasktree"] = map[string]any{"state": "none", "repos": []any{}}
 			}
 			return json.NewEncoder(o.out).Encode(payload)
 		}
@@ -399,6 +463,13 @@ func infoCmd(o *options) *cobra.Command {
 		writeInfo(o.out, t, parent, children, cfg.Jira.BaseURL, focus)
 		if tree != nil {
 			return writeRepoInfo(o.out, *tree)
+		}
+		if definition != nil {
+			fmt.Fprintln(o.out, "Tasktree: defined (not checked out here)")
+			fmt.Fprintln(o.out, "NAME\tMODE\tBRANCH\tGITLINK")
+			for _, r := range definition.Repos {
+				fmt.Fprintf(o.out, "%s\t%s\t%s\t%s\n", r.Name, r.Mode, r.Branch, r.Gitlink)
+			}
 		}
 		return nil
 	}}
@@ -798,11 +869,22 @@ func addCmd(o *options) *cobra.Command {
 		if e != nil {
 			return e
 		}
-		id, root, e := requireTree(a, ref)
+		id, root, e := a.ResolveTreeTarget(ref, "")
 		if e != nil {
+			if errors.Is(e, os.ErrNotExist) {
+				return notInTasktreeError{}
+			}
 			return e
 		}
-		r, e := a.Add(cmd.Context(), id, root, x)
+		if root == "" && ref == "" {
+			return notInTasktreeError{}
+		}
+		var r app.AddResult
+		if root != "" {
+			r, e = a.Add(cmd.Context(), id, root, x)
+		} else {
+			r, e = a.AddDefined(cmd.Context(), id, x)
+		}
 		if e == nil {
 			for _, m := range r.Messages {
 				fmt.Fprintln(o.err, m)
@@ -826,11 +908,22 @@ func removeCmd(o *options) *cobra.Command {
 		if e != nil {
 			return e
 		}
-		id, root, e := requireTree(a, ref)
+		id, root, e := a.ResolveTreeTarget(ref, "")
 		if e != nil {
+			if errors.Is(e, os.ErrNotExist) {
+				return notInTasktreeError{}
+			}
 			return e
 		}
-		loss, e := a.Remove(cmd.Context(), id, root, args[0], force)
+		if root == "" && ref == "" {
+			return notInTasktreeError{}
+		}
+		var loss []string
+		if root != "" {
+			loss, e = a.Remove(cmd.Context(), id, root, args[0], force)
+		} else {
+			e = a.RemoveDefined(cmd.Context(), id, args[0])
+		}
 		if e == nil {
 			for _, m := range loss {
 				fmt.Fprintln(o.err, m)
@@ -941,6 +1034,58 @@ func moveCmd(o *options) *cobra.Command {
 	return c
 }
 
+func templateCmd(o *options) *cobra.Command {
+	root := &cobra.Command{Use: "template", Short: "List, show, or validate task templates"}
+	root.AddCommand(&cobra.Command{Use: "list", Short: "List available templates", Args: exact(0), RunE: func(cmd *cobra.Command, args []string) error {
+		a, e := o.application()
+		if e != nil {
+			return e
+		}
+		all, e := a.TemplateStore().List()
+		if e != nil {
+			return e
+		}
+		fmt.Fprintln(o.out, "NAME\tSOURCE\tDESCRIPTION")
+		for _, s := range all {
+			fmt.Fprintf(o.out, "%s\t%s\t%s\n", s.Metadata.Name, s.Source, s.Metadata.Description)
+		}
+		return nil
+	}},
+		&cobra.Command{Use: "show <name>", Short: "Show template parameters and raw YAML", Args: exact(1), RunE: func(cmd *cobra.Command, args []string) error {
+			a, e := o.application()
+			if e != nil {
+				return e
+			}
+			s, e := a.TemplateStore().Load(args[0])
+			if e != nil {
+				return usageError{e.Error()}
+			}
+			fmt.Fprintln(o.out, "PARAMETER\tREQUIRED\tDEFAULT\tDESCRIPTION")
+			for _, p := range s.Parameters {
+				fmt.Fprintf(o.out, "%s\t%t\t%s\t%s\n", p.Name, p.Required, p.Default, p.Description)
+			}
+			fmt.Fprintln(o.out, "---")
+			_, e = o.out.Write(s.Raw)
+			return e
+		}},
+		&cobra.Command{Use: "validate <name|file>", Short: "Validate a template", Args: exact(1), RunE: func(cmd *cobra.Command, args []string) error {
+			a, e := o.application()
+			if e != nil {
+				return e
+			}
+			s, e := a.TemplateStore().Load(args[0])
+			if e != nil {
+				return usageError{e.Error()}
+			}
+			if e = template.Validate(s); e != nil {
+				return usageError{e.Error()}
+			}
+			fmt.Fprintf(o.out, "template %s is valid\n", s.Metadata.Name)
+			return nil
+		}})
+	return root
+}
+
 func rootCmd(o *options) *cobra.Command {
 	var ref string
 	c := &cobra.Command{Use: "root", Short: "Print the tasktree root path", Args: exact(0), RunE: func(cmd *cobra.Command, args []string) error {
@@ -972,11 +1117,21 @@ func modeCmd(o *options) *cobra.Command {
 		if e != nil {
 			return e
 		}
-		id, root, e := requireTree(a, ref)
+		id, root, e := a.ResolveTreeTarget(ref, "")
 		if e != nil {
+			if errors.Is(e, os.ErrNotExist) {
+				return notInTasktreeError{}
+			}
 			return e
 		}
-		e = a.Mode(cmd.Context(), id, root, args[0], args[1])
+		if root == "" && ref == "" {
+			return notInTasktreeError{}
+		}
+		if root != "" {
+			e = a.Mode(cmd.Context(), id, root, args[0], args[1])
+		} else {
+			e = a.ModeDefined(cmd.Context(), id, args[0], args[1])
+		}
 		if e != nil && strings.Contains(e.Error(), "detached") {
 			return usageError{e.Error()}
 		}

@@ -1,0 +1,17 @@
+apiVersion: tasktree.dev/v2
+kind: Template
+metadata:
+  name: bugfix
+  description: Single-repository bug fix tasktree
+parameters:
+  - {name: ticket_number, required: true, description: Ticket or issue identifier}
+  - {name: repo, required: true, description: Repository alias or URL}
+  - {name: base_branch, default: main, description: Base branch}
+task:
+  title: "Fix {{ticket_number}}"
+  handle: "{{ticket_number}}"
+  jira: "{{ticket_number}}"
+  labels: [bugfix]
+tasktree:
+  repos:
+    - {repo: "{{repo}}", branch: "fix/{{ticket_number}}", from: "{{base_branch}}"}

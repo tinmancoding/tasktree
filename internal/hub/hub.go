@@ -313,6 +313,10 @@ func (h Hub) commit(ctx context.Context, message, author, machine string) error 
 	_, _, err := h.Git.Commit(ctx, h.Path, nil, author, machine, message)
 	return err
 }
+
+// WithLock serializes a task-branch plumbing operation with all hub writes.
+func (h Hub) WithLock(ctx context.Context, fn func() error) error { return h.withLock(ctx, fn) }
+
 func (h Hub) withLock(ctx context.Context, fn func() error) error {
 	if !h.IsSetup() {
 		return NotSetupError{}

@@ -14,15 +14,16 @@ type TaskRow struct {
 	ID       string
 	Parent   string
 	Progress string
+	Tree     string
 }
 
 func WriteTaskTable(w io.Writer, rows []TaskRow) error {
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	if _, err := fmt.Fprintln(tw, "HANDLE\tSTATUS\tTITLE\tID\tPARENT\tPROGRESS"); err != nil {
+	if _, err := fmt.Fprintln(tw, "HANDLE\tSTATUS\tTITLE\tID\tPARENT\tPROGRESS\tTREE"); err != nil {
 		return err
 	}
 	for _, r := range rows {
-		if _, err := fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", r.Handle, r.Status, r.Title, r.ID, r.Parent, r.Progress); err != nil {
+		if _, err := fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", r.Handle, r.Status, r.Title, r.ID, r.Parent, r.Progress, r.Tree); err != nil {
 			return err
 		}
 	}

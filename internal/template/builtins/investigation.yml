@@ -1,0 +1,16 @@
+apiVersion: tasktree.dev/v2
+kind: Template
+metadata:
+  name: investigation
+  description: Single-repository investigation tasktree
+parameters:
+  - {name: ticket_number, required: true, description: Investigation ticket}
+  - {name: repo, required: true, description: Repository alias or URL}
+  - {name: ref, default: main, description: Branch, tag, or commit}
+task:
+  title: "Investigate {{ticket_number}}"
+  handle: "investigate-{{ticket_number}}"
+  labels: [investigation]
+tasktree:
+  repos:
+    - {repo: "{{repo}}", from: "{{ref}}"}

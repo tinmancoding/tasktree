@@ -113,7 +113,7 @@ func (c Client) run(ctx context.Context, args ...string) (string, string, error)
 // Commit records a commit using the repository identity when both identity
 // fields resolve. When they do not, it supplies the tasktree identity only for
 // this invocation; it never writes to the repository's configuration.
-func (c Client) Commit(ctx context.Context, dir string, env map[string]string, author, machine, message string) (string, string, error) {
+func (c Client) commitIdentityArgs(ctx context.Context, dir string, env map[string]string, author, machine string) []string {
 	name, _, nameErr := c.Run(ctx, dir, env, "config", "user.name")
 	email, _, emailErr := c.Run(ctx, dir, env, "config", "user.email")
 	args := []string{"-c", "commit.gpgsign=false"}
@@ -126,7 +126,22 @@ func (c Client) Commit(ctx context.Context, dir string, env map[string]string, a
 		}
 		args = append(args, "-c", "user.name="+author, "-c", "user.email="+author+"@"+machine)
 	}
+	return args
+}
+func (c Client) Commit(ctx context.Context, dir string, env map[string]string, author, machine, message string) (string, string, error) {
+	args := c.commitIdentityArgs(ctx, dir, env, author, machine)
 	args = append(args, "commit", "--no-verify", "-m", message)
+	return c.Run(ctx, dir, env, args...)
+}
+
+// CommitTree creates a plumbing commit with the same identity fallback as Commit.
+// commit-tree runs no hooks and commit.gpgsign is disabled for structural writes.
+func (c Client) CommitTree(ctx context.Context, dir string, env map[string]string, author, machine, tree, parent, message string) (string, string, error) {
+	args := c.commitIdentityArgs(ctx, dir, env, author, machine)
+	args = append(args, "commit-tree", tree, "-m", message)
+	if parent != "" {
+		args = append(args, "-p", parent)
+	}
 	return c.Run(ctx, dir, env, args...)
 }
 
