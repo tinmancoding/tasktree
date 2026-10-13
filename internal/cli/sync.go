@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 	"github.com/tinmancoding/tasktree/v2/internal/app"
@@ -104,6 +105,8 @@ func resolveCmd(o *options) *cobra.Command {
 			if encErr := json.NewEncoder(o.out).Encode(r); encErr != nil {
 				return encErr
 			}
+		} else if r.NothingToResolve {
+			fmt.Fprintln(o.out, "nothing to resolve")
 		} else {
 			fmt.Fprintln(o.out, "Local commits:")
 			for _, s := range r.LocalCommits {
@@ -122,6 +125,14 @@ func resolveCmd(o *options) *cobra.Command {
 				fmt.Fprintln(o.out, "  "+s)
 			}
 			if r.Commit != "" {
+				line := fmt.Sprintf("Merged %d local and %d remote commit(s)", len(r.LocalCommits), len(r.RemoteCommits))
+				if len(r.AutoMerged) > 0 {
+					line += "; auto-merged: " + strings.Join(r.AutoMerged, ", ")
+				}
+				if len(r.Paths) > 0 {
+					line += "; took " + take + ": " + strings.Join(r.Paths, ", ")
+				}
+				fmt.Fprintln(o.out, line)
 				fmt.Fprintln(o.out, "Resolved: "+r.Commit)
 				writeSyncReport(o, r.Report)
 			}

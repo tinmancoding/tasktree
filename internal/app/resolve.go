@@ -12,12 +12,15 @@ import (
 )
 
 type ResolveResult struct {
-	LocalCommits  []string   `json:"localCommits"`
-	RemoteCommits []string   `json:"remoteCommits"`
-	Paths         []string   `json:"paths"`
-	AutoMerged    []string   `json:"autoMerged"`
-	Commit        string     `json:"commit,omitempty"`
-	Report        SyncReport `json:"report"`
+	LocalCommits  []string `json:"localCommits"`
+	RemoteCommits []string `json:"remoteCommits"`
+	Paths         []string `json:"paths"`
+	AutoMerged    []string `json:"autoMerged"`
+	Commit        string   `json:"commit,omitempty"`
+	// NothingToResolve is set when the checkout, hub and remote task branches
+	// are not diverged: sync fast-forwards them and no merge commit is made.
+	NothingToResolve bool       `json:"nothingToResolve"`
+	Report           SyncReport `json:"report"`
 }
 
 // Resolve explicitly authorizes a non-fast-forward tree merge. All unchosen
@@ -68,6 +71,10 @@ func (a App) Resolve(ctx context.Context, id, root, take string, paths []string)
 		}
 		if local == "" || remote == "" {
 			return hub.ConflictError{Message: "both task branch histories must exist to resolve"}
+		}
+		if local == remote || a.Hub.Ancestor(ctx, local, remote) || a.Hub.Ancestor(ctx, remote, local) {
+			result.NothingToResolve = true
+			return nil
 		}
 		for i, pair := range []string{remote + ".." + local, local + ".." + remote} {
 			out, _, e := a.Git.Run(ctx, a.Home.GitPath(), nil, "log", "--oneline", pair)
@@ -200,7 +207,7 @@ func (a App) Resolve(ctx context.Context, id, root, take string, paths []string)
 		if e != nil {
 			return e
 		}
-		commit, _, e := a.Git.CommitTreeParents(ctx, a.Home.GitPath(), nil, cfg.Author, cfg.Machine, strings.TrimSpace(tree), []string{local, remote}, "tasktree("+id+"): resolve take "+take)
+		commit, _, e := a.Git.CommitTreeParents(ctx, a.Home.GitPath(), nil, cfg.Author, cfg.Machine, strings.TrimSpace(tree), []string{local, remote}, resolveMessage(id, take))
 		if e != nil {
 			return e
 		}
@@ -209,6 +216,9 @@ func (a App) Resolve(ctx context.Context, id, root, take string, paths []string)
 	})
 	if err != nil {
 		return result, err
+	}
+	if result.NothingToResolve {
+		return result, nil
 	}
 	if err = a.advanceCheckout(ctx, id, root, &result.Report); err != nil {
 		return result, err
@@ -223,4 +233,11 @@ func (a App) Resolve(ctx context.Context, id, root, take string, paths []string)
 		}
 	}
 	return result, nil
+}
+
+func resolveMessage(id, take string) string {
+	if take == "" {
+		return "tasktree(" + id + "): resolve merge"
+	}
+	return "tasktree(" + id + "): resolve take " + take
 }

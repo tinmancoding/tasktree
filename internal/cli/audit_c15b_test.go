@@ -1,0 +1,120 @@
+package cli_test
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+// machine is one isolated TASKTREE_HOME; use switches the process to it.
+type machine struct {
+	t           *testing.T
+	home, cache string
+	tasks       string
+}
+
+func newMachine(t *testing.T, name string) *machine {
+	t.Helper()
+	base := t.TempDir()
+	return &machine{t: t, home: filepath.Join(base, "home"), cache: filepath.Join(base, "cache"), tasks: filepath.Join(base, "tasks")}
+}
+
+func (m *machine) use() {
+	m.t.Helper()
+	m.t.Setenv("TASKTREE_HOME", m.home)
+	m.t.Setenv("TASKTREE_CACHE_DIR", m.cache)
+	m.t.Setenv("TASKTREE_V1_ALIASES_FILE", filepath.Join(m.home, "missing"))
+	m.t.Setenv("TASKTREE_AUTHOR", "")
+	m.t.Setenv("TASKTREE_TASK", "")
+}
+
+func (m *machine) run(args ...string) (string, string, error) {
+	m.t.Helper()
+	m.use()
+	return run(m.t, args...)
+}
+
+func (m *machine) must(args ...string) string {
+	m.t.Helper()
+	out, errOut, err := m.run(args...)
+	if err != nil {
+		m.t.Fatalf("%v: %v\nstdout=%s\nstderr=%s", args, err, out, errOut)
+	}
+	return out
+}
+
+func (m *machine) inDir(dir string, args ...string) (string, string, error) {
+	m.t.Helper()
+	old, _ := os.Getwd()
+	if err := os.Chdir(dir); err != nil {
+		m.t.Fatal(err)
+	}
+	defer os.Chdir(old)
+	return m.run(args...)
+}
+
+func writeFile(t *testing.T, path, text string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(text), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// twoMachines returns two machines sharing one bare hub remote.
+func twoMachines(t *testing.T) (a, b *machine, remote string) {
+	t.Helper()
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	a, b = newMachine(t, "a"), newMachine(t, "b")
+	remote = filepath.Join(t.TempDir(), "hub.git")
+	gitRun(t, "", "init", "--bare", "-b", "main", remote)
+	a.must("setup", "--author", "alice", "--machine", "boxa", "--tasks-root", a.tasks)
+	a.must("config", "set", "remote", remote)
+	b.must("setup", "--author", "bob", "--machine", "boxb", "--tasks-root", b.tasks, "--remote", remote)
+	return
+}
+
+// M31: a task branch that is not diverged has nothing to resolve; a one-sided
+// merge says what it merged.
+func TestResolveReportsNothingToResolveAndWhatItMerged(t *testing.T) {
+	a, b, _ := twoMachines(t)
+	out := a.must("new", "Resolve me", "--handle", "resolve-me", "--open")
+	ra := strings.TrimSpace(out)
+	a.inDir(ra, "sync")
+	rb := strings.TrimSpace(b.must("open", "resolve-me"))
+
+	taskRefs := func() string {
+		return gitRun(t, filepath.Join(b.home, "git"), "for-each-ref", "--format=%(refname) %(objectname)", "refs/heads/task/")
+	}
+	refsBefore := taskRefs()
+	if out, _, err := b.inDir(rb, "resolve"); err != nil || !strings.Contains(out, "nothing to resolve") {
+		t.Fatalf("not diverged: err=%v out=%q", err, out)
+	}
+	if taskRefs() != refsBefore {
+		t.Fatal("resolve of a non-diverged branch made a commit")
+	}
+
+	writeFile(t, filepath.Join(ra, "X.md"), "A\n")
+	if _, _, err := a.inDir(ra, "commit", "-m", "A"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := a.inDir(ra, "sync"); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(rb, "Y.md"), "B\n")
+	if _, _, err := b.inDir(rb, "commit", "-m", "B"); err != nil {
+		t.Fatal(err)
+	}
+	out, _, err := b.inDir(rb, "resolve")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Merged 1 local and 1 remote commit(s)", "auto-merged: X.md, Y.md"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("resolve output missing %q:\n%s", want, out)
+		}
+	}
+}
