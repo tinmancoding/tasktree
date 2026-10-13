@@ -303,13 +303,15 @@ func TestSyncS5LeaseRetry(t *testing.T) {
 	p := newSyncPair(t)
 	aTask := p.task(p.a, "A concurrent")
 	bTask := p.task(p.b, "B concurrent")
-	script := fmt.Sprintf("git -C %q push origin refs/heads/main:refs/heads/main", p.b.Home.GitPath())
-	t.Setenv("TASKTREE_TEST_SYNC_BEFORE_PUSH", script)
+	p.a.syncBeforePush = func(ctx context.Context) error {
+		_, _, e := p.g.Run(ctx, p.b.Home.GitPath(), nil, "push", "origin", "refs/heads/main:refs/heads/main")
+		return e
+	}
 	r := p.sync(p.a, SyncOptions{All: true})
 	if !strings.Contains(strings.Join(r.Steps, "\n"), "push lease rejected; retry 1/3") {
 		t.Fatalf("no retry: %+v", r)
 	}
-	t.Setenv("TASKTREE_TEST_SYNC_BEFORE_PUSH", "")
+	p.a.syncBeforePush = nil
 	p.sync(p.b, SyncOptions{All: true})
 	for _, id := range []string{aTask.ID, bTask.ID} {
 		if _, e := p.a.Info(id); e != nil {

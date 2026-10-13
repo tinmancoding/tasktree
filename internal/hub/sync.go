@@ -75,6 +75,7 @@ func (h Hub) Refs(ctx context.Context, prefix string) (map[string]string, error)
 // MergeMain constructs objects only. On a conflict no refs, index or work tree
 // are changed. Git's worktree-free merge handles all non-record paths.
 func (h Hub) MergeMain(ctx context.Context, local, remote, author, machine string, allowUnrelated bool) (string, error) {
+	author, machine = record.MergeIdentity(author, machine)
 	if remote == "" || remote == local || h.Ancestor(ctx, remote, local) {
 		return local, nil
 	}
@@ -162,19 +163,7 @@ func (h Hub) MergeMain(ctx context.Context, local, remote, author, machine strin
 		if merged == nil {
 			_, _, err = h.Git.Run(ctx, h.Path, env, "update-index", "--force-remove", path)
 		} else {
-			f, e := os.CreateTemp("", "tt2-sync-blob-*")
-			if e != nil {
-				return "", e
-			}
-			fn := f.Name()
-			_, e = f.Write(merged)
-			f.Close()
-			if e != nil {
-				os.Remove(fn)
-				return "", e
-			}
-			sha, _, e := h.Git.Run(ctx, h.Path, nil, "hash-object", "-w", fn)
-			os.Remove(fn)
+			sha, _, e := h.Git.RunInput(ctx, h.Path, nil, string(merged), "hash-object", "-w", "--no-filters", "--stdin")
 			if e != nil {
 				return "", e
 			}

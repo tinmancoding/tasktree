@@ -44,10 +44,10 @@ func TestSyncS1ConfigurePushesEveryDefinition(t *testing.T) {
 	}
 }
 
-func TestSyncS5LeaseExhausted(t *testing.T) {
+func TestSyncS5ServerRejection(t *testing.T) {
 	p := newSyncPair(t)
 	p.task(p.a, "Unpushed")
-	// All push rejections are retried; no rejected server ref can be overwritten.
+	// Policy rejections are not lease races and must preserve the server error.
 	hook := filepath.Join(p.remote, "hooks", "pre-receive")
 	writeSyncFile(t, hook, "#!/bin/sh\necho test-rejection >&2\nexit 1\n")
 	if e := os.Chmod(hook, 0755); e != nil {
@@ -55,8 +55,10 @@ func TestSyncS5LeaseExhausted(t *testing.T) {
 	}
 	remoteBefore := runGitTest(t, p.g, p.remote, "rev-parse", "main")
 	r, e := p.a.Sync(p.ctx, SyncOptions{All: true})
-	requireSyncConflict(t, e)
-	if strings.Count(strings.Join(r.Steps, "\n"), "push lease rejected") != 3 {
+	if e == nil || !strings.Contains(e.Error(), "test-rejection") {
+		t.Fatalf("rejection=%v", e)
+	}
+	if strings.Count(strings.Join(r.Steps, "\n"), "push lease rejected") != 0 {
 		t.Fatalf("retry count=%+v", r)
 	}
 	if runGitTest(t, p.g, p.remote, "rev-parse", "main") != remoteBefore {

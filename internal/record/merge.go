@@ -80,12 +80,7 @@ func frontValues(d *Document) map[string]any {
 // order, rather than appended out of order. This is also the tie-break for
 // equal timestamps and makes subsequent fast-forwards byte-identical.
 func Merge(base, local, remote []byte, author, machine, remoteSource string) ([]byte, error) {
-	if author == "" || strings.ContainsAny(author, "@ \t\r\n") {
-		author = "tasktree"
-	}
-	if machine == "" || strings.ContainsAny(machine, " \t\r\n") {
-		machine = "localhost"
-	}
+	author, machine = MergeIdentity(author, machine)
 	if bytes.Equal(local, remote) {
 		return append([]byte(nil), local...), nil
 	}

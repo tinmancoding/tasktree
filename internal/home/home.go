@@ -15,7 +15,8 @@ type JiraConfig struct {
 	BaseURL string `yaml:"baseUrl,omitempty" json:"baseUrl"`
 }
 type SyncConfig struct {
-	Jobs int `yaml:"jobs" json:"jobs"`
+	Jobs    int    `yaml:"jobs" json:"jobs"`
+	Timeout string `yaml:"timeout,omitempty" json:"timeout"`
 }
 type Config struct {
 	Remote    string     `yaml:"remote,omitempty" json:"remote"`

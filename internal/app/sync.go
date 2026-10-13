@@ -4,11 +4,13 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
+	"time"
+
+	"github.com/tinmancoding/tasktree/v2/internal/gitx"
 
 	"github.com/tinmancoding/tasktree/v2/internal/hub"
 	"github.com/tinmancoding/tasktree/v2/internal/record"
@@ -42,20 +44,25 @@ func hasConflict(t record.Task, field string) bool {
 }
 
 func (a App) pushInitialRemote(ctx context.Context) error {
-	return a.Hub.WithLock(ctx, func() error {
+	var args []string
+	err := a.Hub.WithLock(ctx, func() error {
 		refs, err := a.Hub.Refs(ctx, "refs/heads/")
 		if err != nil {
 			return err
 		}
-		args := []string{"push", "--atomic", "origin"}
+		args = []string{"push", "--atomic", "origin"}
 		for _, ref := range sortedRefs(refs) {
 			if ref == "refs/heads/main" || strings.HasPrefix(ref, "refs/heads/task/") {
-				args = append(args, ref+":"+ref)
+				args = append(args, refs[ref]+":"+ref)
 			}
 		}
-		_, _, err = a.Git.Run(ctx, a.Home.GitPath(), nil, args...)
-		return err
+		return nil
 	})
+	if err != nil {
+		return err
+	}
+	_, _, err = a.Git.Run(ctx, a.Home.GitPath(), nil, args...)
+	return err
 }
 func sortedRefs(refs map[string]string) []string {
 	r := []string{}
@@ -114,6 +121,11 @@ func (a App) Sync(ctx context.Context, o SyncOptions) (report SyncReport, err er
 	if err != nil {
 		return report, err
 	}
+	timeout, err := networkTimeout(cfg.Sync.Timeout, 60*time.Second)
+	if err != nil {
+		return report, err
+	}
+	ctx = gitx.WithNetworkTimeout(ctx, timeout)
 	if o.Root == "" {
 		o.All = true
 	}
@@ -176,7 +188,8 @@ func (a App) Sync(ctx context.Context, o SyncOptions) (report SyncReport, err er
 			}
 			updates := map[string]string{}
 			remoteMain := fetched["refs/remotes/origin/main"]
-			merged, e := a.Hub.MergeMain(ctx, local["refs/heads/main"], remoteMain, cfg.Author, cfg.Machine, o.AllowUnrelated)
+			author, machine := a.mergeIdentity(cfg)
+			merged, e := a.Hub.MergeMain(ctx, local["refs/heads/main"], remoteMain, author, machine, o.AllowUnrelated)
 			if e != nil {
 				return e
 			}
@@ -238,17 +251,10 @@ func (a App) Sync(ctx context.Context, o SyncOptions) (report SyncReport, err er
 			report.Steps = append(report.Steps, "no hub remote configured")
 			break
 		}
-		// Test-only deterministic race injection. Scripts must use local remotes;
-		// the hook is invoked once per Sync, before its first leased push.
-		if attempt == 0 {
-			if script := os.Getenv("TASKTREE_TEST_SYNC_BEFORE_PUSH"); script != "" {
-				cmd := exec.CommandContext(ctx, "sh", "-c", script)
-				cmd.Env = os.Environ()
-				if out, e := cmd.CombinedOutput(); e != nil {
-					return report, fmt.Errorf("sync test hook: %w: %s", e, out)
-				}
-			}
-		}
+		// Capture immutable object IDs under the lock; the potentially slow
+		// push runs after releasing it. Concurrent notes remain local for the
+		// next sync and cannot be swept into this push accidentally.
+		var pushArgs []string
 		err = a.Hub.WithLock(ctx, func() error {
 			if e := a.Hub.EnsureClean(ctx); e != nil {
 				return e
@@ -272,9 +278,18 @@ func (a App) Sync(ctx context.Context, o SyncOptions) (report SyncReport, err er
 			}
 			args = append(args, "origin")
 			args = append(args, specs...)
-			_, _, e = a.Git.Run(ctx, a.Home.GitPath(), nil, args...)
-			return e
+			pushArgs = args
+			return nil
 		})
+		if err != nil {
+			return report, err
+		}
+		if attempt == 0 && a.syncBeforePush != nil {
+			if err = a.syncBeforePush(ctx); err != nil {
+				return report, err
+			}
+		}
+		_, _, err = a.Git.Run(ctx, a.Home.GitPath(), nil, pushArgs...)
 		if err == nil {
 			report.Steps = append(report.Steps, "pushed leased hub refs")
 			break
@@ -298,7 +313,10 @@ func (a App) Sync(ctx context.Context, o SyncOptions) (report SyncReport, err er
 }
 func leaseRejected(err error) bool {
 	s := err.Error()
-	return strings.Contains(s, "stale info") || strings.Contains(s, "fetch first") || strings.Contains(s, "non-fast-forward") || strings.Contains(s, "[rejected]") || strings.Contains(s, "[remote rejected]") || strings.Contains(s, "cannot lock ref")
+	if strings.Contains(s, "[remote rejected]") {
+		return false
+	}
+	return strings.Contains(s, "[rejected]") && (strings.Contains(s, "(stale info)") || strings.Contains(s, "(fetch first)") || strings.Contains(s, "(non-fast-forward)"))
 }
 func appendUnique(s []string, v string) []string {
 	for _, x := range s {
@@ -701,18 +719,30 @@ func (a App) pushCloseRemote(ctx context.Context, id string) {
 	}
 	// Best effort and fast-forward only: closing must not merge or overwrite a
 	// remote history. The local hub already holds the complete closed task.
-	args := []string{"push", "--atomic", "origin", "refs/heads/main:refs/heads/main"}
-	if a.DefinitionExists(ctx, id) {
-		args = append(args, "refs/heads/task/"+id+":refs/heads/task/"+id)
-	}
-	_, _, e = a.Git.Run(ctx, a.Home.GitPath(), nil, args...)
+	ctx, e = a.implicitNetworkContext(ctx)
 	if e != nil {
 		a.warnf("remote close push failed (safe in local hub): %v", e)
+		return
+	}
+	refs := []string{"refs/heads/main"}
+	if a.DefinitionExists(ctx, id) {
+		refs = append(refs, "refs/heads/task/"+id)
+	}
+	// Push separately: a task divergence must not block the status record.
+	for _, ref := range refs {
+		if _, _, e = a.Git.Run(ctx, a.Home.GitPath(), nil, "push", "origin", ref+":"+ref); e != nil {
+			a.warnf("remote close push failed (safe in local hub): %v", e)
+		}
 	}
 }
 func (a App) pullOpenRemote(ctx context.Context, ref string) {
 	cfg, e := a.Home.LoadConfig()
 	if e != nil || cfg.Remote == "" {
+		return
+	}
+	ctx, e = a.implicitNetworkContext(ctx)
+	if e != nil {
+		a.warnf("remote open fetch failed; continuing with local state: %v", e)
 		return
 	}
 	if e = a.fetchRemote(ctx); e != nil {
@@ -725,7 +755,8 @@ func (a App) pullOpenRemote(ctx context.Context, ref string) {
 		}
 		old := a.Hub.Ref(ctx, "refs/heads/main")
 		remote := a.Hub.Ref(ctx, "refs/remotes/origin/main")
-		next, e := a.Hub.MergeMain(ctx, old, remote, cfg.Author, cfg.Machine, false)
+		author, machine := a.mergeIdentity(cfg)
+		next, e := a.Hub.MergeMain(ctx, old, remote, author, machine, false)
 		if e != nil {
 			return e
 		}

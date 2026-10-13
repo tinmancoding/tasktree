@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 type Client struct {
@@ -83,6 +84,30 @@ func (c Client) RunInput(ctx context.Context, dir string, env map[string]string,
 }
 func (c Client) runInput(ctx context.Context, dir string, env map[string]string, input io.Reader, args ...string) (string, string, error) {
 	cfg := c.withConfig()
+	if command := transportIndex(args); command >= 0 {
+		timeout, ok := ctx.Value(networkTimeoutKey{}).(time.Duration)
+		if !ok || timeout <= 0 {
+			timeout = 10 * time.Second
+		}
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+		networkEnv := make(map[string]string, len(env)+2)
+		for k, v := range env {
+			networkEnv[k] = v
+		}
+		networkEnv["GIT_TERMINAL_PROMPT"] = "0"
+		_, inherited := os.LookupEnv("GIT_SSH_COMMAND")
+		_, supplied := env["GIT_SSH_COMMAND"]
+		if !inherited && !supplied {
+			// Respect repository/global SSH configuration, including an explicit
+			// empty command. Otherwise disable interactive SSH authentication.
+			if _, _, err := c.Run(ctx, dir, env, append(append([]string(nil), args[:command]...), "config", "--get", "core.sshCommand")...); err != nil {
+				networkEnv["GIT_SSH_COMMAND"] = "ssh -o BatchMode=yes"
+			}
+		}
+		env = networkEnv
+	}
 	if cfg.verboseWriter != nil {
 		prefix := "git"
 		if dir != "" {
@@ -93,6 +118,9 @@ func (c Client) runInput(ctx context.Context, dir string, env map[string]string,
 		cfg.verboseMu.Unlock()
 	}
 	cmd := exec.CommandContext(ctx, cfg.binary, args...)
+	// A killed git can leave an SSH/helper child holding the pipes open.
+	// Bound pipe draining as well as the lifetime of the direct process.
+	cmd.WaitDelay = 250 * time.Millisecond
 	cmd.Dir = dir
 	cmd.Env = CleanEnv(env)
 	cmd.Stdin = input
@@ -102,6 +130,9 @@ func (c Client) runInput(ctx context.Context, dir string, env map[string]string,
 	cmd.Stderr = &stderr
 	err := cmd.Run()
 	if err != nil {
+		if ctx.Err() != nil {
+			err = ctx.Err()
+		}
 		exitCode := -1
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {

@@ -30,6 +30,8 @@ type App struct {
 	Now            func() time.Time
 	AuthorOverride string
 	WarningWriter  io.Writer
+	// Unexported deterministic test seam, never populated by the CLI or env.
+	syncBeforePush func(context.Context) error
 }
 
 func New(h home.Home, verboseWriter interface{ Write([]byte) (int, error) }) App {
@@ -139,6 +141,8 @@ func (a App) ConfigGet(key string) (string, error) {
 		return c.Jira.BaseURL, nil
 	case "sync.jobs":
 		return strconv.Itoa(c.Sync.Jobs), nil
+	case "sync.timeout":
+		return c.Sync.Timeout, nil
 	default:
 		return "", fmt.Errorf("unknown config key %q", key)
 	}
@@ -171,6 +175,11 @@ func (a App) ConfigSetContext(ctx context.Context, key, value string) error {
 			return ValidationError{"sync.jobs must be a positive integer"}
 		}
 		c.Sync.Jobs = jobs
+	case "sync.timeout":
+		if _, err := networkTimeout(value, 60*time.Second); err != nil {
+			return err
+		}
+		c.Sync.Timeout = value
 	default:
 		return fmt.Errorf("unknown config key %q", key)
 	}
@@ -742,6 +751,17 @@ func (a App) refreshTaskRecord(ctx context.Context, id string) {
 	}
 	a.writeGeneratedTaskRecord(id, d.Render())
 }
+func (a App) mergeIdentity(c home.Config) (string, string) {
+	author := a.AuthorOverride
+	if author == "" {
+		author = os.Getenv("TASKTREE_AUTHOR")
+	}
+	if author == "" {
+		author = c.Author
+	}
+	return record.MergeIdentity(author, c.Machine)
+}
+
 func (a App) author() (string, string, error) {
 	c, err := a.Home.LoadConfig()
 	if err != nil {
@@ -757,7 +777,7 @@ func (a App) author() (string, string, error) {
 	if author == "" {
 		return "", "", fmt.Errorf("author is not configured; pass --author or set TASKTREE_AUTHOR")
 	}
-	if strings.ContainsAny(author, "@ \t\r\n") || strings.ContainsAny(c.Machine, " \t\r\n") || c.Machine == "" {
+	if !record.ValidLogIdentity(author, c.Machine) {
 		return "", "", fmt.Errorf("author and machine must be non-empty and contain no spaces or @")
 	}
 	return author, c.Machine, nil

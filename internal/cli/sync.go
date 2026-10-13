@@ -13,7 +13,7 @@ import (
 func syncCmd(o *options) *cobra.Command {
 	var x app.SyncOptions
 	var j bool
-	c := &cobra.Command{Use: "sync", Short: "Synchronize task records, definitions, and repository branches", Long: "Synchronize the configured hub remote and committed tasktree state. Outside a tasktree this is sync --all (checkouts are not touched). STATUS! in list marks unacknowledged record conflicts. Log entries interleaving in time are inserted in timestamp/id order, preserving local entry bytes. Tests can inject a local-remote race once before the first push with TASKTREE_TEST_SYNC_BEFORE_PUSH=<shell script>.", Args: exact(0), RunE: func(cmd *cobra.Command, args []string) error {
+	c := &cobra.Command{Use: "sync", Short: "Synchronize task records, definitions, and repository branches", Long: "Synchronize the configured hub remote and committed tasktree state. Outside a tasktree this is sync --all (checkouts are not touched). STATUS! in list marks unacknowledged record conflicts. Log entries interleaving in time are inserted in timestamp/id order, preserving local entry bytes.", Args: exact(0), RunE: func(cmd *cobra.Command, args []string) error {
 		a, e := o.application()
 		if e != nil {
 			return e
