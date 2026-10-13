@@ -150,7 +150,7 @@ The steps:
 5. **Push to the remote** (`main` and `task/<id>`), fast-forward only and best effort, if a remote is configured. A failure is a warning: the hub already has everything.
 6. **Recheck the loss gate**, then delete the checkout directory, the hidden git directory, and the `local.yml` entry.
 
-The branch `task/<id>` is kept. To work on the task again, run `tasktree mark active -t <handle>` and `tasktree open <handle>`. `--keep` changes the status without steps 1 to 6, so the checkout stays.
+The branch `task/<id>` is kept. To work on the task again, run `tasktree mark active -t <handle>` and `tasktree open <handle>`. `--keep` records the status (and pushes it, best effort) but keeps the checkout and skips the loss gate. A task with open subtasks is still refused.
 
 If your shell is inside the directory that was removed, tasktree prints `tasktree removed; run: cd ..`.
 
