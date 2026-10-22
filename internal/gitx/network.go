@@ -2,6 +2,7 @@ package gitx
 
 import (
 	"context"
+	"fmt"
 	"time"
 )
 
@@ -53,6 +54,25 @@ func BestEffort(ctx context.Context, d time.Duration) context.Context {
 func wallClockLimit(ctx context.Context) time.Duration {
 	limit, _ := ctx.Value(networkTimeoutKey{}).(time.Duration)
 	return limit
+}
+
+// sshCommandProbe builds the git arguments that read the effective
+// core.sshCommand for the transport command at args[command]. Each positional
+// argument after the command is offered as a remote URL so that
+// includeIf "hasconfig:remote.*.url:..." sections match the target before any
+// remote exists (for example on clone). Arguments that are not URLs, such as a
+// branch name or destination path, cannot match a URL pattern.
+func sshCommandProbe(args []string, command int) []string {
+	probe := append([]string(nil), args[:command]...)
+	n := 0
+	for _, arg := range args[command+1:] {
+		if arg == "" || arg[0] == '-' {
+			continue
+		}
+		probe = append(probe, "-c", fmt.Sprintf("remote.tasktree-probe-%d.url=%s", n, arg))
+		n++
+	}
+	return append(probe, "config", "--get", "core.sshCommand")
 }
 
 func transportIndex(args []string) int {

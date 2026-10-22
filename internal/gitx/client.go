@@ -115,7 +115,7 @@ func (c Client) runInput(ctx context.Context, dir string, env map[string]string,
 			// Respect repository/global SSH configuration, including an explicit
 			// empty command. Otherwise disable interactive SSH authentication and
 			// detect stalled connections without bounding total transfer time.
-			if _, _, err := c.Run(ctx, dir, env, append(append([]string(nil), args[:command]...), "config", "--get", "core.sshCommand")...); err != nil {
+			if _, _, err := c.Run(ctx, dir, env, sshCommandProbe(args, command)...); err != nil {
 				networkEnv["GIT_SSH_COMMAND"] = SSHStallCommand
 			}
 		}
