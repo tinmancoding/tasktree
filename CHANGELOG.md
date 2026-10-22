@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.0.1](https://github.com/tinmancoding/tasktree/compare/v2.0.0...v2.0.1) (2026-10-22)
+
+
+### Bug Fixes
+
+* respect hasconfig-included core.sshCommand on clone ([62a691a](https://github.com/tinmancoding/tasktree/commit/62a691addf17ff3772c0ceeab21198fdd9ed2e3a))
+
 ## [2.0.0](https://github.com/tinmancoding/tasktree/compare/v1.3.0...v2.0.0) (2026-10-13)
 
 
